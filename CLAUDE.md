@@ -43,7 +43,7 @@ All commands live in `.claude/commands/` and are available from both the outer r
 | `/notion-runs` | `notion-runs.sh` | Inspect past pull/audit runs and their JSON logs. |
 | `/notion-push` | `notion-push.sh` | Manually promote a local .md file to Notion. NEVER automate this. **Destructive on update**: deletes ALL existing Notion page blocks then rewrites. Also writes `notion_id` back to the local file's frontmatter on new page creation. |
 | `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/agent-work/daily/`. |
-| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/agent-work/ideas/`. |
+| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/agent-work/ideas/`. Requires a topic argument: `/brainstorm <topic>`. |
 
 Pull state lives in `vault/.pbrain/notion.db` (SQLite, gitignored; auto-created on first run). Each run also writes a JSON log to `vault/.pbrain/runs/`.
 
@@ -51,7 +51,7 @@ Pull state lives in `vault/.pbrain/notion.db` (SQLite, gitignored; auto-created 
 
 ## Environment variables required
 
-- `NOTION_TOKEN` — Notion internal integration token (`ntn_...`). Export in `~/.zshrc`. Note: launchd does not source `~/.zshrc` — set it explicitly in the plist's `EnvironmentVariables` dict or the `source ~/.zshrc` line in the plist will silently fail.
+- `NOTION_TOKEN` — Notion internal integration token (`ntn_...`). Export in `~/.zshrc`. Note: launchd does not source `~/.zshrc` automatically — the plists use `source ~/.zshrc 2>/dev/null` as a best-effort approach, but if that fails silently you'll see no pull output in the logs. Prefer setting it explicitly in the plist's `EnvironmentVariables` dict for reliability.
 
 ---
 
