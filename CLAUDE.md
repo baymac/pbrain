@@ -62,6 +62,8 @@ Pull state lives in `vault/.pbrain/notion.db` (SQLite, gitignored). Each run als
 - Don't write notes or ideas in the outer repo — that's what `vault/agent-work/` is for.
 - Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook. Clone and link manually.
 
+---
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
