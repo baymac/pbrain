@@ -11,7 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PBRAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VAULT_DIR="$PBRAIN_ROOT/vault"
-DAILY_DIR="$VAULT_DIR/agent-work/daily"
+DAILY_DIR="$VAULT_DIR/daily"
 
 mkdir -p "$DAILY_DIR"
 

@@ -17,7 +17,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PBRAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VAULT_DIR="$PBRAIN_ROOT/vault"
-IDEAS_DIR="$VAULT_DIR/agent-work/ideas"
+IDEAS_DIR="$VAULT_DIR/ideas"
 
 mkdir -p "$IDEAS_DIR"
 
