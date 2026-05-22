@@ -3,10 +3,20 @@
 This is the **pbrain tooling repo**. You are in the outer repo, not the vault.
 
 - Write code here: scripts, slash commands, templates, docs.
-- Write notes in `vault/` (open a separate CC session from `vault/`).
+- Write notes in the vault (open a separate CC session from the vault).
 - Never create personal notes, ideas, or journal entries here.
 
 See `README.md` for the full spec and architecture.
+
+---
+
+## Vault location
+
+```
+~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault
+```
+
+Vault is a standalone git repo (not a submodule). It lives in iCloud Drive for iOS sync.
 
 ---
 
@@ -17,11 +27,9 @@ See `README.md` for the full spec and architecture.
 - Scripts must be idempotent. Re-running on unchanged state should produce the same result without side effects.
 - All `.sh` files must be executable (`chmod +x`).
 - Slash commands live **only** in `.claude/commands/`. Never duplicate them in `vault/`.
-- `vault/` path is always resolved relative to the script's own location (assumes script lives at `.claude/commands/`, two levels below repo root):
+- `vault/` path in scripts:
   ```bash
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  PBRAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  VAULT_DIR="$PBRAIN_ROOT/vault"
+  VAULT_DIR="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault"
   ```
 
 ---
@@ -32,8 +40,8 @@ All commands live in `.claude/commands/` and are available from both the outer r
 
 | Command | File | What it does |
 |---|---|---|
-| `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/agent-work/daily/`. |
-| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/agent-work/ideas/`. Requires a topic argument: `/brainstorm <topic>`. |
+| `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/daily/`. |
+| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/ideas/`. Requires a topic argument: `/brainstorm <topic>`. |
 
 ---
 
@@ -41,7 +49,7 @@ All commands live in `.claude/commands/` and are available from both the outer r
 
 - **Obsidian** — GUI for browsing and editing vault notes
 - **gbrain** — hybrid vector + keyword search over vault, MCP server for Claude sessions
-- **vault/** — markdown corpus (git submodule); source of truth for all notes
+- **vault/** — markdown corpus (standalone git repo in iCloud Drive); source of truth for all notes
 
 See `docs/gbrain-setup.md` for gbrain setup and `docs/claude-desktop.md` for Claude Desktop MCP wiring.
 
@@ -49,7 +57,7 @@ See `docs/gbrain-setup.md` for gbrain setup and `docs/claude-desktop.md` for Cla
 
 ## What not to do here
 
-- Don't write notes or ideas in the outer repo — that's what `vault/agent-work/` is for.
+- Don't write notes or ideas in the outer repo — use the vault at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault`.
 - Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook. Clone and link manually (see `docs/gbrain-setup.md`).
 
 ---

@@ -14,9 +14,7 @@ if [[ $# -lt 1 ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PBRAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VAULT_DIR="$PBRAIN_ROOT/vault"
+VAULT_DIR="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault"
 IDEAS_DIR="$VAULT_DIR/ideas"
 
 mkdir -p "$IDEAS_DIR"

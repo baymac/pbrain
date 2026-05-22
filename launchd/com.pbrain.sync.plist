@@ -49,9 +49,7 @@
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/parichay/conductor/workspaces/pbrain/douala/vault</string>
-    <!-- If vault is moved to iCloud Drive for mobile sync, update to:
-         ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/<vault-name> -->
+    <string>/Users/parichay/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault</string>
 
     <key>StartInterval</key>
     <integer>1800</integer>
