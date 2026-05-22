@@ -13,7 +13,7 @@ See `README.md` for the full spec and architecture.
 ## Conventions for editing scripts
 
 - Shell: `#!/usr/bin/env bash` with `set -euo pipefail` on every script.
-- Complex logic (API calls, JSON parsing, markdown conversion): inline Python 3 heredoc inside the shell script. No external deps — stdlib only (no pip packages). Modules in use: `urllib`, `json`, `re`, `sys`, `os`, `datetime`, `sqlite3`, `time`, `mimetypes`, `subprocess`, `shutil`, `glob`, `traceback`, `random`, `collections`, `uuid`.
+- Complex logic (JSON parsing, markdown conversion): inline Python 3 heredoc inside the shell script. No external deps — stdlib only (no pip packages). Modules in use: `json`, `re`, `sys`, `os`, `datetime`, `subprocess`, `shutil`, `glob`, `random`, `collections`, `uuid`.
 - Scripts must be idempotent. Re-running on unchanged state should produce the same result without side effects.
 - All `.sh` files must be executable (`chmod +x`).
 - Slash commands live **only** in `.claude/commands/`. Never duplicate them in `vault/`.
@@ -23,8 +23,6 @@ See `README.md` for the full spec and architecture.
   PBRAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
   VAULT_DIR="$PBRAIN_ROOT/vault"
   ```
-- Notion API version header: `Notion-Version: 2022-06-28` (pinned intentionally for stability; check [Notion deprecation notices](https://developers.notion.com/changelog) before upgrading).
-- Add `sleep 0.1` between API calls for simple scripts; use `sleep 0.34` in heavy bulk loops (stays well under Notion's ~3 req/s limit).
 
 ---
 
@@ -34,31 +32,23 @@ All commands live in `.claude/commands/` and are available from both the outer r
 
 | Command | File | What it does |
 |---|---|---|
-| `/notion-fetch` | `notion-fetch.sh` | Fetch a Notion page by ID, print as markdown to stdout. Read-only. |
-| `/notion-search` | `notion-search.sh` | Search the Notion workspace by query string. |
-| `/notion-pull` | `notion-pull.sh` | Fetch a single page, upsert into the SQLite state DB. |
-| `/notion-pull-recursive` | `notion-pull-recursive.sh` | Recursive workspace pull. Incremental fast-path + run tracking + JSON log. |
-| `/notion-pull-all` | `notion-pull-all.sh` | Re-pull every tracked page individually. Cron-friendly for small workspaces; use `/notion-pull-recursive` for large ones (has rate-limit backoff). |
-| `/notion-audit` | `notion-audit.sh` | Verify mirror matches Notion (`--deep` for block-coverage diff). Recorded as its own run. |
-| `/notion-runs` | `notion-runs.sh` | Inspect past pull/audit runs and their JSON logs. |
-| `/notion-push` | `notion-push.sh` | Manually promote a local .md file to Notion. NEVER automate this. **Destructive on update**: deletes ALL existing Notion page blocks then rewrites. Also writes `notion_id` back to the local file's frontmatter on new page creation. |
 | `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/agent-work/daily/`. |
 | `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/agent-work/ideas/`. Requires a topic argument: `/brainstorm <topic>`. |
 
-Pull state lives in `vault/.pbrain/notion.db` (SQLite, gitignored; auto-created on first run). Each run also writes a JSON log to `vault/.pbrain/runs/`.
-
 ---
 
-## Environment variables required
+## Stack
 
-- `NOTION_TOKEN` — Notion internal integration token (`ntn_...`). Export in `~/.zshrc`. Note: launchd does not source `~/.zshrc` automatically — the plists use `source ~/.zshrc 2>/dev/null` as a best-effort approach, but if that fails silently you'll see no pull output in the logs. Prefer setting it explicitly in the plist's `EnvironmentVariables` dict for reliability.
+- **Obsidian** — GUI for browsing and editing vault notes
+- **gbrain** — hybrid vector + keyword search over vault, MCP server for Claude sessions
+- **vault/** — markdown corpus (git submodule); source of truth for all notes
+
+See `docs/gbrain-setup.md` for gbrain setup and `docs/claude-desktop.md` for Claude Desktop MCP wiring.
 
 ---
 
 ## What not to do here
 
-- Don't run `notion-push` automatically or from cron — promotion is always deliberate.
-- Don't edit `vault/notion-mirror/` files — they get overwritten on next pull.
 - Don't write notes or ideas in the outer repo — that's what `vault/agent-work/` is for.
 - Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook. Clone and link manually (see `docs/gbrain-setup.md`).
 

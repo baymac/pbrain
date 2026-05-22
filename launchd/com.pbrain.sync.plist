@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent: com.pbrain.sync
+  Runs `gbrain check-update && gbrain upgrade` then `gbrain sync` every 30 minutes.
+  check-update exits non-zero if already up to date, so upgrade only runs when needed.
+  Sync always runs regardless of upgrade outcome.
+  This runs independently of com.pbrain.pull — since pull is faster than sync,
+  the index will typically reflect fresh content within the same 30-min window.
+
+  INSTALL INSTRUCTIONS:
+  1. Complete Phase 3 setup first (docs/gbrain-setup.md)
+
+  2. Copy this file to ~/Library/LaunchAgents/:
+       cp launchd/com.pbrain.sync.plist ~/Library/LaunchAgents/
+
+  3. Create the log directory (if not already done for pull):
+       mkdir -p ~/Library/Logs/pbrain
+
+  4. Load the agent:
+       launchctl load ~/Library/LaunchAgents/com.pbrain.sync.plist
+
+  5. Verify it loaded:
+       launchctl list | grep pbrain
+
+  6. Check logs after the first run:
+       tail -f ~/Library/Logs/pbrain/sync.log
+
+  TO UNLOAD:
+       launchctl unload ~/Library/LaunchAgents/com.pbrain.sync.plist
+
+  NOTES:
+  - gbrain must be installed and `gbrain` must be in PATH.
+    The PATH below includes ~/.bun/bin where bun-linked binaries live.
+    Adjust if you installed gbrain differently.
+  - WorkingDirectory must be vault/ — gbrain uses the CWD to find brain.pglite.
+  - StartInterval: 1800 = 30 minutes, same as pull.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pbrain.sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>(gbrain check-update &amp;&amp; gbrain upgrade) 2&gt;/dev/null || true; gbrain sync</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/parichay/conductor/workspaces/pbrain/douala/vault</string>
+    <!-- If vault is moved to iCloud Drive for mobile sync, update to:
+         ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/<vault-name> -->
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/parichay/Library/Logs/pbrain/sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/parichay/Library/Logs/pbrain/sync.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/parichay</string>
+        <key>PATH</key>
+        <string>/Users/parichay/.bun/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
