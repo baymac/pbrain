@@ -1,6 +1,6 @@
 # pbrain
 
-Local-first personal knowledge management. Obsidian as the writing surface, vault as the markdown corpus, gbrain as the AI memory layer.
+Local-first personal knowledge management, designed to work with Claude Code. Obsidian as writing surface, an iCloud-synced markdown vault as the corpus, gbrain as the AI memory layer, and Claude Code (plus Claude Desktop) as the chat-time interface that reads and writes through gbrain's MCP.
 
 ---
 
@@ -10,34 +10,29 @@ Local-first personal knowledge management. Obsidian as the writing surface, vaul
 ┌──────────────────────┐
 │  Obsidian (Mac+iOS)  │  ← you write here
 └──────────┬───────────┘
-           │ iCloud (auto-sync)
+           │ iCloud (auto-sync between devices)
            ▼
-┌──────────────────────────────────────────────────────┐
-│  vault/  (git submodule, private remote)              │
-│  ├── agent-work/                                      │
-│  │   ├── daily/          ← daily notes (/journal)    │
-│  │   ├── ideas/          ← brainstorms (/brainstorm) │
-│  │   ├── concepts/       ← gbrain entity pages       │
-│  │   ├── sources/        ← books, links, papers      │
-│  │   ├── people/         ← person pages              │
-│  │   ├── chat-history/   ← saved AI conversations    │
-│  │   └── archive/                                    │
-│  └── CLAUDE.md                                       │
-└──────────┬───────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  vault/  (standalone git repo, lives in iCloud Drive)      │
+│  ├── life/                ← your daily journal + life      │
+│  │   └── daily-tracking/YYYY-MM-DD.md                      │
+│  ├── fitness/, startup/, side-quests/, software-dev/, ...  │
+│  └── agent-work/          ← everything Claude generates    │
+│      ├── brainstorms/     ← /brainstorm outputs            │
+│      ├── chat-history/    ← saved chat takeaways           │
+│      ├── drafts/, notes/, research/, people/               │
+└──────────┬─────────────────────────────────────────────────┘
            │ gbrain sync (launchd, every 30 min)
            ▼
 ┌──────────────────────┐
-│  gbrain index        │  ← PGLite, local-only
-│  (vault/.gbrain/)    │
+│  gbrain index        │  ← PGLite + Ollama embeddings
+│  ~/.gbrain/          │     (local-only, free, private)
 └──────────┬───────────┘
-           │ MCP
+           │ MCP (stdio)
      ┌─────┴──────┐
      ▼            ▼
 ┌─────────────┐  ┌──────────────────────┐
 │ Claude Code │  │ Claude Desktop       │
-│ (coding)    │  │ (general chat)       │
-│             │  │ "save takeaways" →   │
-│             │  │ vault/chat-history/  │
 └─────────────┘  └──────────────────────┘
 ```
 
@@ -45,62 +40,81 @@ Local-first personal knowledge management. Obsidian as the writing surface, vaul
 
 ## Quick start
 
-1. **Clone**
-   ```bash
-   git clone --recurse-submodules git@github.com:<you>/pbrain.git
-   cd pbrain
-   ```
+Full step-by-step in **[docs/setup.md](docs/setup.md)**. Short version:
 
-2. **Init gbrain** (must run from inside vault)
-   ```bash
-   cd vault
-   gbrain init
-   gbrain sync
-   cd ..
-   ```
-   See `docs/gbrain-setup.md` for the full gbrain install.
+```bash
+# Vault (creates dir, git init, .gitignore, CLAUDE.md, initial commit)
+./scripts/init-vault.sh
 
-3. **Open in Obsidian** — point Obsidian's vault to `<pbrain-root>/vault/`
+# Obsidian → install from obsidian.md → Open folder as vault → pick the path above
 
-4. **Wire Claude Desktop MCP** — see `docs/claude-desktop.md`
+# Ollama (local embeddings)
+brew install ollama && brew services start ollama
+ollama pull nomic-embed-text
+
+# gbrain
+git clone https://github.com/garrytan/gbrain.git ~/code/gbrain
+cd ~/code/gbrain && bun install && bun link
+cd ~/Library/Mobile\ Documents/iCloud~md~obsidian/Documents/vault
+gbrain init --pglite --embedding-model ollama:nomic-embed-text --embedding-dimensions 768
+gbrain config set embedding_model ollama:nomic-embed-text
+gbrain sync --repo . --skip-failed
+
+# Claude Code MCP
+claude mcp add gbrain "$HOME/.bun/bin/gbrain" serve
+
+# Scheduled sync every 30 min (renders plist template, loads launchd, starts dashboard logging)
+./scripts/install-launchd.sh
+```
 
 ---
 
 ## Vault structure
 
+User-curated topical folders live at the root. Claude-generated content lives under `agent-work/`.
+
 | Directory | What goes here |
 |---|---|
-| `agent-work/daily/` | Daily notes — created by `/journal` |
-| `agent-work/ideas/` | Brainstorms — created by `/brainstorm <topic>` |
-| `agent-work/concepts/` | Compiled concept pages (yours or gbrain-generated) |
-| `agent-work/sources/` | Books, papers, links |
-| `agent-work/people/` | Person pages |
-| `agent-work/chat-history/` | AI conversations worth keeping — saved via Claude Desktop |
-| `agent-work/archive/` | Archived drafts |
-| `notion-mirror/` | Historical Notion export — read-only archive, do not edit |
+| `life/daily-tracking/` | Daily journal entries (created by `/journal`) |
+| `life/`, `fitness/`, `startup/`, `side-quests/`, etc. | Your hand-curated topical notes |
+| `agent-work/brainstorms/` | `/brainstorm` outputs |
+| `agent-work/chat-history/` | Chat takeaways saved on request |
+| `agent-work/drafts/` | Drafts written by Claude |
+| `agent-work/notes/` | Misc agent-captured notes |
+| `agent-work/research/` | Web summaries, research outputs |
+| `agent-work/people/` | People pages (auto-enriched or hand-written) |
+
+Concepts, sources, ideas, etc. are **co-located** with their topic — e.g., `startup/Apps/Lettuce/ideas/`, `side-quests/DJ/sources/` — not in vault root.
 
 ---
 
 ## Slash commands
 
-All commands live in `.claude/commands/` and work from both the outer repo and vault sessions.
+Defined in `.claude/commands/`. Each `.md` file registers as a slash command; the `.sh` file does the work.
 
 | Command | What it does |
 |---|---|
-| `/journal` | Create or open today's daily note in `agent-work/daily/` |
-| `/brainstorm <topic>` | Create a brainstorming file in `agent-work/ideas/` |
-
----
-
-## Mobile sync
-
-iCloud Drive syncs vault to iPhone automatically via Obsidian for iOS (free). See `docs/mobile-sync.md`.
+| `/journal` | Create or open today's daily note in `life/daily-tracking/` |
+| `/brainstorm <topic>` | Create a brainstorming file in `agent-work/brainstorms/` |
 
 ---
 
 ## Private notes
 
-Create `vault/private/` and add it to `vault/.gitignore`. Files there are never pushed to the git remote. If using iCloud, use Obsidian's Selective Sync to exclude `private/` from cloud upload.
+Notes you want off git **and** off iCloud:
+
+1. Create `vault/private/` (any name works as long as it's gitignored)
+2. Add to `vault/.gitignore`:
+   ```
+   private/
+   ```
+3. Exclude from iCloud — the cleanest way: append `.nosync` to the folder name (macOS convention iCloud respects):
+   ```bash
+   mv vault/private vault/private.nosync
+   ```
+   Or use Obsidian iOS Selective Sync (Settings → Sync → exclude `private/`) to keep it on Mac only.
+
+Files in `private.nosync/` stay on your Mac, never reach git, never sync to iCloud or iPhone.
 
 ---
 
@@ -110,23 +124,29 @@ Create `vault/private/` and add it to `vault/.gitignore`. Files there are never 
 pbrain/                          ← outer repo (tooling only)
 ├── .claude/
 │   └── commands/
-│       ├── journal.sh
-│       └── brainstorm.sh
+│       ├── journal.{md,sh}
+│       └── brainstorm.{md,sh}
 ├── docs/
-│   ├── gbrain-setup.md
-│   ├── claude-desktop.md
-│   └── mobile-sync.md
+│   ├── setup.md                 ← full setup walkthrough
+│   ├── mobile-sync.md           ← iOS sync details
+│   └── gbrain-beyond-notes.md   ← capabilities beyond search
 ├── launchd/
-│   └── com.pbrain.sync.plist    ← gbrain sync every 30 min
-├── templates/                   ← frontmatter templates
-├── vault/                       ← git submodule (your notes)
-└── CLAUDE.md
+│   └── com.pbrain.sync.plist.template  ← rendered by scripts/install-launchd.sh
+├── scripts/
+│   ├── init-vault.sh                   ← initialize vault dir + git + CLAUDE.md
+│   ├── install-launchd.sh              ← render plist template + load launchd
+│   ├── gbrain-sync-wrapper.sh          ← wraps sync with lockfile + JSONL log
+│   └── gbrain-dashboard.sh             ← status: stuck procs, sync stats, brain stats
+├── CLAUDE.md                    ← agent instructions for this repo
+└── README.md
 ```
+
+The vault is a **separate** git repo at the iCloud path above. Not a submodule.
 
 ---
 
 ## What not to do
 
-- Don't write notes in the outer repo — use `vault/agent-work/`
-- Don't edit `vault/notion-mirror/` — historical archive, treat as read-only
-- Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook; clone and link manually (see `docs/gbrain-setup.md`)
+- Don't write notes in this outer repo — use the vault
+- Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook; clone and link manually (see `docs/setup.md`)
+- Don't init gbrain at the pbrain root — it'll index your scripts as notes. Always init from inside the vault.

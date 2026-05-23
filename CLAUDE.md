@@ -20,6 +20,33 @@ Vault is a standalone git repo (not a submodule). It lives in iCloud Drive for i
 
 ---
 
+## Where agents write in the vault
+
+When Claude (or any agent) writes content into the vault, it goes under `agent-work/`. User-curated folders (life/, fitness/, startup/, daily/, etc.) are off-limits — never write or modify those without explicit instruction.
+
+| Subdir | Contents |
+|---|---|
+| `agent-work/brainstorms/` | `/brainstorm` outputs, idea exploration |
+| `agent-work/chat-history/` | Chat session takeaways saved on request |
+| `agent-work/drafts/` | Drafts of blog posts, docs, longer writeups |
+| `agent-work/notes/` | Misc captured notes from agent conversations |
+| `agent-work/research/` | Research outputs, web summaries, references |
+| `agent-work/people/` | People pages (auto-enriched contacts from gbrain or hand-written) |
+
+If a new content type doesn't fit any of these, ask before creating a new subdir.
+
+**Daily journal lives at `vault/life/daily-tracking/YYYY-MM-DD.md`** — not under `agent-work/`, because it's user-owned content. `/journal` creates a stub for the user to fill in; the content is the user's personal log, not agent output.
+
+---
+
+## Journal-first behavior
+
+When the user invokes any slash command other than `/journal`, OR asks for help with personal reflection / capture, first check whether today's daily journal exists at `vault/life/daily-tracking/YYYY-MM-DD.md`. If it doesn't, suggest running `/journal` first before proceeding. The user can override and continue — never block, just prompt once.
+
+Same applies for brainstorming, idea capture, or anything reflective: if today's journal is empty, suggest starting there since journaling first surfaces what's actually on the user's mind.
+
+---
+
 ## Conventions for editing scripts
 
 - Shell: `#!/usr/bin/env bash` with `set -euo pipefail` on every script.
@@ -40,8 +67,8 @@ All commands live in `.claude/commands/` and are available from both the outer r
 
 | Command | File | What it does |
 |---|---|---|
-| `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/daily/`. |
-| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/ideas/`. Requires a topic argument: `/brainstorm <topic>`. |
+| `/journal` | `journal.sh` | Create or open today's daily journal entry in `vault/life/daily-tracking/`. |
+| `/brainstorm` | `brainstorm.sh` | Start a brainstorming session saved to `vault/agent-work/brainstorms/`. Requires a topic argument: `/brainstorm <topic>`. |
 
 ---
 
@@ -51,31 +78,11 @@ All commands live in `.claude/commands/` and are available from both the outer r
 - **gbrain** — hybrid vector + keyword search over vault, MCP server for Claude sessions
 - **vault/** — markdown corpus (standalone git repo in iCloud Drive); source of truth for all notes
 
-See `docs/gbrain-setup.md` for gbrain setup and `docs/claude-desktop.md` for Claude Desktop MCP wiring.
+See `docs/setup.md` for the full stack setup including Claude Desktop MCP wiring.
 
 ---
 
 ## What not to do here
 
 - Don't write notes or ideas in the outer repo — use the vault at `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault`.
-- Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook. Clone and link manually (see `docs/gbrain-setup.md`).
-
----
-
-## Skill routing
-
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
-
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
+- Don't `bun install -g github:garrytan/gbrain` — broken postinstall hook. Clone and link manually (see `docs/setup.md`).
