@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # brainstorm.sh <topic>
-# Creates a brainstorming session file in vault/agent-work/ideas/.
+# Creates a brainstorming session file in vault/agent-work/brainstorms/.
 # The topic becomes the filename slug.
 #
 # Usage:
@@ -15,7 +15,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VAULT_DIR="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault"
-IDEAS_DIR="$VAULT_DIR/ideas"
+IDEAS_DIR="$VAULT_DIR/agent-work/brainstorms"
 
 mkdir -p "$IDEAS_DIR"
 

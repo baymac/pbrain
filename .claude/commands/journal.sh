@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # journal.sh
-# Creates or opens today's daily journal entry in vault/agent-work/daily/.
+# Creates or opens today's daily journal entry in vault/life/daily-tracking/.
 # If the file already exists, just prints the path (does not overwrite).
 #
 # Usage:
 #   /journal
 
 VAULT_DIR="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault"
-DAILY_DIR="$VAULT_DIR/daily"
+DAILY_DIR="$VAULT_DIR/life/daily-tracking"
 
 mkdir -p "$DAILY_DIR"
 
