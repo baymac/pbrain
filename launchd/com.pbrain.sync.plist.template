@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template — runs gbrain sync every 30 min via the wrapper script.
+
+  This is a TEMPLATE with placeholders. Install via:
+       ./scripts/install-launchd.sh
+  which substitutes paths for your machine and copies to ~/Library/LaunchAgents/.
+
+  Placeholders:
+    __HOME__        — your $HOME (e.g. /Users/you)
+    __REPO__        — absolute path to this pbrain repo checkout
+    __VAULT__       — absolute path to your vault
+    __BUN_BIN__     — absolute path to your bun binaries dir (usually __HOME__/.bun/bin)
+
+  Manual unload:    launchctl unload ~/Library/LaunchAgents/com.pbrain.sync.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pbrain.sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/scripts/gbrain-sync-wrapper.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__VAULT__</string>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/pbrain/sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/pbrain/sync.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__BUN_BIN__:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>VAULT_DIR</key>
+        <string>__VAULT__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
