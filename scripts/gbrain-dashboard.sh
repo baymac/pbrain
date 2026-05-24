@@ -16,6 +16,27 @@ bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 bold "=== gbrain dashboard ==="
 echo
 
+# 0. Upgrade status (banner if available)
+UPGRADE_STATUS_FILE="$REPO_DIR/.logs/upgrade-status.json"
+if [[ -f "$UPGRADE_STATUS_FILE" ]]; then
+  python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+hint = d.get("upgrade_hint", "")
+current = d.get("current_version", "?")
+if d.get("update_available") and hint:
+    print(f"\033[1;33m⬆ Upgrade available:  {hint}\033[0m")
+    print(f"   Run:  bash scripts/gbrain-upgrade.sh")
+    print(f"   (checked {d.get(\"checked_at\", \"\")})")
+else:
+    print(f"\033[32m✓ gbrain {current} — up to date\033[0m  (checked {d.get(\"checked_at\", \"\")})")
+print()
+' "$UPGRADE_STATUS_FILE"
+fi
+
 # 1. Stuck processes
 bold "## Stuck processes (> 5 min)"
 ps -eo pid,etime,command | awk '
