@@ -1,7 +1,15 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "pbrain",
   "owner": { "name": "baymac", "url": "https://github.com/baymac" },
   "plugins": [
-    { "name": "pbrain", "source": "." }
+    {
+      "name": "pbrain",
+      "description": "Daily-ritual scaffolding for Obsidian + Claude Code — journal, gratitude, fitness, diet, planning, brainstorming, clipping triage.",
+      "source": {
+        "source": "github",
+        "repo": "baymac/pbrain"
+      }
+    }
   ]
 }
