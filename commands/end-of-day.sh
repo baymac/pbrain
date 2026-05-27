@@ -148,11 +148,54 @@ The new section must follow this shape:
   ### Tomorrow seed
   - {verbatim from Q4}
 
-Step 4 — Also surface any obvious follow-ups in the OTHER files when relevant:
-  - If diet_file dinner was "planned" but the user described what they actually ate,
-    update the diet log meals table to "eaten" with the real items + recompute totals.
-  - If fitness_file is "planned" but the user trained, you may flip status: completed.
-  - Don't go beyond what the user said — these updates are bookkeeping, not analysis.
+Step 4 — Propagate the close into the cross-ref files. This is bookkeeping
+the user expects to be automatic — do all of these whenever the inputs apply,
+without re-asking. Use the Edit tool on each file.
+
+4a) DIET FILE (\$DIET_FILE) — if Q1 mentions food, OR diet_file has any meal
+    row with status != "eaten":
+
+  • For every meal row whose status is "planned"/"planned (revise)"/"proposed":
+    - If the user described what they actually ate for that slot → replace
+      Items + recompute Cals/P/C/F/Fiber against the new items, flip Status to
+      "eaten". Add new rows for snacks/shakes the user mentioned that aren't
+      in the table yet (e.g. an 8 PM protein shake).
+    - If the user skipped that meal entirely → flip Status to "skipped" and
+      zero out the macros.
+  • Recompute the **Total (actual)** row and the **Net vs target** row.
+    Header for that row should read "Total (actual)" — not "Total (so far)".
+  • Update the **Hydration** / **Late eating (after 9pm)** lines from Q1.
+  • REBUILD the **Nutrition Analysis** table against actuals — don't leave
+    stale notes referencing the planned dinner. Each row's note must reflect
+    what actually happened today, with ✅/⚠️/❌ recalibrated to actual numbers.
+    Add a **Calorie total** row if the day finished significantly under/over.
+  • REMOVE any "Suggested next meal(s)" / "Suggested improvement" section
+    entirely — that section was forward-looking and is stale at close. Replace
+    it with a short "## Carry-forward for tomorrow" list (3–5 bullets) drawn
+    from the actual day's gaps.
+  • Update the **Coach note** at the bottom to reflect the day that actually
+    happened — name the real wins + the real gaps, not the projected ones.
+
+4b) FITNESS FILE (\$FITNESS_FILE) — if Q1 mentions any movement at all:
+
+  • If the planned session happened → flip frontmatter "status: planned" to
+    "status: completed". Don't touch the logged sets the user already filled.
+  • If the planned session was skipped → frontmatter "status: skipped" with a
+    one-line reason in the body.
+  • If Q1 mentions ADDITIONAL movement beyond the planned session (walks,
+    ring closes, extra cardio, yoga, kickboxing, etc.) → append a section
+    titled "## Other movement today" at the bottom with bullets for each
+    item. Include rough timing if the user said it. Don't invent items.
+
+4c) JOURNAL FILE (\$JOURNAL_FILE) — leave alone. The journal is the user's
+    own raw voice from earlier in the day; the close does not edit it.
+
+Do these silently as part of writing the close — surface one short summary
+line per file you touched in your final message. Do NOT skip 4a/4b because
+they feel like extra work; this is the entire point of the new flow.
+
+Don't go beyond what the user said — these updates are bookkeeping, not
+new analysis or new prescriptions.
 
 Step 5 — Print the plan file path and ONE line of warmth. Examples:
   "Locked in. Sleep well."

@@ -11,7 +11,11 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 - If today's plan file exists → fills the `## How it went` section in place with: what you actually did, wins, what slipped, goal progress (vs `focus_today`), energy curve, tomorrow seed.
 - If today's plan file doesn't exist → creates a free-form close at that path instead of anchoring to a plan.
 - If `## How it went` already has user-filled content → asks whether to overwrite, append, or skip before touching it (idempotency guardrail).
-- When the user describes what they actually ate or trained, applies obvious bookkeeping updates to the diet log (marks meals `eaten`, recomputes totals) and the fitness file (flips status to `completed`). Bookkeeping only — no analysis sneak-in.
+- Propagates the close into today's diet and fitness files automatically:
+  - **Diet file:** flips planned meals to `eaten` (or `skipped`) with real items + macros, recomputes the Total/Net rows, rebuilds the Nutrition Analysis table against actuals, strips the stale "Suggested next meal(s)" block and replaces it with a short carry-forward list, updates the Coach note to the day that actually happened.
+  - **Fitness file:** flips `status: planned` → `completed` (or `skipped`), preserves the sets the user already logged, appends an `## Other movement today` section for walks / ring closes / extra cardio if mentioned.
+  - **Journal file:** untouched (it's the user's raw voice from earlier).
+  - Bookkeeping only — the close never invents new analysis or new prescriptions.
 
 **Tone rules baked into the prompt:**
 
