@@ -2,7 +2,11 @@
 description: Start a brainstorming session
 argument-hint: <topic>
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/brainstorm.sh" "$ARGUMENTS"`
+Run this with the Bash tool first (substituting the user's topic for `$ARGUMENTS`), then follow the INSTRUCTIONS block in its output:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/brainstorm.sh" "$ARGUMENTS"
+```
 
 ## Morning sequence check (do this first)
 

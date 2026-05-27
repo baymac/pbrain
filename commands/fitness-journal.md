@@ -1,7 +1,11 @@
 ---
 description: Daily adaptive fitness journal — asks your state, picks today's workout, generates gym sessions in your exact tracking format
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/fitness-journal.sh"`
+Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/fitness-journal.sh"
+```
 
 ## Morning sequence check (do this first)
 
