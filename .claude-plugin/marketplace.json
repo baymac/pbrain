@@ -2,6 +2,6 @@
   "name": "pbrain",
   "owner": { "name": "baymac", "url": "https://github.com/baymac" },
   "plugins": [
-    { "name": "pbrain", "source": "." }
+    { "name": "pbrain", "source": "./." }
   ]
 }
