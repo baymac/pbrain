@@ -102,7 +102,7 @@ There's no `.claude/commands` symlink at the repo root — by design. Slash comm
 
 ## Slash commands
 
-Sources live in `commands/`. Available in every CC session once the user symlinks `~/.claude/commands` → this repo's `commands/`, or after `/plugin install baymac/pbrain` once it's published. User-facing docs: `README.md` (overview + env var table) and `docs/<command>.md` (per command).
+Sources live in `commands/`. Available in every CC session once the user symlinks `~/.claude/commands` → this repo's `commands/`, or after `/plugin marketplace add baymac/pbrain` + `/plugin install pbrain@pbrain` once it's published. User-facing docs: `README.md` (overview + env var table) and `docs/<command>.md` (per command).
 
 | Command | Default destination | Override env var |
 |---|---|---|
