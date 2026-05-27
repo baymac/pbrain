@@ -51,11 +51,11 @@ The stack is three independent layers — pick what you need.
 ### Minimal: plugin + vault (everyone starts here)
 
 ```bash
-# 1. Install the plugin (recommended)
-/plugin install baymac/pbrain
-#    Note: pbrain is pre-release. If /plugin install can't find it yet,
-#    use the Local development path below — same commands, just symlinked
-#    from a local clone.
+# 1. Install the plugin — two steps (register the marketplace, then install)
+/plugin marketplace add baymac/pbrain
+/plugin install pbrain@pbrain
+#    If either step fails, use the Local development path below — same
+#    commands, just symlinked from a local clone.
 
 # 2. Bootstrap a vault — checks for Obsidian, creates the vault,
 #    optionally migrates it to iCloud for mobile sync, sets up a private
