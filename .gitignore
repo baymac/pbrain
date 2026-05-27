@@ -1,0 +1,8 @@
+.env
+.env.local
+*.log
+.gbrain/
+.DS_Store
+.context/
+.fastembed_cache/
+.logs/
