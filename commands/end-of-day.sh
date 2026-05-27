@@ -4,9 +4,10 @@ set -euo pipefail
 # end-of-day.sh
 # Bookend to /plan-my-day. Gathers today's plan, journal, fitness, and diet
 # entries; emits a context block instructing Claude to walk a structured
-# close-of-day reflection and write a sibling close-of-day note.
+# close-of-day reflection and fill the existing "How it went" section of the
+# plan-my-day file in place. No sibling files — the plan file is the single
+# record for the day.
 #
-# Default destination:  $VAULT_DIR/life/daily-planning/YYYY-MM-DD-close.md
 # Overrides:
 #   PBRAIN_VAULT             — vault root
 #   PBRAIN_PLAN_DIR          — daily-plan dir (read + write target)
@@ -35,7 +36,6 @@ PLAN_FILE="$PLAN_DIR/$TODAY.md"
 JOURNAL_FILE="$DAILY_DIR/$TODAY.md"
 FITNESS_FILE="$FITNESS_DIR/$TODAY.md"
 DIET_FILE="$DIET_DIR/$TODAY.md"
-CLOSE_FILE="$PLAN_DIR/$TODAY-close.md"
 
 mkdir -p "$PLAN_DIR"
 
@@ -52,18 +52,32 @@ exists() {
   [[ -f "$1" ]] && echo yes || echo no
 }
 
-if [[ -f "$CLOSE_FILE" ]]; then
-  echo "Today's close already exists: $CLOSE_FILE"
-  echo ""
-  cat "$CLOSE_FILE"
-  exit 0
-fi
+# Detect whether the plan's "How it went" section is still on its template
+# placeholders (single "-" bullets and empty energy curve lines) so we can
+# warn the user if they're about to overwrite a filled close.
+already_closed() {
+  local f="$1"
+  [[ -f "$f" ]] || { echo no; return; }
+  awk '
+    /^## How it went/ {in_sec=1; next}
+    /^---$/ && in_sec {exit}
+    in_sec {
+      # any non-empty line that is not a header, not the placeholder "-",
+      # and not a bare "Morning:"/"Afternoon:"/"Evening:" energy template
+      gsub(/^[ \t]+|[ \t]+$/, "", $0)
+      if ($0 == "" || $0 ~ /^#/ || $0 == "-" || $0 ~ /^- (Morning|Afternoon|Evening):$/) next
+      print "filled"
+      exit
+    }
+  ' "$f" | grep -q filled && echo yes || echo no
+}
+
+CLOSED="$(already_closed "$PLAN_FILE")"
 
 cat <<PROMPT
 END_OF_DAY_SESSION
 date: $TODAY ($DOW)
-output_file: $CLOSE_FILE
-plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"))
+plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"), already_closed: $CLOSED)
 journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
 fitness_file: $FITNESS_FILE (exists: $(exists "$FITNESS_FILE"))
 diet_file: $DIET_FILE (exists: $(exists "$DIET_FILE"))
@@ -81,44 +95,76 @@ $(read_or_missing "$FITNESS_FILE")
 $(read_or_missing "$DIET_FILE")
 --- END CONTEXT ---
 
-INSTRUCTIONS: Walk the user through a close-of-day reflection. Be warm but tight. Specifics or silence.
+INSTRUCTIONS: Walk the user through a close-of-day reflection and fill the
+existing "## How it went" section of the plan file in place. The plan file
+is the single record for the day — no sibling close files.
 
-Step 0 — If the plan file does not exist, tell the user once: "No /plan-my-day for today — we'll do a free-form close instead." Then proceed.
+Step 0 — Preflight:
+  - If plan_file exists == no: tell the user "No /plan-my-day for today — I'll
+    write a free-form close at the top of a new $PLAN_FILE." Then proceed.
+  - If already_closed == yes: tell the user "Today's plan already has a
+    filled-in 'How it went'. Want me to overwrite, append a note, or skip?"
+    Wait for direction.
 
-Step 1 — Skim every section above. Don't summarize generically. Note specific items the user planned, what their journal mentioned, whether they trained, whether they logged meals.
+Step 1 — Skim every section above. Don't summarize generically. Note specific
+items the user planned, what their journal mentioned, whether they trained,
+whether they logged meals, whether the cross-ref files corroborate the day.
 
 Step 2 — Ask, ONE question at a time. Wait for each answer before asking the next.
-  1) "What actually got done today?" (If the plan exists, anchor explicitly to it: "Against today's plan — what got done?")
+  1) "Against today's plan — what got done?" (anchor explicitly to the plan
+     items so the user can confirm/deny each)
   2) "What got dropped, and was that the right call?"
-  3) "What surprised you today — good or bad?"
+  3) "Energy curve — morning / afternoon / evening? (1–10 each, or a word each)"
   4) "One thing to carry into tomorrow."
 
-If Q1's answer makes it clear the day went sideways (illness, crisis, just-rough), skip Q2 and soften Q3 to: "What's one thing worth remembering from today, even if it was rough?"
+If Q1's answer makes it clear the day went sideways (illness, crisis,
+just-rough), skip Q2 and soften the rest.
 
-Step 3 — Write to $CLOSE_FILE using exactly this format (no frontmatter):
+Step 3 — Use the Edit tool to replace the existing "## How it went" section
+of $PLAN_FILE in place. Match the section exactly as it appears in the file
+(headers may be "## How it went" or "## How it went (fill at end of day)").
+The new section must follow this shape:
 
-# $TODAY end-of-day
+  ## How it went
 
-## What got done
-{verbatim answer to Q1}
+  ### What I actually did
+  - {bullets from Q1, in the user's voice}
 
-## What got dropped
-{verbatim answer to Q2 — omit this whole section if you skipped Q2}
+  ### Wins
+  - {1–4 bullets derived from Q1 + cross-ref files — real wins only, no padding}
 
-## Surprises
-{verbatim answer to Q3}
+  ### What slipped
+  - {bullets from Q2, in the user's voice}
 
-## Carry forward
-{verbatim answer to Q4}
+  ### Goal progress (vs the focus_today goals above)
+  - {one bullet per focus_today goal — net positive / flat / negative with a sentence of why,
+     drawing from Q1 + Q2 + cross-ref files}
 
-Step 4 — Print the file path and ONE line of warmth. Examples:
+  ### Energy curve
+  - Morning: {from Q3}
+  - Afternoon: {from Q3}
+  - Evening: {from Q3}
+
+  ### Tomorrow seed
+  - {verbatim from Q4}
+
+Step 4 — Also surface any obvious follow-ups in the OTHER files when relevant:
+  - If diet_file dinner was "planned" but the user described what they actually ate,
+    update the diet log meals table to "eaten" with the real items + recompute totals.
+  - If fitness_file is "planned" but the user trained, you may flip status: completed.
+  - Don't go beyond what the user said — these updates are bookkeeping, not analysis.
+
+Step 5 — Print the plan file path and ONE line of warmth. Examples:
   "Locked in. Sleep well."
   "Tomorrow's already lighter for having closed today."
   "That's a real day. Rest up."
-Do not write three paragraphs of reflection at the user. The user already reflected — your job is to record, not pile on.
+
+Do NOT write three paragraphs of reflection at the user. The user already
+reflected — your job is to record, not pile on.
 
 Hard rules:
-- Quote the user's own words in the file. Don't paraphrase into corporate voice.
+- Quote the user's own words where possible — don't paraphrase into corporate voice.
 - Do NOT prescribe action items, accountability frameworks, or pep talks.
 - Do NOT call the day a "win" or a "loss." Neutral language only.
+- Do NOT create a sibling close file. The plan file is the record.
 PROMPT
