@@ -2,11 +2,15 @@
 description: Grep-based recall across the vault. Surfaces past notes mentioning a topic, then synthesizes what you've written over time. A simpler, faster replacement for gbrain search.
 argument-hint: <topic or phrase>
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/recall.sh" "$ARGUMENTS"`
+Run this with the Bash tool first (substituting the user's query for `$ARGUMENTS`):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/recall.sh" "$ARGUMENTS"
+```
 
 ## How to handle the matches
 
-The script above ran a case-insensitive grep across the user's vault narrative folders (`life/`, `agent-work/`, `startup/`, `side-quests/`, `software-dev/`, `notes/`). It deliberately skips `Clippings/` (third-party) and `fitness/daily-tracking/` (numeric logs).
+The script ran a case-insensitive grep across the user's vault narrative folders (`life/`, `agent-work/`, `startup/`, `side-quests/`, `software-dev/`, `notes/`). It deliberately skips `Clippings/` (third-party) and `fitness/daily-tracking/` (numeric logs).
 
 **Your job:**
 1. Read every match the script printed.

@@ -1,7 +1,11 @@
 ---
 description: Adaptive daily planner anchored on your goals. First run interviews you to build a goals profile (horizon goals, current focus, working style, anti-patterns, personal anchors). Every subsequent run plans the day against that profile, pulling today's fitness session as the one hard anchor.
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/plan-my-day.sh"`
+Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/plan-my-day.sh"
+```
 
 ## Morning sequence check (do this first)
 

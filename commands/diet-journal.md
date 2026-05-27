@@ -1,7 +1,11 @@
 ---
 description: Daily diet journal — tracks what you ate, analyzes nutrition quality, saves to vault/fitness/diet-tracking/
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/diet-journal.sh"`
+Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/diet-journal.sh"
+```
 
 ## Morning sequence check (do this first)
 

@@ -1,9 +1,13 @@
 ---
 description: Bootstrap pbrain — Obsidian install checks, vault setup, optional iCloud sync, private notes dir. Idempotent; safe to re-run.
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/init-obsidian.sh" probe`
+Before anything else, run this with the Bash tool to probe the machine state:
 
-Walk the user through pbrain setup using the probe output above. Be terse — short Y/N prompts, no long paragraphs.
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/init-obsidian.sh" probe
+```
+
+Then walk the user through pbrain setup using the probe output. Be terse — short Y/N prompts, no long paragraphs.
 
 ## Step 1 — Obsidian Desktop (required)
 

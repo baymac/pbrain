@@ -1,7 +1,11 @@
 ---
 description: Walk through vault/Clippings/ and move each clip into one of your chosen top-level vault folders (or any subpath underneath), renaming if needed. Asks upfront which dirs to use. Decides on its own when confident, asks when split.
 ---
-!`bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/organize-clippings.sh"`
+Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/organize-clippings.sh"
+```
 
 ## Morning sequence check (do this first)
 
