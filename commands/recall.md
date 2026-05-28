@@ -5,7 +5,7 @@ argument-hint: <topic or phrase>
 Run this with the Bash tool first (substituting the user's query for `$ARGUMENTS`):
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/recall.sh" "$ARGUMENTS"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/recall.sh" "$ARGUMENTS"
 ```
 
 ## How to handle the matches

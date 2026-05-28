@@ -4,5 +4,5 @@ description: Quiet daily journal — you dump, it captures, and only asks open q
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/journal.sh"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/journal.sh"
 ```

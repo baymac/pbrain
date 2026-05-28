@@ -4,7 +4,7 @@ description: Walk through vault/Clippings/ and move each clip into one of your c
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/organize-clippings.sh"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/organize-clippings.sh"
 ```
 
 ## Morning sequence check (do this first)

@@ -4,7 +4,7 @@ description: Daily adaptive fitness journal — asks your state, picks today's w
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/fitness-journal.sh"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/fitness-journal.sh"
 ```
 
 ## Morning sequence check (do this first)

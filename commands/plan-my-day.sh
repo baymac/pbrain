@@ -38,6 +38,7 @@ PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbra
 
 TODAY="$(date +%Y-%m-%d)"
 DOW="$(date +%A)"
+NOW_TIME="$(date +%H:%M)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
 
 mkdir -p "$PLAN_DIR"
@@ -255,6 +256,7 @@ cat <<PROMPT
 PLAN_MY_DAY_SESSION
 date: $TODAY
 day_of_week: $DOW
+current_time: $NOW_TIME (24h, local)
 output_file: $OUT_FILE
 profile_file: $PROFILE_FILE
 
@@ -309,7 +311,16 @@ Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relati
   Phrase as suggestions, not commands. Skip anything the profile doesn't endorse.
 
 Step 4 — Generate the day plan and write it to: $OUT_FILE.
-  Keep blocks open-ended — bullets and rough time windows (Morning / Midday / Afternoon / Evening), NOT rigid timeslots — unless the user gave specific times. Fitness session is the one hard anchor. Every Work bullet should tie back to a current_focus goal where possible (annotate inline with "→ <goal name>").
+  STRUCTURE: lead with a consolidated **Today at a glance** table (time range + action + tie). All subjective detail — coaching, eating, breaks, rest, avoids — comes AFTER the table as supporting sections. The table is the operating doc; the sections are reference.
+
+  Time-range rules:
+  - Anchor the schedule to working_style.focus_window + the fitness session time + any locked-in commitments from q3.
+  - Use concrete ranges (e.g. "10:30 AM–12:00 PM" in 12h, or "10:30–12:00" in 24h) whenever you can derive them from the profile, fitness journal, or user input. Don't write "Morning / Midday" labels — pick real ranges.
+  - If the user gave specific times, honor them. Otherwise derive from current time + focus_window + deep_work_block_min.
+  - Include in the table: each work block (Now/Next/Later), the fitness anchor, every meal window, post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative), or "—" if standalone.
+  - Keep the table tight — one line per action, no wrapped text. Time | Action | Tie.
+
+  Every Work row should tie back to a current_focus goal where possible (annotate the Tie column with the short goal name).
 
   ---
   date: $TODAY
@@ -323,34 +334,46 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   > {one short coaching note tuned to today's energy, top 3 picks, and fitness intent. 1-2 sentences. No platitudes. Tie back to a goal if natural.}
 
+  ## Today at a glance
+
+  | Time | Action | Tie |
+  |---|---|---|
+  | {HH:MM–HH:MM} | {concrete action — e.g. "Pbrain plugin install fix"} | {goal name or category} |
+  | {HH:MM–HH:MM} | {next action} | {tie} |
+  | ... | ... | ... |
+
+  (Rows in chronological order. Use 24h or 12h consistently — match what's in the user's journal/fitness file.)
+
   ## Anchoring on
 
   - {bullet per focus_today goal — name + the concrete this-week move from the profile. If focus_today is empty (none of today's top 3 tie back to a focus area), write a single line: "Today's work isn't tied to a current focus area — that's fine, just noting it." Don't pad.}
 
+  (All sections below are supporting detail — the schedule lives in the table above. Sections add the "how / what to watch for", not the "when".)
+
   ## Anchors
 
-  - {fitness session with time if known, e.g. "Gym — Day B, ~4:00 PM"}
-  - {each locked-in commitment from q3 with its time}
+  - {fitness session — note the focus + RPE / duration from the fitness journal, not the time (which is in the table)}
+  - {each locked-in commitment from q3 with brief context, not the time}
 
   ## Work
 
-  - **Now:** {q2 top — the single concrete task they start with. Annotate "→ <goal>" if it ties to a current_focus area.}
-  - **Next:** {q2 second — the concrete task after Now is done. Annotate "→ <goal>" if it ties to a focus area.}
-  - **Later:** {q2 third — the concrete task if time allows. Annotate "→ <goal>" if it ties to a focus area.}
-  - Deep work blocks: {1-3 blocks sized to working_style.deep_work_block_min, scheduled in working_style.focus_window where possible, respecting q4 available hours}
+  - **Now:** {q2 top — concrete task + a sentence on scope or what "done" means. Annotate "→ <goal>" if it ties to a current_focus area.}
+  - **Next:** {q2 second — concrete task + scope. Annotate "→ <goal>" if applicable.}
+  - **Later:** {q2 third — concrete task + scope. Annotate "→ <goal>" if applicable.}
+  - Cap on focused hours today: {q4 number} — that's the ceiling, not the floor.
 
   ## Breaks & movement
 
-  - {2-4 bullets: posture breaks, short walks, sunlight, stretches}
+  - {2-4 bullets: posture breaks, short walks, sunlight, stretches — describe the move, not the clock}
   - {if walk cadence gap surfaced, include an outdoor walk}
 
   ## Eating
 
-  - {breakfast suggestion or window}
-  - {lunch suggestion or window}
-  - {dinner suggestion or window}
+  - {breakfast — what to eat, not when}
+  - {lunch — what to eat}
+  - {dinner — what to eat}
   - Hydration: {target, e.g. 3L water}
-  - {if today is a training day per fitness journal, note refuel timing}
+  - {if today is a training day per fitness journal, note refuel timing relative to the gym session}
 
   ## Relationships
 
@@ -364,9 +387,7 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   ## Rest
 
-  - Wind-down start: {time, default 1 hr before target bed time}
-  - Bed by: {target}
-  - {1-2 lines on what NOT to do in the wind-down, tied to q5 and profile.anti_patterns}
+  - {1-2 lines on what NOT to do in the wind-down, tied to q5 and profile.anti_patterns. Times for wind-down and bed live in the table above.}
 
   ## Avoiding today
 

@@ -130,7 +130,15 @@ git clone https://github.com/baymac/pbrain.git ~/code/pbrain
 
 The script is idempotent — re-run it after `git pull` if new commands land. If you previously symlinked the whole `commands/` directory, the script detects that and replaces it with per-file links.
 
-Edits to the scripts in the cloned repo are live immediately. Don't run `/journal` etc. from the tooling repo though — run them from the vault, so notes land where you expect.
+To make live edits to `.sh` scripts visible immediately, set `PBRAIN_DEV_DIR` to your cloned repo in your shell profile:
+
+```sh
+export PBRAIN_DEV_DIR=~/code/pbrain   # adjust path to your clone
+```
+
+Without this, the `.sh` files that run are the marketplace snapshot — edits to your local clone won't take effect. With it set, the commands always execute from your live repo.
+
+Run pbrain commands from **any directory** — your current project, a Conductor workspace, the tooling repo, wherever you are. The vault path is resolved from your config (`$PBRAIN_VAULT` → `~/.config/pbrain/vault` → iCloud default), never from cwd. Notes always land in the right place.
 
 #### Troubleshooting
 
@@ -199,6 +207,7 @@ Each command's default path is overrideable via env var. Full reference:
 
 | Env var | Used by | Default |
 |---|---|---|
+| `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm` | `$VAULT/agent-work/brainstorms` |
