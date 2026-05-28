@@ -96,7 +96,11 @@ There's no `.claude/commands` symlink at the repo root — by design. Slash comm
   ```
   `pwd -P` is required so sourcing works whether the script was invoked via the vault's `.claude/commands` symlink or directly.
 - Python heredocs that need vault paths: pass them as argv (`python3 - "$VAULT_DIR" <<'PYEOF' ... sys.argv[1] ...`). Do NOT use `os.path.expanduser` on a hardcoded path.
-- Slash command `.md` files use `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/<name>.sh` so they work in both plugin-install mode (`CLAUDE_PLUGIN_ROOT` set by Claude) and local-dev mode. The fallback must be `$HOME/.claude` (absolute), not `.claude` (relative) — slash commands run with the *user's project* as cwd, which inside a Conductor workspace is not the pbrain repo, so a relative `.claude/commands/<name>.sh` resolves to nothing. The per-file symlinks created by `scripts/install-commands.sh` live under `~/.claude/commands/`, so the absolute fallback always finds them.
+- Slash command `.md` files use `${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/<name>.sh` — three-tier resolution:
+  1. `PBRAIN_DEV_DIR` — local dev override. Set `export PBRAIN_DEV_DIR=/path/to/pbrain` in your shell profile to point at the live repo; edits to `.sh` files take effect immediately.
+  2. `CLAUDE_PLUGIN_ROOT` — set by the Claude Code harness when running a plugin command. Points to the plugin install dir automatically.
+  3. `$HOME/.claude/plugins/marketplaces/pbrain` — marketplace install fallback. Used when neither env var is set (e.g. when the Bash tool invokes the command outside the plugin system).
+  The fallback must be an absolute path — slash commands run with the *user's project* as cwd, which inside a Conductor workspace is not the pbrain repo.
 
 ---
 

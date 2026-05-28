@@ -55,6 +55,5 @@ echo "dest: $DEST_DIR"
 
 # Clean up the dest dir only if it's now empty AND not a symlink itself.
 if [[ -d "$DEST_DIR" && ! -L "$DEST_DIR" ]] && [[ -z "$(ls -A "$DEST_DIR" 2>/dev/null)" ]]; then
-  rmdir "$DEST_DIR"
-  echo "removed empty: $DEST_DIR"
+  rmdir "$DEST_DIR" 2>/dev/null && echo "removed empty: $DEST_DIR" || true
 fi

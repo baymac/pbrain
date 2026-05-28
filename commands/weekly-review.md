@@ -4,5 +4,5 @@ description: Weekly review — synthesizes the last 7 days across journal, grati
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/weekly-review.sh"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/weekly-review.sh"
 ```

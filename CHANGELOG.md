@@ -4,6 +4,20 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-28
+
+### Added
+
+- **`PBRAIN_DEV_DIR` env var** — three-tier path resolution for all command `.md` files: `PBRAIN_DEV_DIR` (local dev) → `CLAUDE_PLUGIN_ROOT` (plugin command path) → `~/.claude/plugins/marketplaces/pbrain` (marketplace fallback). Set `export PBRAIN_DEV_DIR=/path/to/pbrain` in your shell profile to point at a live clone; `.sh` edits take effect immediately without reinstalling.
+- **`scripts/uninstall-commands.sh`** — inverse of `install-commands.sh`. Removes per-file symlinks from `~/.claude/commands/` only if they point at this repo; leaves foreign symlinks and real files untouched. Idempotent.
+- **`/plan-my-day` schedule table** — plan output now leads with a **Today at a glance** table (time range | action | goal tie) instead of prose blocks. Supporting detail (coaching, eating, rest, avoids) follows as reference sections.
+
+### Fixed
+
+- **Marketplace install path fallback** — all 11 command `.md` files previously fell back to `~/.claude/commands/` when `CLAUDE_PLUGIN_ROOT` was absent (e.g. when the Bash tool invokes the script directly). That path doesn't exist on marketplace installs, causing `bash: No such file or directory`. Fallback now correctly targets `~/.claude/plugins/marketplaces/pbrain`.
+- **Time format example in `/plan-my-day`** — template example `"10:30–12:00 AM"` was semantically wrong (`12:00 AM` is midnight). Corrected to `"10:30 AM–12:00 PM"` / `"10:30–12:00"` with explicit 12h/24h guidance.
+- **`uninstall-commands.sh` race on `rmdir`** — final `rmdir` on the now-empty `~/.claude/commands/` could crash the script under `set -e` if another process created a file concurrently. Now swallowed gracefully.
+
 ## [0.1.1] — 2026-05-27
 
 ### Fixed

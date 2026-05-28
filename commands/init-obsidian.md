@@ -4,7 +4,7 @@ description: Bootstrap pbrain — Obsidian install checks, vault setup, optional
 Before anything else, run this with the Bash tool to probe the machine state:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/init-obsidian.sh" probe
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/init-obsidian.sh" probe
 ```
 
 Then walk the user through pbrain setup using the probe output. Be terse — short Y/N prompts, no long paragraphs.

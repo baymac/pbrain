@@ -4,7 +4,7 @@ description: Adaptive daily planner anchored on your goals. First run interviews
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/plan-my-day.sh"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/plan-my-day.sh"
 ```
 
 ## Morning sequence check (do this first)

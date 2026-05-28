@@ -5,7 +5,7 @@ argument-hint: <topic>
 Run this with the Bash tool first (substituting the user's topic for `$ARGUMENTS`), then follow the INSTRUCTIONS block in its output:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/commands/brainstorm.sh" "$ARGUMENTS"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/brainstorm.sh" "$ARGUMENTS"
 ```
 
 ## Morning sequence check (do this first)

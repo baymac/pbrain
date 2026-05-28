@@ -315,7 +315,7 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   Time-range rules:
   - Anchor the schedule to working_style.focus_window + the fitness session time + any locked-in commitments from q3.
-  - Use concrete ranges (e.g. "10:30–12:00 AM") whenever you can derive them from the profile, fitness journal, or user input. Don't write "Morning / Midday" labels — pick real ranges.
+  - Use concrete ranges (e.g. "10:30 AM–12:00 PM" in 12h, or "10:30–12:00" in 24h) whenever you can derive them from the profile, fitness journal, or user input. Don't write "Morning / Midday" labels — pick real ranges.
   - If the user gave specific times, honor them. Otherwise derive from current time + focus_window + deep_work_block_min.
   - Include in the table: each work block (Now/Next/Later), the fitness anchor, every meal window, post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative), or "—" if standalone.
   - Keep the table tight — one line per action, no wrapped text. Time | Action | Tie.
