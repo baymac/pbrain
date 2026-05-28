@@ -138,7 +138,7 @@ export PBRAIN_DEV_DIR=~/code/pbrain   # adjust path to your clone
 
 Without this, the `.sh` files that run are the marketplace snapshot — edits to your local clone won't take effect. With it set, the commands always execute from your live repo.
 
-Don't run `/journal` etc. from the tooling repo — run them from the vault, so notes land where you expect.
+Run pbrain commands from **any directory** — your current project, a Conductor workspace, the tooling repo, wherever you are. The vault path is resolved from your config (`$PBRAIN_VAULT` → `~/.config/pbrain/vault` → iCloud default), never from cwd. Notes always land in the right place.
 
 #### Troubleshooting
 
