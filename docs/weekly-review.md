@@ -26,7 +26,7 @@ A weekly cadence is the missing layer between daily journaling (too noisy) and q
 | `PBRAIN_WEEKLY_DIR` | Where the weekly review writes |
 | `PBRAIN_JOURNAL_DIR` | Daily journals (read) |
 | `PBRAIN_GRATITUDE_DIR` | Gratitude entries (read) |
-| `PBRAIN_PLAN_DIR` | Plans + close-of-day notes (read) |
+| `PBRAIN_PLAN_DIR` | Daily plans, including the in-place end-of-day close (read) |
 | `PBRAIN_FITNESS_DIR` | Fitness sessions (read) |
 | `PBRAIN_DIET_DIR` | Diet logs (read) |
 

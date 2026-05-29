@@ -12,7 +12,7 @@ set -euo pipefail
 #   PBRAIN_WEEKLY_DIR        — where the weekly review writes
 #   PBRAIN_JOURNAL_DIR       — daily journals
 #   PBRAIN_GRATITUDE_DIR     — gratitude entries
-#   PBRAIN_PLAN_DIR          — daily plans + close-of-day notes
+#   PBRAIN_PLAN_DIR          — daily plans (end-of-day close is written into the plan file in place)
 #   PBRAIN_FITNESS_DIR       — fitness sessions
 #   PBRAIN_DIET_DIR          — diet logs
 
@@ -87,8 +87,7 @@ for d in $DATES; do
   echo "============================================================"
   cat_section "Gratitude"  "$GRATITUDE_DIR/$d.md"
   cat_section "Journal"    "$DAILY_DIR/$d.md"
-  cat_section "Plan"       "$PLAN_DIR/$d.md"
-  cat_section "End-of-day" "$PLAN_DIR/$d-close.md"
+  cat_section "Plan & close" "$PLAN_DIR/$d.md"
   cat_section "Fitness"    "$FITNESS_DIR/$d.md"
   cat_section "Diet"       "$DIET_DIR/$d.md"
 done

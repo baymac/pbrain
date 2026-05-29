@@ -180,7 +180,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/journal` | Today's daily note | `$VAULT/life/daily-tracking/` |
 | `/gratitude-journal` | Feelings + gratitude + reflection | `$VAULT/life/gratitude-journal/` |
 | `/plan-my-day` | Goal-anchored daily planner | `$VAULT/life/daily-planning/` |
-| `/end-of-day` | Close-of-day reflection (bookend to `/plan-my-day`) | `$VAULT/life/daily-planning/<date>-close.md` |
+| `/end-of-day` | Close-of-day reflection (bookend to `/plan-my-day`) | fills `## How it went` in `$VAULT/life/daily-planning/<date>.md` (in place) |
 | `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet | `$VAULT/life/weekly-reviews/YYYY-Www.md` |
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
