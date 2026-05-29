@@ -4,6 +4,22 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-29
+
+### Added
+
+- **`/loose-ends`** — new read-only surfacing command. The vault already *generates* open-loop data; nothing reflected it back. `/loose-ends` aggregates five kinds of unresolved thread and reports oldest-first: stale `tbd/` brainstorms (≥ `PBRAIN_STALE_DAYS`, default 7), unanswered `## Open questions` from journals (empty/`—` answer) plus open-question bullets in brainstorms, unchecked `- [ ]` todos in recent plans, recurring `### Tomorrow seed` bullets that keep getting deferred, and `current_focus` goals from the plan profile that have gone quiet. Writes nothing — it's a dashboard, safe to re-run. New env vars: `PBRAIN_STALE_DAYS` (default `7`) and `PBRAIN_LOOSE_ENDS_LOOKBACK` (default `30`); reuses `PBRAIN_JOURNAL_DIR`, `PBRAIN_BRAINSTORMS_DIR`, `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE`.
+
+### Changed
+
+- **Frontmatter standardized across every note generator.** Each generated note now opens with a consistent `type` / `date` / `tags` block (plus `status` where a real lifecycle exists) — the prerequisite for any retrieval layer (gbrain, Obsidian Dataview, `/loose-ends` itself):
+  - `/gratitude-journal` and `/weekly-review` now emit frontmatter (previously none); weekly also carries `week`.
+  - `/journal` folds the old `title` + `created` keys into a single `date`.
+  - `/brainstorm` renames `created` → `date` (keeps `title` and `status: draft`).
+  - `/plan-my-day`, `/fitness-journal` (gym, rest, and other-activity templates), and `/diet-journal` gain `type` + `tags`.
+  - `/end-of-day` is unchanged — it fills the plan file in place and has no frontmatter of its own.
+  - Existing notes are not retrofitted; generators are updated going forward.
+
 ## [0.1.2] — 2026-05-28
 
 ### Added
