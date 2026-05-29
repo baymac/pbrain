@@ -184,6 +184,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet | `$VAULT/life/weekly-reviews/YYYY-Www.md` |
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
+| `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
 | `/diet-journal` | Diet log + nutrition analysis | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
@@ -201,7 +202,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
-`/brainstorm <topic>`, `/recall <query>`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
+`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
 
 Each command's default path is overrideable via env var. Full reference:
 
@@ -209,8 +210,8 @@ Each command's default path is overrideable via env var. Full reference:
 |---|---|---|
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path |
-| `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day` | `$VAULT/life/daily-tracking` |
-| `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm` | `$VAULT/agent-work/brainstorms` |
+| `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
+| `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_DIET_DIR` | `/diet-journal` | `$VAULT/fitness/diet-tracking` |
 | `PBRAIN_DIET_PLAN_FILE` | `/diet-journal` | `$VAULT/fitness/Diet Plan.md` |
 | `PBRAIN_DIET_PROFILE_FILE` | `/diet-journal` | `~/.config/pbrain/diet-profile.json` |
@@ -219,10 +220,12 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_FITNESS_PLANS_DIR` | `/fitness-journal` | `$VAULT/fitness/plans` |
 | `PBRAIN_FITNESS_ACTIVITIES_FILE` | `/fitness-journal` | `~/.config/pbrain/fitness-activities.json` |
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
-| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/daily-planning` |
-| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day` | `~/.config/pbrain/plan-profile.json` |
+| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
+| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends` | `~/.config/pbrain/plan-profile.json` |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-reviews` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
+| `PBRAIN_STALE_DAYS` | `/loose-ends` | `7` (age at which an item counts as stale) |
+| `PBRAIN_LOOSE_ENDS_LOOKBACK` | `/loose-ends` | `30` (days of journals/plans to scan) |
 | `PBRAIN_CLIPPINGS_DIR` | `/organize-clippings` | `$VAULT/Clippings` |
 | `PBRAIN_CLIPPINGS_TARGETS` | `/organize-clippings` | (interactive prompt — set to `all` or a comma-separated subset to skip it) |
 
