@@ -130,13 +130,9 @@ git clone https://github.com/baymac/pbrain.git ~/code/pbrain
 
 The script is idempotent — re-run it after `git pull` if new commands land. If you previously symlinked the whole `commands/` directory, the script detects that and replaces it with per-file links.
 
-To make live edits to `.sh` scripts visible immediately, set `PBRAIN_DEV_DIR` to your cloned repo in your shell profile:
+The install script also makes **live edits to `.sh` scripts take effect immediately**: it registers your clone as `PBRAIN_DEV_DIR` in `~/.claude/settings.json`, so the command wrappers always execute from your live repo instead of the marketplace snapshot. Restart Claude Code / Conductor once after the first install for the env change to load. `scripts/uninstall-commands.sh` removes that entry again (only if it still points at this clone).
 
-```sh
-export PBRAIN_DEV_DIR=~/code/pbrain   # adjust path to your clone
-```
-
-Without this, the `.sh` files that run are the marketplace snapshot — edits to your local clone won't take effect. With it set, the commands always execute from your live repo.
+> Prefer `settings.json` over a `~/.zshrc` export here: GUI-launched apps (Conductor, the desktop app) don't source `~/.zshrc`, so a shell-profile export is invisible to them — the wrappers fall back to the stale marketplace snapshot and your edits don't run. The `settings.json env` block is read regardless of how the app was launched. The install script writes it for you, but if you set it by hand, put it there.
 
 Run pbrain commands from **any directory** — your current project, a Conductor workspace, the tooling repo, wherever you are. The vault path is resolved from your config (`$PBRAIN_VAULT` → `~/.config/pbrain/vault` → iCloud default), never from cwd. Notes always land in the right place.
 

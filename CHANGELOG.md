@@ -4,6 +4,10 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+### Changed
+
+- **`scripts/install-commands.sh` now registers `PBRAIN_DEV_DIR` in `~/.claude/settings.json`** (and `uninstall-commands.sh` removes it). Previously, making local `.sh` edits run live required hand-exporting `PBRAIN_DEV_DIR` in a shell profile — which is invisible to GUI-launched apps (Conductor, the desktop app) because they don't source `~/.zshrc`, so the wrappers silently fell back to the stale marketplace snapshot. The install script now writes the var into the `settings.json` `env` block, which the harness reads regardless of launch method. Idempotent and order-preserving; uninstall only removes the entry when it still resolves (realpath) to this clone, so a setting pointing at a different clone is left alone. Requires a one-time Claude Code / Conductor restart to load. README "Local development" updated to match.
+
 ## [0.2.0] — 2026-05-29
 
 ### Added
