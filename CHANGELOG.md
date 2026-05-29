@@ -20,6 +20,10 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
   - `/end-of-day` is unchanged — it fills the plan file in place and has no frontmatter of its own.
   - Existing notes are not retrofitted; generators are updated going forward.
 
+### Fixed
+
+- **`/end-of-day` references aligned with in-place write behavior.** Since 0.1.1 `/end-of-day` fills the plan file's `## How it went` section in place rather than writing a sibling `<date>-close.md`, but three spots still assumed the old model: `weekly-review.sh` read a dead `$PLAN_DIR/$d-close.md` path that always returned "(no entry)" (now removed — the close lives in the plan file, already read, relabeled "Plan & close"), and the README + CLAUDE.md destination columns still listed `<date>-close.md` (now describe the in-place write). The historical CHANGELOG note and the `docs/end-of-day.md` migration guide intentionally keep the `-close.md` reference.
+
 ## [0.1.2] — 2026-05-28
 
 ### Added
