@@ -463,6 +463,7 @@ Step 5A — IF INTENT = GYM:
   Generate the file in EXACTLY this format — match spacing, table structure, and section order precisely:
 
   ---
+  type: fitness
   date: $TODAY
   week: {N}
   block: {N}
@@ -470,6 +471,7 @@ Step 5A — IF INTENT = GYM:
   focus: {muscle groups matching gym plan day}
   bodyweight: {kg or leave blank if skipped}
   status: planned
+  tags: []
   ---
 
   # Day {letter} — {Focus}
@@ -540,9 +542,11 @@ Step 5B — IF INTENT = REST DAY:
   Use this minimal template:
 
   ---
+  type: fitness
   date: $TODAY
   focus: Rest
   status: planned
+  tags: []
   ---
 
   # Rest day — $TODAY
@@ -563,11 +567,13 @@ activities except Gym, or Recovery/stretching, or Walk/cardio):
   Skeleton (add/remove fields to fit the activity):
 
   ---
+  type: fitness
   date: $TODAY
   focus: {activity name}
   duration_min: {minutes}
   {extra activity-relevant fields, e.g. location, kickoff, distance_km, pool}
   status: planned
+  tags: []
   ---
 
   # {Activity} — $TODAY

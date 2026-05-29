@@ -113,7 +113,13 @@ Step 3 — Generate a reflection question using these rules, then ask it:
 
 Step 4 — After their answer, write the entry to: $OUT_FILE
 
-File format (write exactly this, no frontmatter):
+File format (write exactly this, frontmatter included):
+---
+type: gratitude
+date: $TODAY
+tags: []
+---
+
 ## How are you feeling
 
 {feeling answer — verbatim}

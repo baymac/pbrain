@@ -108,7 +108,14 @@ Step 2 — Present a TIGHT synthesis FIRST, then ask questions. Order:
      2) "What's one thing you want to drop next week?"
      3) "What's one thing you want to double down on?"
 
-Step 3 — Write to $OUT_FILE using exactly this format (no frontmatter):
+Step 3 — Write to $OUT_FILE using exactly this format (frontmatter included):
+
+---
+type: weekly
+date: $FIRST_DATE
+week: $ISO_WEEK
+tags: []
+---
 
 # Weekly review — $ISO_WEEK
 

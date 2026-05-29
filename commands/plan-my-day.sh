@@ -323,11 +323,13 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
   Every Work row should tie back to a current_focus goal where possible (annotate the Tie column with the short goal name).
 
   ---
+  type: plan
   date: $TODAY
   day_of_week: $DOW
   status: planned
   energy: {1-10 from q1}
   focus_today: [{current_focus goal names that any of the q2 top 3 items tie back to — empty array if none}]
+  tags: []
   ---
 
   # Day Plan — $TODAY ($DOW)

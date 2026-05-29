@@ -96,9 +96,8 @@ Step 4 — Write the entry to $OUT_FILE with this exact structure:
 
 ---
 type: daily
-title: "$TODAY"
+date: $TODAY
 tags: []
-created: $TODAY
 ---
 
 ## Focus

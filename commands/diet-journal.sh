@@ -478,12 +478,14 @@ Step 4 — Cross-reference for analysis (do this regardless of mode):
 Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
 
   ---
+  type: diet
   date: $TODAY
   plan_calories: {from plan}
   plan_protein_g: {from plan}
   plan_carbs_g: {from plan}
   plan_fat_g: {from plan}
   plan_fiber_g: {from plan}
+  tags: []
   ---
 
   # Diet Log — $TODAY

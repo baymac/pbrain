@@ -106,9 +106,9 @@ fi
 cat > "$OUT_FILE" <<TEMPLATE
 ---
 type: idea
+date: $TODAY
 title: "$TOPIC"
 tags: []
-created: $TODAY
 status: draft
 ---
 
