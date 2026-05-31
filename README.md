@@ -63,8 +63,8 @@ The stack is three independent layers — pick what you need.
 /init-obsidian
 
 # 3. Start using it
-/gratitude-journal    # morning anchor — do this first
-/journal              # today's daily note (second)
+/journal              # morning anchor — raw dump first, clears the head
+/gratitude-journal    # then gratitude, on cleared ground (second)
 /brainstorm "idea"    # quick idea dump
 /plan-my-day          # goal-anchored daily planner (first run sets up your goals)
 ```
@@ -174,7 +174,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | Command | What it does | Default path |
 |---|---|---|
 | `/journal` | Today's daily note | `$VAULT/life/daily-tracking/` |
-| `/gratitude-journal` | Feelings + gratitude + reflection | `$VAULT/life/gratitude-journal/` |
+| `/gratitude-journal` | Gratitude + reflection (runs after `/journal`) | `$VAULT/life/gratitude-journal/` |
 | `/plan-my-day` | Goal-anchored daily planner | `$VAULT/life/daily-planning/` |
 | `/end-of-day` | Close-of-day reflection (bookend to `/plan-my-day`) | fills `## How it went` in `$VAULT/life/daily-planning/<date>.md` (in place) |
 | `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet | `$VAULT/life/weekly-tracking/YYYY-Www.md` |
@@ -191,8 +191,8 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 
 | When | Command | What you do |
 |---|---|---|
-| Morning, before anything else | `/gratitude-journal` | Just run it — answers the prompts. Anchors the day to *enough* before agent work starts. |
-| Right after gratitude | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. |
+| Morning, before anything else | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. Clears the head. |
+| Right after journaling | `/gratitude-journal` | Just run it — answers the prompts. With the head cleared, gratitude anchors the day to *enough* before agent work starts. |
 | Pre/post workout | `/fitness-journal` | Just run it — it picks today's session based on your activity rotation and asks you to log sets/reps. |
 | With meals (or end of day) | `/diet-journal` | Just run it — log what you ate, get a nutrition + plan-adherence read. |
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |

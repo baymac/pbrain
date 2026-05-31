@@ -43,17 +43,17 @@ If a new content type doesn't fit any of these, ask before creating a new subdir
 
 ---
 
-## Morning sequence (gratitude → journal → everything else)
+## Morning sequence (journal → gratitude → everything else)
 
-The day starts on `/gratitude-journal`, then `/journal`. Both anchor the user's baseline before agent work happens.
+The day starts on `/journal`, then `/gratitude-journal`. Both anchor the user's baseline before agent work happens. The journal goes first: it's a raw brain dump that clears the head (today's mood, yesterday's residue, loud thoughts, open questions). Gratitude then lands on cleared ground — you can't genuinely ground on *enough* while still carrying unprocessed residue.
 
-When the user invokes any slash command other than `/gratitude-journal`, `/journal`, or `/init-obsidian` — OR asks for help with personal reflection / capture / brainstorming — check the daily files in this order:
+When the user invokes any slash command other than `/journal`, `/gratitude-journal`, or `/init-obsidian` — OR asks for help with personal reflection / capture / brainstorming — check the daily files in this order:
 
-1. **Gratitude first.** If `vault/life/gratitude-journal/YYYY-MM-DD.md` doesn't exist, suggest `/gratitude-journal` before proceeding. Gratitude lands hardest first thing — it anchors baseline to *enough* so the rest of the day runs on overflow.
-2. **Then daily journal.** If gratitude exists but `vault/life/daily-tracking/YYYY-MM-DD.md` doesn't, suggest `/journal` before proceeding. Journaling surfaces what's actually on the user's mind.
+1. **Journal first.** If `vault/life/daily-tracking/YYYY-MM-DD.md` doesn't exist, suggest `/journal` before proceeding. The raw dump clears the head and surfaces what's actually on the user's mind.
+2. **Then gratitude.** If the journal exists but `vault/life/gratitude-journal/YYYY-MM-DD.md` doesn't, suggest `/gratitude-journal` before proceeding. With the head cleared, gratitude anchors baseline to *enough* so the rest of the day runs on overflow.
 3. **Otherwise proceed.**
 
-Suggest once, never block. The user can override and continue. `/init-obsidian`, `/gratitude-journal`, and `/journal` are exempt from the check (they're the entry points).
+Suggest once, never block. The user can override and continue. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt from the check (they're the entry points).
 
 ---
 
