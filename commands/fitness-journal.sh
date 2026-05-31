@@ -35,6 +35,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /fitness-journal (emits nothing if none set).
+pbrain_emit_prefs "fitness-journal" || true
+
 TRACKING_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 GYM_PLAN_FILE="${PBRAIN_GYM_PLAN_FILE:-$VAULT_DIR/fitness/Gym Plan.md}"
 PLANS_DIR="${PBRAIN_FITNESS_PLANS_DIR:-$VAULT_DIR/fitness/plans}"
@@ -617,3 +620,7 @@ activities except Gym, or Recovery/stretching, or Walk/cardio):
 Step 6 — Write the final content to: $OUT_FILE
   Then confirm: "Saved → $OUT_FILE"
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "fitness-journal" "$PLANS_DIR" "fitness plans (gym plan at $GYM_PLAN_FILE, plus per-activity plans under this dir)" || true

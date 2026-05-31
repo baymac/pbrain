@@ -65,6 +65,11 @@ pbrain/
 │   └── plugin.json                     ← Claude plugin manifest (this repo IS the plugin)
 ├── commands/                           ← all slash command .md + .sh pairs
 ├── lib/vault.sh                        ← shared VAULT_DIR resolver (sourced by every command)
+├── lib/update-check.sh                 ← upgrade nudge (sourced by vault.sh)
+├── lib/prefs.sh                        ← per-command preference injection (pbrain_emit_prefs)
+├── lib/self-improve.sh                 ← end-of-session feedback capture (pbrain_emit_self_improve)
+├── lib/profile.sh                      ← goals-profile JSON extractor (pbrain_profile_json)
+├── tests/                              ← bats tests for the shared lib/ helpers
 ├── docs/                               ← one short user-facing doc per command
 ├── gbrain/                             ← gbrain operations (separate from the plugin)
 │   ├── scripts/                        ← gbrain-sync-wrapper, dashboard, upgrade, install-launchd
@@ -116,9 +121,9 @@ Sources live in `commands/`. Available in every CC session once the user symlink
 | `/diet-journal` | `$VAULT_DIR/fitness/diet-tracking/` | `PBRAIN_DIET_DIR` (+ `PBRAIN_FITNESS_DIR` for cross-ref, `PBRAIN_DIET_PLAN_FILE` → `$VAULT_DIR/fitness/Diet Plan.md`, `PBRAIN_DIET_PROFILE_FILE` → profile JSON at `~/.config/pbrain/diet-profile.json`) |
 | `/fitness-journal` | `$VAULT_DIR/fitness/daily-tracking/` | `PBRAIN_FITNESS_DIR` (+ `PBRAIN_GYM_PLAN_FILE`, `PBRAIN_FITNESS_PLANS_DIR` → per-activity plans at `$VAULT_DIR/fitness/plans/`, `PBRAIN_FITNESS_ACTIVITIES_FILE` → activities JSON config at `~/.config/pbrain/fitness-activities.json`) |
 | `/gratitude-journal` | `$VAULT_DIR/life/gratitude-journal/` | `PBRAIN_GRATITUDE_DIR` |
-| `/plan-my-day` | `$VAULT_DIR/life/daily-planning/` | `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE` → goals profile JSON at `~/.config/pbrain/plan-profile.json` (+ `PBRAIN_FITNESS_DIR`, `PBRAIN_JOURNAL_DIR` for cross-ref) |
+| `/plan-my-day` | `$VAULT_DIR/life/daily-planning/` | `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE` → goals profile at `$VAULT_DIR/life/Goals Profile.md` (markdown; structured data in a fenced `json` block) (+ `PBRAIN_FITNESS_DIR`, `PBRAIN_JOURNAL_DIR`, `PBRAIN_WEEKLY_DIR` for cross-ref; the last drives the Monday weekly-review nudge) |
 | `/end-of-day` | fills the `## How it went` section of `$VAULT_DIR/life/daily-planning/<date>.md` in place (no sibling file) | `PBRAIN_PLAN_DIR` (write target), `PBRAIN_JOURNAL_DIR`, `PBRAIN_FITNESS_DIR`, `PBRAIN_DIET_DIR` for cross-ref |
-| `/weekly-review` | `$VAULT_DIR/life/weekly-reviews/YYYY-Www.md` (ISO week) | `PBRAIN_WEEKLY_DIR` (write target), reads `PBRAIN_JOURNAL_DIR`, `PBRAIN_GRATITUDE_DIR`, `PBRAIN_PLAN_DIR`, `PBRAIN_FITNESS_DIR`, `PBRAIN_DIET_DIR` over the last 7 days |
+| `/weekly-review` | `$VAULT_DIR/life/weekly-tracking/YYYY-Www.md` (ISO week) | `PBRAIN_WEEKLY_DIR` (write target), reads `PBRAIN_JOURNAL_DIR`, `PBRAIN_GRATITUDE_DIR`, `PBRAIN_PLAN_DIR`, `PBRAIN_FITNESS_DIR`, `PBRAIN_DIET_DIR` over the last 7 days; Step 4 enrichment reads `PBRAIN_PLAN_PROFILE_FILE`, `PBRAIN_DIET_PLAN_FILE`, `PBRAIN_FITNESS_PLANS_DIR`, `PBRAIN_GYM_PLAN_FILE` (all vault-owned — proposed into the review, edited only on explicit per-change yes) |
 | `/recall <query>` | read-only; case-insensitive markdown grep across `life/`, `agent-work/`, `startup/`, `side-quests/`, `software-dev/`, `notes/` (uses `rg` if available, falls back to `grep -r`) | `PBRAIN_RECALL_SCOPE` (space-separated subdir list relative to vault; missing subdirs are skipped) |
 | `/loose-ends` | read-only surfacing dashboard; aggregates stale `tbd/` brainstorms, unanswered journal/brainstorm open questions, unchecked plan todos, recurring tomorrow-seeds, and `current_focus` drift. Writes nothing. | `PBRAIN_STALE_DAYS` (default `7`), `PBRAIN_LOOSE_ENDS_LOOKBACK` (default `30`); reads `PBRAIN_JOURNAL_DIR`, `PBRAIN_BRAINSTORMS_DIR`, `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE` |
 | `/organize-clippings` | source: `$VAULT_DIR/Clippings/`; destinations dynamically discovered from `$VAULT_DIR` top-level dirs (always excludes `agent-work/` and `Clippings/`), with the user picking a subset at session start | `PBRAIN_CLIPPINGS_DIR`, `PBRAIN_CLIPPINGS_TARGETS` (comma-separated subset or `all` to skip the prompt) |
@@ -134,6 +139,15 @@ UPGRADE_AVAILABLE <local> <remote>
 ```
 
 When you see that line, briefly tell the user a newer pbrain is out and suggest `/plugin update pbrain`, then continue the command's real work. Don't block — it's a nudge, not a gate. The check is cached (1h up-to-date, 12h pending), so the marker may re-appear once per cache window until the user actually upgrades.
+
+### Self-improvement loop
+
+Two shared helpers, defined in `lib/prefs.sh` and `lib/self-improve.sh` and sourced through `lib/vault.sh`, ride along on every command except `/init-obsidian` (which runs before a vault exists). Each command calls them by name:
+
+- `pbrain_emit_prefs <cmd>` — near the top of output. Injects `~/.config/pbrain/prefs/<cmd>.md` (the user's standing preferences for that command) into context, or emits nothing if the file is absent/empty. Apply these preferences for the session; they override defaults where they conflict.
+- `pbrain_emit_self_improve <cmd> [plan-file] [plan-label]` — at the end of output. Emits a `--- SELF-IMPROVE CHECK (mode: …) ---` block telling you to reflect on whether the user gave a genuine standing preference or correction *this session*. **Fire only on explicit feedback — stay silent on neutral sessions.** Then capture per the block: preferences consolidate into `prefs/<cmd>.md` (read existing first, update don't duplicate), quality fixes append to `~/.config/pbrain/feedback/<cmd>.md` with an optional `gh issue` offer. When a `plan-file`+`plan-label` are passed (the plan-owning commands — `/plan-my-day` → goals profile, `/diet-journal` → diet plan, `/fitness-journal` → fitness plans), the block also gains a **PLAN UPDATE** route: a lasting plan change raised in-session is proposed against the plan file and written only on an explicit per-change yes (keeping any fenced JSON valid). `/weekly-review` does plan enrichment via its richer Step 4 instead, so it calls this with no plan args.
+
+Mode comes from `PBRAIN_SELF_IMPROVE` (`prefs` default / `off` / `dev`). `dev` is honoured only when `PBRAIN_DEV_DIR` is set, and lets you *propose* edits to live command source — always as a diff requiring explicit yes, never auto-applied. Both helpers are written to never exit non-zero (they're sourced into commands under `set -euo pipefail`); call sites add `|| true` as belt-and-suspenders. Tests live in `tests/*.bats` (run `bats tests/`).
 
 ---
 

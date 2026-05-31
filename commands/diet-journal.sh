@@ -39,6 +39,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /diet-journal (emits nothing if none set).
+pbrain_emit_prefs "diet-journal" || true
+
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_PLAN_FILE="${PBRAIN_DIET_PLAN_FILE:-$VAULT_DIR/fitness/Diet Plan.md}"
@@ -546,3 +549,7 @@ Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
 Step 6 — End with: "Saved → $OUT_FILE. Re-run /diet-journal later to add
 meals or have me suggest the next one against remaining macros."
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "diet-journal" "$DIET_PLAN_FILE" "diet plan" || true

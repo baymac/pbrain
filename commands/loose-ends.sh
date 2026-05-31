@@ -18,7 +18,7 @@ set -euo pipefail
 #   PBRAIN_JOURNAL_DIR        — daily journals (open questions)
 #   PBRAIN_BRAINSTORMS_DIR    — brainstorms parent (tbd/ is the active bucket)
 #   PBRAIN_PLAN_DIR           — daily plans (todos, tomorrow-seeds)
-#   PBRAIN_PLAN_PROFILE_FILE  — goals profile JSON (focus drift)
+#   PBRAIN_PLAN_PROFILE_FILE  — goals profile markdown, JSON in a fenced block (focus drift)
 #
 # Usage:
 #   /loose-ends
@@ -32,16 +32,23 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /loose-ends (emits nothing if none set).
+pbrain_emit_prefs "loose-ends" || true
+
 JOURNAL_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 BRAINSTORMS_DIR="${PBRAIN_BRAINSTORMS_DIR:-$VAULT_DIR/agent-work/brainstorms}"
 TBD_DIR="$BRAINSTORMS_DIR/tbd"
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
-PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json}"
+PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
 
 STALE_DAYS="${PBRAIN_STALE_DAYS:-7}"
 LOOKBACK="${PBRAIN_LOOSE_ENDS_LOOKBACK:-30}"
 
 TODAY="$(date +%Y-%m-%d)"
+
+# Extract the profile's JSON (from its fenced block) up front; pass it to the
+# scan rather than the file path, so the parsing logic lives in one place.
+PROFILE_JSON="$(pbrain_profile_json "$PROFILE_FILE")"
 
 echo "LOOSE_ENDS_SCAN"
 echo "vault: $VAULT_DIR"
@@ -50,7 +57,7 @@ echo "stale_days: $STALE_DAYS"
 echo "lookback_days: $LOOKBACK"
 echo ""
 
-python3 - "$TODAY" "$STALE_DAYS" "$LOOKBACK" "$VAULT_DIR" "$TBD_DIR" "$JOURNAL_DIR" "$PLAN_DIR" "$PROFILE_FILE" <<'PYEOF'
+python3 - "$TODAY" "$STALE_DAYS" "$LOOKBACK" "$VAULT_DIR" "$TBD_DIR" "$JOURNAL_DIR" "$PLAN_DIR" "$PROFILE_JSON" <<'PYEOF'
 import os, re, sys, glob, json, datetime
 
 today      = datetime.date.fromisoformat(sys.argv[1])
@@ -60,7 +67,7 @@ vault      = sys.argv[4]
 tbd_dir    = sys.argv[5]
 journal_dir = sys.argv[6]
 plan_dir   = sys.argv[7]
-profile    = sys.argv[8]
+profile_json = sys.argv[8]
 
 cutoff = today - datetime.timedelta(days=lookback)
 
@@ -266,14 +273,14 @@ def sig_words(s):
     return {w for w in re.findall(r'[a-z0-9]+', s.lower()) if len(w) >= 4 and w not in STOP}
 
 focus_lines = []
-ptext = read_text(profile)
+ptext = profile_json
 goals = []
 if ptext:
     try:
         pdata = json.loads(ptext)
         goals = [g.get("goal", "") for g in pdata.get("current_focus", []) if g.get("goal")]
     except Exception:
-        focus_lines.append("(plan-profile.json present but unreadable — skipping focus drift)")
+        focus_lines.append("(goals profile present but its JSON block is unreadable — skipping focus drift)")
 
 if goals:
     drift_cutoff = today - datetime.timedelta(days=stale_days)
@@ -303,3 +310,7 @@ emit(f"FOCUS DRIFT (current_focus goals quiet >= {stale_days}d)", focus_lines)
 PYEOF
 
 echo "--- END LOOSE_ENDS_SCAN ---"
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "loose-ends" || true

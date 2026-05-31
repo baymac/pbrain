@@ -22,6 +22,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /gratitude-journal (emits nothing if none set).
+pbrain_emit_prefs "gratitude-journal" || true
+
 JOURNAL_DIR="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}"
 mkdir -p "$JOURNAL_DIR"
 
@@ -132,3 +135,7 @@ tags: []
 
 {reflection answer — verbatim}
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "gratitude-journal" || true

@@ -72,6 +72,17 @@ fi
 
 export VAULT_DIR
 
+# Define the per-command preference + self-improvement helpers so every command
+# that sources this file can call them. Sourcing only DEFINES the functions
+# (pbrain_emit_prefs, pbrain_emit_self_improve); nothing is emitted until a
+# command calls them with its own name. Guarded so a missing/faulty helper file
+# can never take a command down.
+_PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+[[ -f "$_PBRAIN_LIB_DIR/prefs.sh" ]] && source "$_PBRAIN_LIB_DIR/prefs.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/self-improve.sh" ]] && source "$_PBRAIN_LIB_DIR/self-improve.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/profile.sh" ]] && source "$_PBRAIN_LIB_DIR/profile.sh" || true
+unset _PBRAIN_LIB_DIR
+
 # Best-effort version check. Prints `UPGRADE_AVAILABLE <old> <new>` to stdout
 # when a newer pbrain is on GitHub; silent otherwise. Cached. Never fatal.
 # shellcheck source=./update-check.sh

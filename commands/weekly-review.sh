@@ -6,7 +6,7 @@ set -euo pipefail
 # fitness, and diet entries; emits a context block for Claude to
 # synthesize and walk a structured weekly review with the user.
 #
-# Default destination:  $VAULT_DIR/life/weekly-reviews/YYYY-Www.md (ISO week)
+# Default destination:  $VAULT_DIR/life/weekly-tracking/YYYY-Www.md (ISO week)
 # Overrides:
 #   PBRAIN_VAULT             — vault root
 #   PBRAIN_WEEKLY_DIR        — where the weekly review writes
@@ -15,6 +15,13 @@ set -euo pipefail
 #   PBRAIN_PLAN_DIR          — daily plans (end-of-day close is written into the plan file in place)
 #   PBRAIN_FITNESS_DIR       — fitness sessions
 #   PBRAIN_DIET_DIR          — diet logs
+#
+# Core plans read for the Step 4 enrichment pass (proposes updates at week's end).
+# All are user-owned vault files — proposed into the review, not auto-written:
+#   PBRAIN_PLAN_PROFILE_FILE — goals profile markdown (Goals Profile.md)
+#   PBRAIN_DIET_PLAN_FILE    — Diet Plan.md
+#   PBRAIN_FITNESS_PLANS_DIR — per-activity fitness plans
+#   PBRAIN_GYM_PLAN_FILE     — primary gym plan
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -25,12 +32,31 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
-WEEKLY_DIR="${PBRAIN_WEEKLY_DIR:-$VAULT_DIR/life/weekly-reviews}"
+# Surface this user's standing preferences for /weekly-review (emits nothing if none set).
+pbrain_emit_prefs "weekly-review" || true
+
+WEEKLY_DIR="${PBRAIN_WEEKLY_DIR:-$VAULT_DIR/life/weekly-tracking}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 GRATITUDE_DIR="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}"
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
+
+# Core plans for the Step 4 enrichment pass.
+PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
+DIET_PLAN_FILE="${PBRAIN_DIET_PLAN_FILE:-$VAULT_DIR/fitness/Diet Plan.md}"
+FITNESS_PLANS_DIR="${PBRAIN_FITNESS_PLANS_DIR:-$VAULT_DIR/fitness/plans}"
+GYM_PLAN_FILE="${PBRAIN_GYM_PLAN_FILE:-}"
+
+# Migration: weekly reviews used to live in life/weekly-reviews. If we're at the
+# default location, the new dir doesn't exist yet, and the legacy dir does,
+# rename it so past reviews (and the Monday nudge that reads them) carry over.
+_LEGACY_WEEKLY="$VAULT_DIR/life/weekly-reviews"
+if [[ -z "${PBRAIN_WEEKLY_DIR:-}" && ! -d "$WEEKLY_DIR" && -d "$_LEGACY_WEEKLY" ]]; then
+  mv "$_LEGACY_WEEKLY" "$WEEKLY_DIR" 2>/dev/null \
+    && echo "Renamed life/weekly-reviews → life/weekly-tracking (past reviews moved)." || true
+fi
+unset _LEGACY_WEEKLY
 
 mkdir -p "$WEEKLY_DIR"
 
@@ -94,6 +120,36 @@ done
 
 echo ""
 echo "--- END WEEK CONTEXT ---"
+
+# Core plans, for the Step 4 enrichment pass. All are user-owned vault files:
+# enrichment proposes changes into the review and edits a plan file only on an
+# explicit per-change yes.
+echo ""
+echo "--- CORE PLANS (for Step 4 enrichment) ---"
+echo ""
+echo "### Goals profile [vault-owned: $PROFILE_FILE]"
+if [[ -f "$PROFILE_FILE" ]]; then cat "$PROFILE_FILE"; else echo "(no profile yet)"; fi
+echo ""
+echo "### Diet Plan [vault-owned: $DIET_PLAN_FILE]"
+if [[ -f "$DIET_PLAN_FILE" ]]; then cat "$DIET_PLAN_FILE"; else echo "(no diet plan)"; fi
+echo ""
+echo "### Fitness plans [vault-owned: $FITNESS_PLANS_DIR]"
+if [[ -n "$GYM_PLAN_FILE" && -f "$GYM_PLAN_FILE" ]]; then
+  echo "# $GYM_PLAN_FILE"
+  cat "$GYM_PLAN_FILE"
+fi
+if [[ -d "$FITNESS_PLANS_DIR" ]]; then
+  for pf in "$FITNESS_PLANS_DIR"/*.md; do
+    [[ -f "$pf" ]] || continue
+    echo "# $pf"
+    cat "$pf"
+    echo ""
+  done
+else
+  echo "(no fitness plans)"
+fi
+echo ""
+echo "--- END CORE PLANS ---"
 echo ""
 cat <<PROMPT
 INSTRUCTIONS: Walk a weekly review. You have a lot of context above — use it. Specifics or silence.
@@ -132,7 +188,29 @@ Dates: $FIRST_DATE → $LAST_DATE
 ## Double down on
 {verbatim answer to Q3}
 
-Step 4 — Print the file path. One closing line, no fanfare.
+## Proposed plan changes
+{filled in by Step 4 — the concrete plan enrichments you proposed and what the
+user decided. If you proposed nothing, write "None this week."}
+
+Step 4 — Plan enrichment. Using the CORE PLANS context above and the week's data,
+propose concrete updates to the user's plans. Be specific and evidence-based — tie
+each proposal to something that actually happened this week (e.g. "you skipped legs
+twice", "protein landed under target 5/7 days", "current_focus 'X' wasn't mentioned
+in any plan"). Propose nothing if the week gives no clear signal — do not invent
+changes.
+
+All three plans — the goals profile ($PROFILE_FILE), the diet plan ($DIET_PLAN_FILE),
+and the fitness plans ($FITNESS_PLANS_DIR) — are user-owned vault files. Treat them
+the same: do NOT edit any of them by default. Write each proposed change into the
+"## Proposed plan changes" section of THIS review file. Only edit an actual plan file
+if the user explicitly says yes to that specific change in this session (their yes is
+the explicit instruction that authorizes the write). When editing the goals profile,
+keep its fenced JSON block valid. Default is propose-in-review, not write-in-place.
+
+Record in "## Proposed plan changes" what you proposed and what the user decided
+(written into the relevant plan / left as a proposal / declined).
+
+Step 5 — Print the file path. One closing line, no fanfare.
 
 Hard rules:
 - Quote the user back to themselves in the synthesis. Their language, not yours.
@@ -140,3 +218,7 @@ Hard rules:
 - Do NOT generate a generic "great week!" summary. Specifics or silence.
 - Do NOT prescribe productivity systems or self-improvement frameworks. The user is reviewing their own life, not buying a course.
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "weekly-review" || true
