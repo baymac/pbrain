@@ -11,6 +11,8 @@ set -euo pipefail
 #      personalised plan markdown file (gym plan included).
 #   3. Suggests /diet-journal once plans are in place.
 # Only after activities + all plans exist does it run the daily session flow.
+# After each daily session is logged, it suggests /diet-journal (once, never
+# blocks) unless today's food is already tracked.
 #
 # Default destination:  $VAULT_DIR/fitness/daily-tracking
 # Activities config:    ~/.config/pbrain/fitness-activities.json
@@ -45,6 +47,7 @@ ACTIVITIES_FILE="${PBRAIN_FITNESS_ACTIVITIES_FILE:-${XDG_CONFIG_HOME:-$HOME/.con
 
 TODAY="$(date +%Y-%m-%d)"
 OUT_FILE="$TRACKING_DIR/$TODAY.md"
+DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
 mkdir -p "$TRACKING_DIR" "$PLANS_DIR"
 
@@ -383,6 +386,14 @@ print("\n\n".join(out) if out else "(no per-activity plans found)")
 PYEOF
 )"
 
+# Suggest /diet-journal after the session is logged — but only if today's food
+# isn't already tracked. Suggest once, never block (mirrors the morning sequence).
+if [[ -f "$DIET_DIR/$TODAY.md" ]]; then
+  DIET_SUGGESTION="(Today's /diet-journal entry already exists — no need to suggest it.)"
+else
+  DIET_SUGGESTION="Then suggest once, don't block: \"Want to log today's food with /diet-journal? Nutrition is half of recovery.\" If they skip, that's fine."
+fi
+
 cat <<PROMPT
 FITNESS_JOURNAL_SESSION
 date: $TODAY
@@ -619,6 +630,7 @@ activities except Gym, or Recovery/stretching, or Walk/cardio):
 
 Step 6 — Write the final content to: $OUT_FILE
   Then confirm: "Saved → $OUT_FILE"
+  $DIET_SUGGESTION
 PROMPT
 
 # Self-improvement: capture standing preferences / quality fixes the user

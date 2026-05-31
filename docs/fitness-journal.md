@@ -42,6 +42,7 @@ After setup, every run:
 3. Asks 2–4 follow-ups tailored to the chosen activity (e.g. kickoff/location for football, pool/strokes for swimming, time/equipment for gym).
 4. Applies adaptive coaching (downgrade on bad sleep + soreness + stress; flag overused muscle groups, etc.).
 5. Generates the session in your tracking format. For non-gym activities, builds a per-activity rating matrix for post-session review.
+6. Once the session is saved, suggests `/diet-journal` to log today's food — once, never blocks, and only if today's diet entry doesn't already exist.
 
 **Default destination:** `$VAULT_DIR/fitness/daily-tracking/YYYY-MM-DD.md`
 
@@ -54,6 +55,7 @@ After setup, every run:
 | `PBRAIN_GYM_PLAN_FILE` | Path to your gym plan markdown (default: `$VAULT_DIR/fitness/Gym Plan.md`) |
 | `PBRAIN_FITNESS_PLANS_DIR` | Dir for non-gym activity plans (default: `$VAULT_DIR/fitness/plans`) |
 | `PBRAIN_FITNESS_ACTIVITIES_FILE` | Path to activities config (default: `~/.config/pbrain/fitness-activities.json`) |
+| `PBRAIN_DIET_DIR` | Diet-tracking dir, checked to decide whether to suggest `/diet-journal` after a session (default: `$VAULT_DIR/fitness/diet-tracking`) |
 
 **Example:**
 
