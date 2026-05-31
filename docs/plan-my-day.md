@@ -14,13 +14,13 @@ Asks you about:
 - **Anti-patterns** to actively avoid (doomscrolling, late nights, whatever sabotages you)
 - **Personal anchors** (relationships to nurture, creative pursuits you practise, health/movement non-negotiables)
 
-Writes everything to:
+Writes everything to a note in your vault:
 
 ```
-~/.config/pbrain/plan-profile.json
+$VAULT/life/Goals Profile.md
 ```
 
-Edit that file directly any time, or delete it to redo the interview from scratch. Shape:
+It's a normal Obsidian note (standard frontmatter + a short intro), with the structured data carried in a fenced ` ```json ` block so the commands that read it (`/plan-my-day`, `/loose-ends`, `/weekly-review`) can parse it. Edit it directly any time, or delete it to redo the interview from scratch. The JSON block's shape:
 
 ```json
 {
@@ -62,6 +62,8 @@ The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors
 
 **Cadence thresholds:** parents ≥ 6 days → suggest a call, siblings ≥ 14, friends ≥ 7, creative ≥ 4 (if yes/maybe), walk ≥ 2 (if a walk habit is in your profile).
 
+**Monday weekly-review nudge:** on Mondays only, the planner measures how many calendar days have elapsed since your last `/weekly-review` (parsed from the review's covered-through date; if you've never run one, it counts from your oldest day-plan). Once that span hits **7+ days**, it suggests running `/weekly-review` first (once, non-blocking — you can plan now and review later). The span is calendar-based, so days you skipped `/plan-my-day` still count toward the 7 — a sparse planning week won't under-count. If you reviewed within the last week (e.g. the prior Sunday), it stays quiet, and it keeps nudging each Monday until you actually run a review.
+
 ## Defaults and overrides
 
 **Default destination:** `$VAULT_DIR/life/daily-planning/YYYY-MM-DD.md`
@@ -70,9 +72,10 @@ The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors
 |---|---|
 | `PBRAIN_VAULT` | Vault root |
 | `PBRAIN_PLAN_DIR` | Where today's plan is written |
-| `PBRAIN_PLAN_PROFILE_FILE` | Goals profile JSON (default: `~/.config/pbrain/plan-profile.json`) |
+| `PBRAIN_PLAN_PROFILE_FILE` | Goals profile note (default: `$VAULT/life/Goals Profile.md`; JSON in a fenced block) |
 | `PBRAIN_FITNESS_DIR` | Where the script reads today's fitness entry from (cross-ref) |
 | `PBRAIN_JOURNAL_DIR` | Where the script reads today's daily journal from (cross-ref) |
+| `PBRAIN_WEEKLY_DIR` | Where the script checks for last week's review (Monday nudge, cross-ref) |
 
 **Example:**
 
@@ -82,4 +85,6 @@ The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors
 
 If today's plan already exists, it's shown and you're asked if you want to update the "How it went" section or revise blocks.
 
-**Re-running setup:** delete `~/.config/pbrain/plan-profile.json` to redo the goals interview. Or edit the JSON directly when goals shift.
+**Re-running setup:** delete `$VAULT/life/Goals Profile.md` to redo the goals interview. Or edit the JSON block directly when goals shift.
+
+**Migrating from an older install:** if you previously had `~/.config/pbrain/plan-profile.json`, the next `/plan-my-day` converts it into `Goals Profile.md` automatically — no re-interview.

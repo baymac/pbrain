@@ -24,6 +24,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /journal (emits nothing if none set).
+pbrain_emit_prefs "journal" || true
+
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 mkdir -p "$DAILY_DIR"
 
@@ -96,9 +99,8 @@ Step 4 — Write the entry to $OUT_FILE with this exact structure:
 
 ---
 type: daily
-title: "$TODAY"
+date: $TODAY
 tags: []
-created: $TODAY
 ---
 
 ## Focus
@@ -126,3 +128,7 @@ it. Example:
 If a question was skipped, record "—" as the answer. If Step 2 produced
 no questions at all, write: —}
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "journal" || true

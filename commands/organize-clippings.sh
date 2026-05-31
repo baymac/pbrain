@@ -36,6 +36,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /organize-clippings (emits nothing if none set).
+pbrain_emit_prefs "organize-clippings" || true
+
 CLIPPINGS_DIR="${PBRAIN_CLIPPINGS_DIR:-$VAULT_DIR/Clippings}"
 PRESET_TARGETS="${PBRAIN_CLIPPINGS_TARGETS:-}"
 
@@ -257,3 +260,7 @@ Step 6 — Move to the next clipping. Do not summarize between items; keep the l
 When all clippings are processed, print a final summary:
   N moved, grouped by top-level dir, listed as relative paths from vault root.
 PROMPT_END
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "organize-clippings" || true

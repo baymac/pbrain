@@ -2,8 +2,10 @@
 set -euo pipefail
 
 # gratitude-journal.sh
-# Interactive gratitude journal. Asks 3 questions, saves a daily entry.
+# Interactive gratitude journal. Asks 2 questions, saves a daily entry.
 # Reflection question is generated fresh each session using theme rotation.
+# Runs after /journal in the morning sequence — the raw dump (and mood)
+# lands in the journal first, so this stays focused purely on gratitude.
 #
 # Default destination:  $VAULT_DIR/life/gratitude-journal
 # Overrides:
@@ -22,6 +24,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /gratitude-journal (emits nothing if none set).
+pbrain_emit_prefs "gratitude-journal" || true
+
 JOURNAL_DIR="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}"
 mkdir -p "$JOURNAL_DIR"
 
@@ -32,10 +37,10 @@ OUT_FILE="$JOURNAL_DIR/$TODAY.md"
 # Morning-first nudge — stronger after noon.
 if (( HOUR >= 12 )); then
   TIMING_NUDGE="TIMING_NUDGE (show this verbatim before Step 1, then proceed):
-  \"Quick note before we start — it's already past noon. Gratitude lands hardest first thing in the morning, before the feed, the comparisons, the dopamine chase. Doing it early sets your baseline to *enough*, so the rest of the day runs on overflow instead of envy. When it slips late, you've usually absorbed everyone else's highlight reel before grounding yourself. Try anchoring tomorrow's entry to your first coffee. Continuing with today's now.\""
+  \"Quick note before we start — it's already past noon. Gratitude lands hardest early in the day, right after your journal dump, before the feed, the comparisons, the dopamine chase. Doing it early sets your baseline to *enough*, so the rest of the day runs on overflow instead of envy. When it slips late, you've usually absorbed everyone else's highlight reel before grounding yourself. Try anchoring tomorrow's entry to your first coffee. Continuing with today's now.\""
 else
   TIMING_NUDGE="TIMING_NUDGE (show this verbatim before Step 1, then proceed):
-  \"Nice — doing this early is the move. Gratitude first thing anchors your baseline to *enough*, so the rest of the day runs on overflow instead of comparison.\""
+  \"Nice — doing this early is the move. Gratitude right after the journal dump anchors your baseline to *enough*, so the rest of the day runs on overflow instead of comparison.\""
 fi
 
 if [[ -f "$OUT_FILE" ]]; then
@@ -55,8 +60,11 @@ for f in sorted(glob.glob(os.path.join(d, "*.md")))[-30:]:
         with open(f) as fh:
             content = fh.read()
         headers = re.findall(r'^## (.+)', content, re.MULTILINE)
-        if len(headers) >= 3:
-            qs.append(headers[2].strip())
+        # Reflection question is always the last ## header. Robust across both
+        # the old 3-header format (feeling/gratitude/reflection) and the new
+        # 2-header format (gratitude/reflection).
+        if len(headers) >= 2:
+            qs.append(headers[-1].strip())
     except Exception:
         pass
 print('\n'.join(qs) if qs else "(none yet)")
@@ -88,14 +96,11 @@ INSTRUCTIONS: Follow these steps in order.
 Step 0 — Show the TIMING_NUDGE message above verbatim, then continue without waiting for a response.
 
 Step 1 — Ask the user exactly this question, nothing else:
-  "How are you feeling?"
-
-Step 2 — After their answer, ask exactly:
   "What are you grateful for in life? (share 3–6 things)"
   If they give fewer than 3 points, prompt once: "Can you add a few more? Aim for at least 3."
   If they give more than 6, keep only the first 6 in the saved entry.
 
-Step 3 — Generate a reflection question using these rules, then ask it:
+Step 2 — Generate a reflection question using these rules, then ask it:
   Themes (rotate by entry_count mod 12): childhood, failure, future self, health,
     money, identity, fear, friendship, discipline, loneliness, family, regret
   Opening word (rotate by entry_count*3 mod 5): When, Who, Why, How, What
@@ -111,12 +116,14 @@ Step 3 — Generate a reflection question using these rules, then ask it:
     "When did you surprise yourself by choosing growth over comfort?"
     "Who helped you change when you were close to giving up?"
 
-Step 4 — After their answer, write the entry to: $OUT_FILE
+Step 3 — After their answer, write the entry to: $OUT_FILE
 
-File format (write exactly this, no frontmatter):
-## How are you feeling
-
-{feeling answer — verbatim}
+File format (write exactly this, frontmatter included):
+---
+type: gratitude
+date: $TODAY
+tags: []
+---
 
 ## What are you grateful for in life?
 
@@ -126,3 +133,7 @@ File format (write exactly this, no frontmatter):
 
 {reflection answer — verbatim}
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "gratitude-journal" || true

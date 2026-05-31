@@ -18,9 +18,10 @@ set -euo pipefail
 # Overrides:
 #   PBRAIN_VAULT             — vault root
 #   PBRAIN_PLAN_DIR          — daily-plan dir (write target)
-#   PBRAIN_PLAN_PROFILE_FILE — goals profile JSON path
+#   PBRAIN_PLAN_PROFILE_FILE — goals profile markdown path (vault; JSON in a fenced block)
 #   PBRAIN_FITNESS_DIR       — today's fitness entry (cross-ref)
 #   PBRAIN_JOURNAL_DIR       — today's daily journal (cross-ref)
+#   PBRAIN_WEEKLY_DIR        — weekly reviews (Monday nudge cross-ref)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -31,10 +32,14 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /plan-my-day (emits nothing if none set).
+pbrain_emit_prefs "plan-my-day" || true
+
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
-PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json}"
+PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
+WEEKLY_DIR="${PBRAIN_WEEKLY_DIR:-$VAULT_DIR/life/weekly-tracking}"
 
 TODAY="$(date +%Y-%m-%d)"
 DOW="$(date +%A)"
@@ -42,6 +47,32 @@ NOW_TIME="$(date +%H:%M)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
 
 mkdir -p "$PLAN_DIR"
+
+# Migration: earlier versions stored the profile as ~/.config/pbrain/plan-profile.json.
+# If the new vault markdown profile is absent but the old JSON exists, convert it
+# in place (wrap the JSON in a fenced block) so existing users aren't re-interviewed.
+_OLD_PROFILE="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json"
+if [[ ! -f "$PROFILE_FILE" && -f "$_OLD_PROFILE" ]]; then
+  mkdir -p "$(dirname "$PROFILE_FILE")"
+  python3 - "$_OLD_PROFILE" "$PROFILE_FILE" "$TODAY" <<'PYEOF' 2>/dev/null || true
+import json, sys
+old, new, today = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(old) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+created = data.get("created", today)
+body = json.dumps(data, indent=2, ensure_ascii=False)
+with open(new, "w") as fh:
+    fh.write(f"---\ntype: profile\ndate: {created}\ntags: []\n---\n\n")
+    fh.write("# Goals profile\n\n")
+    fh.write("The lens every `/plan-my-day` plans against. Edit freely; the structured data lives in the JSON block below.\n\n")
+    fh.write("```json\n" + body + "\n```\n")
+PYEOF
+  [[ -f "$PROFILE_FILE" ]] && echo "Migrated goals profile to $PROFILE_FILE (from $_OLD_PROFILE)."
+fi
+unset _OLD_PROFILE
 
 # ---------------------------------------------------------------------------
 # PHASE 0 — first-run profile setup (build the goals lens).
@@ -100,9 +131,21 @@ doesn't apply to them.
 Step 3 — Write the profile to:
   $PROFILE_FILE
 
-  Exact JSON shape (use empty arrays / null for anything the user skipped or
-  doesn't apply):
+  This is an Obsidian note. Write it in EXACTLY this shape: standard frontmatter,
+  a short intro line, then the structured data in a fenced JSON block (use empty
+  arrays / null for anything the user skipped or doesn't apply):
 
+  ---
+  type: profile
+  date: $TODAY
+  tags: []
+  ---
+
+  # Goals profile
+
+  The lens every /plan-my-day plans against. Edit freely; the structured data lives in the JSON block below.
+
+  \`\`\`json
   {
     "created": "$TODAY",
     "horizon_goals": [
@@ -133,8 +176,10 @@ Step 3 — Write the profile to:
     },
     "notes": "free-form anything important not captured above"
   }
+  \`\`\`
 
   - mkdir -p the parent dir before writing.
+  - Keep the fenced JSON code block exactly as shown — the commands that read this profile parse the JSON out of it.
   - Use the user's actual words where possible — don't sanitize their voice.
   - If the user gave fewer than 3 horizon goals, that's fine. Don't pad.
   - If the user couldn't name a current_focus yet, leave the array empty.
@@ -147,30 +192,20 @@ SETUP
   exit 0
 fi
 
-# Validate profile JSON.
-PROFILE_VALID="$(python3 - "$PROFILE_FILE" <<'PYEOF'
-import json, sys
-try:
-    with open(sys.argv[1]) as fh:
-        json.load(fh)
-    print("ok")
-except Exception:
-    print("bad")
-PYEOF
-)"
+# Extract + validate the profile JSON (carried in a fenced JSON block in the note).
+PROFILE_JSON="$(pbrain_profile_json "$PROFILE_FILE")"
 
-if [[ "$PROFILE_VALID" != "ok" ]]; then
+if [[ -z "$PROFILE_JSON" ]]; then
   cat <<ERR
 PLAN_MY_DAY_CONFIG_ERROR
 profile_file: $PROFILE_FILE
 
-The plan profile at $PROFILE_FILE is malformed JSON. Either fix it manually,
-or delete it and re-run /plan-my-day to redo the goals interview.
+The goals profile at $PROFILE_FILE has no readable JSON block (or it is malformed).
+Either fix the JSON code block manually, or delete the file and re-run
+/plan-my-day to redo the goals interview.
 ERR
   exit 1
 fi
-
-PROFILE_JSON="$(cat "$PROFILE_FILE")"
 
 # ---------------------------------------------------------------------------
 # PHASE 1 — today's plan already exists → review/update mode.
@@ -252,6 +287,75 @@ print("\n".join(lines))
 PYEOF
 )"
 
+# Weekly-review nudge: Mondays only. Measures the calendar span since the last
+# weekly review covered through (parsed from the review's "Dates: X → Y" line,
+# falling back to the ISO-week Sunday of the filename) and nudges once >= 7 days
+# have elapsed. The span is calendar-based, so plan-my-day days you skipped
+# still count toward the 7 — a sparse planning week won't under-count. With no
+# prior review, it anchors on your oldest plan-my-day entry instead. The plan
+# count in the window is reported for the message but isn't a hard gate.
+WEEKLY_REVIEW_SIGNAL="$(python3 - "$WEEKLY_DIR" "$PLAN_DIR" <<'PYEOF'
+import os, sys, re, glob, datetime
+weekly_dir, plan_dir = sys.argv[1], sys.argv[2]
+today = datetime.date.today()
+if today.weekday() != 0:  # 0 == Monday
+    print("none")
+    sys.exit(0)
+
+THRESHOLD = 7  # days of elapsed span (gaps included) before nudging
+
+def week_sunday(label):
+    m = re.match(r"(\d{4})-W(\d{2})$", label)
+    if not m:
+        return None
+    try:
+        monday = datetime.date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    except ValueError:
+        return None
+    return monday + datetime.timedelta(days=6)
+
+# Latest date any weekly review covered through.
+last_review = None
+for f in glob.glob(os.path.join(weekly_dir, "*.md")):
+    covered = None
+    try:
+        with open(f) as fh:
+            m = re.search(r"Dates:\s*\d{4}-\d{2}-\d{2}\s*→\s*(\d{4}-\d{2}-\d{2})", fh.read())
+        if m:
+            covered = datetime.date.fromisoformat(m.group(1))
+    except (OSError, ValueError):
+        covered = None
+    if covered is None:  # fall back to the ISO-week Sunday from the filename
+        covered = week_sunday(os.path.basename(f)[:-3])
+    if covered and (last_review is None or covered > last_review):
+        last_review = covered
+
+# Plan-my-day entries (YYYY-MM-DD.md), and which fall after the last review.
+plan_dates = []
+for f in glob.glob(os.path.join(plan_dir, "*.md")):
+    try:
+        plan_dates.append(datetime.date.fromisoformat(os.path.basename(f)[:-3]))
+    except ValueError:
+        pass
+plan_dates.sort()
+unreviewed = [d for d in plan_dates if last_review is None or d > last_review]
+
+# Anchor the span on the last review covered-through date, else oldest plan.
+anchor = last_review if last_review is not None else (unreviewed[0] if unreviewed else None)
+if anchor is None:
+    print("none")  # nothing reviewed and nothing planned yet
+    sys.exit(0)
+
+days = (today - anchor).days
+count = len(unreviewed)
+last_label = last_review.isoformat() if last_review is not None else "never"
+if days >= THRESHOLD:
+    print(f"due {days} {count} {last_label}")
+else:
+    print("current")  # < 7 days since the last review — too soon to nudge
+PYEOF
+)"
+
 cat <<PROMPT
 PLAN_MY_DAY_SESSION
 date: $TODAY
@@ -259,6 +363,7 @@ day_of_week: $DOW
 current_time: $NOW_TIME (24h, local)
 output_file: $OUT_FILE
 profile_file: $PROFILE_FILE
+weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -282,6 +387,10 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
   - If TODAY'S FITNESS JOURNAL == "MISSING": "Your fitness journal isn't done yet — running /fitness-journal first means I can slot your workout into the day. Want to do that first, or plan around it?" Wait for their answer. If they say plan now, ask: "Roughly when's your physical activity today, and what is it? (e.g. gym 4pm, football 7pm, rest day)"
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's /journal is empty too — you can fill it in later." Do not block.
   - If both exist, skip the preflight nudges.
+  - WEEKLY REVIEW (Mondays only) — read \`weekly_review_signal\` above:
+      - \`none\` → not a Monday, or nothing to review yet: say nothing.
+      - \`current\` → fewer than 7 days since the last weekly review: say nothing.
+      - \`due <days> <plans> <last_date|never>\` → it's Monday and \`<days>\` calendar days (gaps included) have passed since your last weekly review — over a week of activity, with \`<plans>\` day-plans logged in that window. Suggest once, don't block. Phrase with the real numbers, e.g.: "It's Monday and it's been <days> days since your last weekly review (\`<last_date>\`), with <plans> day-plans since — want to run /weekly-review first? A few minutes, and it gives today's plan that context. Or I plan now and you do it later." If \`<last_date>\` is \`never\`, say it's been <days> days of planning with no weekly review yet. If they say plan now, continue; offer to remind them at the end.
   - If the profile's \`current_focus\` array is empty, mention once: "You haven't pinned a current focus in your profile yet — want to name 1–3 things you're actively pushing this month? I'll save them so I can anchor future plans on them." Don't block planning today either way.
 
 Step 1 — Show the user their lens, briefly:
@@ -323,11 +432,13 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
   Every Work row should tie back to a current_focus goal where possible (annotate the Tie column with the short goal name).
 
   ---
+  type: plan
   date: $TODAY
   day_of_week: $DOW
   status: planned
   energy: {1-10 from q1}
   focus_today: [{current_focus goal names that any of the q2 top 3 items tie back to — empty array if none}]
+  tags: []
   ---
 
   # Day Plan — $TODAY ($DOW)
@@ -424,3 +535,7 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 Step 5 — After writing, confirm: "Saved → $OUT_FILE"
   Then offer one short follow-up: "Want me to adjust any block, or are we good?"
 PROMPT
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "goals profile" || true

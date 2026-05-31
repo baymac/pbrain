@@ -43,6 +43,12 @@ Sources studied:
 
 ---
 
+## Multi-agent (Codex) follow-ups
+
+- [ ] **Agent-aware `update-check.sh`** — the upgrade nudge currently emits a Claude-only suggestion (`/plugin update pbrain`) and reads `.claude-plugin/plugin.json`. Once pbrain installs on Codex (via generated `~/.codex/skills/pbrain-*`), Codex users who hit `UPGRADE_AVAILABLE` get a meaningless instruction. **Fix:** keep the neutral `UPGRADE_AVAILABLE <local> <remote>` marker as-is, but let each agent's instruction file carry the right upgrade command — Codex path is `git pull` + re-run `install-commands.sh --host codex`. **Context:** surfaced during the multi-agent (Codex skills) eng review, 2026-05-29; deferred from the initial dual-target scope (decisions D10/D11). Depends on the Codex skills install path landing first. *(see `.context/multi-agent-plan.md` decision log.)*
+
+---
+
 ## Explicit non-goals
 
 Document opinions, not just todos. These patterns exist in the adjacent tools but **pbrain deliberately does not adopt them.**

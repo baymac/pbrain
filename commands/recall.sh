@@ -28,6 +28,9 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
+# Surface this user's standing preferences for /recall (emits nothing if none set).
+pbrain_emit_prefs "recall" || true
+
 QUERY="$*"
 
 DEFAULT_SCOPE="life agent-work startup side-quests software-dev notes"
@@ -76,3 +79,7 @@ fi
 
 echo ""
 echo "--- END MATCHES ---"
+
+# Self-improvement: capture standing preferences / quality fixes the user
+# raised this session (silent unless there was genuine feedback).
+pbrain_emit_self_improve "recall" || true

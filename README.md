@@ -63,8 +63,8 @@ The stack is three independent layers — pick what you need.
 /init-obsidian
 
 # 3. Start using it
-/gratitude-journal    # morning anchor — do this first
-/journal              # today's daily note (second)
+/journal              # morning anchor — raw dump first, clears the head
+/gratitude-journal    # then gratitude, on cleared ground (second)
 /brainstorm "idea"    # quick idea dump
 /plan-my-day          # goal-anchored daily planner (first run sets up your goals)
 ```
@@ -130,13 +130,9 @@ git clone https://github.com/baymac/pbrain.git ~/code/pbrain
 
 The script is idempotent — re-run it after `git pull` if new commands land. If you previously symlinked the whole `commands/` directory, the script detects that and replaces it with per-file links.
 
-To make live edits to `.sh` scripts visible immediately, set `PBRAIN_DEV_DIR` to your cloned repo in your shell profile:
+The install script also makes **live edits to `.sh` scripts take effect immediately**: it registers your clone as `PBRAIN_DEV_DIR` in `~/.claude/settings.json`, so the command wrappers always execute from your live repo instead of the marketplace snapshot. Restart Claude Code / Conductor once after the first install for the env change to load. `scripts/uninstall-commands.sh` removes that entry again (only if it still points at this clone).
 
-```sh
-export PBRAIN_DEV_DIR=~/code/pbrain   # adjust path to your clone
-```
-
-Without this, the `.sh` files that run are the marketplace snapshot — edits to your local clone won't take effect. With it set, the commands always execute from your live repo.
+> Prefer `settings.json` over a `~/.zshrc` export here: GUI-launched apps (Conductor, the desktop app) don't source `~/.zshrc`, so a shell-profile export is invisible to them — the wrappers fall back to the stale marketplace snapshot and your edits don't run. The `settings.json env` block is read regardless of how the app was launched. The install script writes it for you, but if you set it by hand, put it there.
 
 Run pbrain commands from **any directory** — your current project, a Conductor workspace, the tooling repo, wherever you are. The vault path is resolved from your config (`$PBRAIN_VAULT` → `~/.config/pbrain/vault` → iCloud default), never from cwd. Notes always land in the right place.
 
@@ -178,12 +174,13 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | Command | What it does | Default path |
 |---|---|---|
 | `/journal` | Today's daily note | `$VAULT/life/daily-tracking/` |
-| `/gratitude-journal` | Feelings + gratitude + reflection | `$VAULT/life/gratitude-journal/` |
+| `/gratitude-journal` | Gratitude + reflection (runs after `/journal`) | `$VAULT/life/gratitude-journal/` |
 | `/plan-my-day` | Goal-anchored daily planner | `$VAULT/life/daily-planning/` |
-| `/end-of-day` | Close-of-day reflection (bookend to `/plan-my-day`) | `$VAULT/life/daily-planning/<date>-close.md` |
-| `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet | `$VAULT/life/weekly-reviews/YYYY-Www.md` |
+| `/end-of-day` | Close-of-day reflection (bookend to `/plan-my-day`) | fills `## How it went` in `$VAULT/life/daily-planning/<date>.md` (in place) |
+| `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet | `$VAULT/life/weekly-tracking/YYYY-Www.md` |
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
+| `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
 | `/diet-journal` | Diet log + nutrition analysis | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
@@ -194,14 +191,14 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 
 | When | Command | What you do |
 |---|---|---|
-| Morning, before anything else | `/gratitude-journal` | Just run it — answers the prompts. Anchors the day to *enough* before agent work starts. |
-| Right after gratitude | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. |
+| Morning, before anything else | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. Clears the head. |
+| Right after journaling | `/gratitude-journal` | Just run it — answers the prompts. With the head cleared, gratitude anchors the day to *enough* before agent work starts. |
 | Pre/post workout | `/fitness-journal` | Just run it — it picks today's session based on your activity rotation and asks you to log sets/reps. |
 | With meals (or end of day) | `/diet-journal` | Just run it — log what you ate, get a nutrition + plan-adherence read. |
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
-`/brainstorm <topic>`, `/recall <query>`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
+`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
 
 Each command's default path is overrideable via env var. Full reference:
 
@@ -209,8 +206,11 @@ Each command's default path is overrideable via env var. Full reference:
 |---|---|---|
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path |
-| `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day` | `$VAULT/life/daily-tracking` |
-| `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm` | `$VAULT/agent-work/brainstorms` |
+| `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
+| `PBRAIN_PREFS_DIR` | all commands (per-command preferences) | `~/.config/pbrain/prefs` |
+| `PBRAIN_FEEDBACK_DIR` | all commands (quality-fix capture) | `~/.config/pbrain/feedback` |
+| `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
+| `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_DIET_DIR` | `/diet-journal` | `$VAULT/fitness/diet-tracking` |
 | `PBRAIN_DIET_PLAN_FILE` | `/diet-journal` | `$VAULT/fitness/Diet Plan.md` |
 | `PBRAIN_DIET_PROFILE_FILE` | `/diet-journal` | `~/.config/pbrain/diet-profile.json` |
@@ -219,10 +219,12 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_FITNESS_PLANS_DIR` | `/fitness-journal` | `$VAULT/fitness/plans` |
 | `PBRAIN_FITNESS_ACTIVITIES_FILE` | `/fitness-journal` | `~/.config/pbrain/fitness-activities.json` |
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
-| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/daily-planning` |
-| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day` | `~/.config/pbrain/plan-profile.json` |
-| `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-reviews` |
+| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
+| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/weekly-review` | `$VAULT/life/Goals Profile.md` (markdown; JSON in a fenced block) |
+| `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
+| `PBRAIN_STALE_DAYS` | `/loose-ends` | `7` (age at which an item counts as stale) |
+| `PBRAIN_LOOSE_ENDS_LOOKBACK` | `/loose-ends` | `30` (days of journals/plans to scan) |
 | `PBRAIN_CLIPPINGS_DIR` | `/organize-clippings` | `$VAULT/Clippings` |
 | `PBRAIN_CLIPPINGS_TARGETS` | `/organize-clippings` | (interactive prompt — set to `all` or a comma-separated subset to skip it) |
 

@@ -6,3 +6,4 @@
 .context/
 .fastembed_cache/
 .logs/
+.gstack/

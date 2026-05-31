@@ -125,15 +125,15 @@ Defined in the pbrain repo's `commands/` (Claude plugin). Work from a CC session
 
 ---
 
-## Morning sequence (gratitude → journal → everything else)
+## Morning sequence (journal → gratitude → everything else)
 
 Before any other slash command or personal-reflection task, check daily files in order:
 
-1. If `life/gratitude-journal/YYYY-MM-DD.md` is missing, suggest `/gratitude-journal` first. Gratitude lands hardest first thing — it anchors baseline to *enough*.
-2. If gratitude exists but `life/daily-tracking/YYYY-MM-DD.md` is missing, suggest `/journal` next.
+1. If `life/daily-tracking/YYYY-MM-DD.md` is missing, suggest `/journal` first. The raw dump clears the head and surfaces what's on your mind.
+2. If the journal exists but `life/gratitude-journal/YYYY-MM-DD.md` is missing, suggest `/gratitude-journal` next. With the head cleared, gratitude anchors baseline to *enough*.
 3. Otherwise proceed.
 
-Suggest once, never block. `/init-obsidian`, `/gratitude-journal`, and `/journal` are exempt.
+Suggest once, never block. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt.
 
 ---
 
