@@ -349,7 +349,7 @@ if anchor is None:
 days = (today - anchor).days
 count = len(unreviewed)
 last_label = last_review.isoformat() if last_review is not None else "never"
-if days >= THRESHOLD:
+if days >= THRESHOLD or (last_review is None and count >= THRESHOLD):
     print(f"due {days} {count} {last_label}")
 else:
     print("current")  # < 7 days since the last review — too soon to nudge
@@ -384,7 +384,24 @@ $RECENT_PLANS
 INSTRUCTIONS — follow these steps in order. Keep the tone warm and concise.
 
 Step 0 — Preflight checks (do these silently, then surface in one short message):
-  - If TODAY'S FITNESS JOURNAL == "MISSING": "Your fitness journal isn't done yet — running /fitness-journal first means I can slot your workout into the day. Want to do that first, or plan around it?" Wait for their answer. If they say plan now, ask: "Roughly when's your physical activity today, and what is it? (e.g. gym 4pm, football 7pm, rest day)"
+  - FITNESS GATE (do this BEFORE anything in Step 1 or Step 2): If TODAY'S
+    FITNESS JOURNAL == "MISSING", your first message must be ONLY about the
+    fitness journal — do NOT show the Step 1 lens or the Step 2 check-in
+    questions yet. Ask: "Your fitness journal isn't done yet — running
+    /fitness-journal first means I can slot your workout into the day. Want to
+    do that first, or plan around it?" Then STOP and wait for their answer.
+      - If they choose to do the fitness journal first: let them go run
+        /fitness-journal and finish it. Do not start planning. When they come
+        back (the fitness file now exists), THEN proceed to Step 1 (lens) and
+        Step 2 (check-ins) as normal.
+      - If they say they'll skip it / plan around it / continue: ask once
+        "Roughly when's your physical activity today, and what is it? (e.g.
+        gym 4pm, football 7pm, rest day)", take their answer, and only THEN
+        proceed to Step 1 and Step 2.
+    The daily-journal nudge and weekly-review nudge below may ride along in
+    this same first message, but the Step 1 lens and Step 2 questions never do.
+  - If TODAY'S FITNESS JOURNAL exists, there is no gate — go straight through
+    Step 1 and Step 2 in the normal flow.
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's /journal is empty too — you can fill it in later." Do not block.
   - If both exist, skip the preflight nudges.
   - WEEKLY REVIEW (Mondays only) — read \`weekly_review_signal\` above:
