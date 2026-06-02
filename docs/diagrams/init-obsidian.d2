@@ -1,0 +1,40 @@
+# /init-obsidian flow — embedded in the root README.md "What /init-obsidian does" section.
+# Render: d2 --theme 0 --dark-theme 200 --pad 20 init-obsidian.d2 init-obsidian.svg
+
+direction: down
+
+start: "/init-obsidian" {
+  shape: oval
+}
+
+probe: "PROBE state\n· Obsidian.app installed?\n· ~/.config/pbrain/vault valid?\n· iCloud Obsidian container present?"
+
+configured: "Already configured?" {
+  shape: diamond
+}
+
+exit: "Report status and exit\n(or offer optional add-ons)" {
+  shape: oval
+}
+
+brew: "Obsidian.app missing?\n→ prompt: brew install --cask obsidian" {
+  shape: diamond
+}
+
+pick: "PICK vault location\n· default → iCloud Obsidian path\n· custom → any path you want"
+
+bootstrap: "BOOTSTRAP (idempotent)\n· mkdir vault · git init\n· write vault/.gitignore\n· write vault/CLAUDE.md\n· initial commit\n· write ~/.config/pbrain/vault"
+
+addons: "Optional add-ons (asked one-by-one)" {
+  migrate: "MIGRATE from an existing vault?\nrsync old → new, verify count,\nsource preserved for manual delete"
+  private: "SET UP vault/private.nosync/?\noff-iCloud / off-git notes\nmkdir + README + .gitignore entry"
+  remote: "ADD git remote + push?\ngit remote add origin <url>\ngit push -u"
+}
+
+start -> probe
+probe -> configured
+configured -> exit: yes
+configured -> brew: no
+brew -> pick
+pick -> bootstrap
+bootstrap -> addons
