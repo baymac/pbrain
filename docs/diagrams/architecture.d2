@@ -1,0 +1,26 @@
+# pbrain architecture — embedded in the root README.md "Architecture" section.
+# Render: d2 --theme 0 --dark-theme 200 --pad 20 architecture.d2 architecture.svg
+
+direction: down
+
+obsidian: "Obsidian (Mac + iOS)\nyou write here" {
+  shape: page
+}
+
+vault: "vault/  ·  standalone git repo in iCloud Drive" {
+  life: "life/\ndaily journal + life\n(daily-tracking/YYYY-MM-DD.md)"
+  domains: "fitness/ · startup/\nside-quests/ · software-dev/ …"
+  agent: "agent-work/\neverything Claude generates\nbrainstorms · chat-history\ndrafts · notes · research · people"
+}
+
+gbrain: "gbrain index\nPGLite + Ollama embeddings\n~/.gbrain/ · local-only, free, private" {
+  shape: cylinder
+}
+
+cc: "Claude Code"
+desktop: "Claude Desktop"
+
+obsidian -> vault: "iCloud (auto-sync between devices)"
+vault -> gbrain: "gbrain sync (launchd, every 30 min)"
+gbrain -> cc: "MCP (stdio)"
+gbrain -> desktop: "MCP (stdio)"

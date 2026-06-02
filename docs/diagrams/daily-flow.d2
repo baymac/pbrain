@@ -1,0 +1,27 @@
+# pbrain daily flow — embedded in the root README.md "Daily flow" section.
+# Render: d2 --theme 0 --dark-theme 200 --pad 20 daily-flow.d2 daily-flow.svg
+
+direction: down
+
+wake: "Wake up" {
+  shape: oval
+}
+
+journal: "/journal\nraw dump — clears the head"
+gratitude: "/gratitude-journal\nanchor the day to enough"
+fitness: "/fitness-journal\npick + log today's session"
+diet: "/diet-journal\nlog meals · nutrition read"
+plan: "/plan-my-day\ngoal-anchored daily plan"
+eod: "/end-of-day\nwhat shipped · slipped · carries over"
+
+sleep: "Sleep" {
+  shape: oval
+}
+
+wake -> journal
+journal -> gratitude
+gratitude -> fitness: "pre/post workout"
+fitness -> diet: "with meals"
+diet -> plan: "once mind is clear"
+plan -> eod
+eod -> sleep

@@ -1,0 +1,20 @@
+# pbrain on-demand commands — embedded in the root README.md "Daily flow" section.
+# Render: d2 --theme 0 --dark-theme 200 --pad 20 on-demand.d2 on-demand.svg
+
+direction: right
+
+hub: "Pull in when needed\n(not part of the daily loop)" {
+  shape: oval
+}
+
+brainstorm: "/brainstorm <topic>\ndump + develop an idea"
+recall: "/recall <query>\ngrep across vault folders"
+loose: "/loose-ends\nstale ideas · open questions · todos"
+weekly: "/weekly-review\n7-day synthesis"
+organize: "/organize-clippings\nsort Clippings/ into folders"
+
+hub -> brainstorm: "got an idea"
+hub -> recall: "what did I write?"
+hub -> loose: "what's unfinished?"
+hub -> weekly: "end of week"
+hub -> organize: "inbox piling up"

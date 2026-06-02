@@ -12,35 +12,17 @@ The pbrain slash commands work against **any** vault directory you point them at
 
 ## Architecture
 
-```
-┌──────────────────────┐
-│  Obsidian (Mac+iOS)  │  ← you write here
-└──────────┬───────────┘
-           │ iCloud (auto-sync between devices)
-           ▼
-┌────────────────────────────────────────────────────────────┐
-│  vault/  (standalone git repo, lives in iCloud Drive)      │
-│  ├── life/                ← your daily journal + life      │
-│  │   └── daily-tracking/YYYY-MM-DD.md                      │
-│  ├── fitness/, startup/, side-quests/, software-dev/, ...  │
-│  └── agent-work/          ← everything Claude generates    │
-│      ├── brainstorms/     ← /brainstorm outputs (tbd/backlog/done)│
-│      ├── chat-history/    ← saved chat takeaways           │
-│      ├── drafts/, notes/, research/, people/               │
-└──────────┬─────────────────────────────────────────────────┘
-           │ gbrain sync (launchd, every 30 min)
-           ▼
-┌──────────────────────┐
-│  gbrain index        │  ← PGLite + Ollama embeddings
-│  ~/.gbrain/          │     (local-only, free, private)
-└──────────┬───────────┘
-           │ MCP (stdio)
-     ┌─────┴──────┐
-     ▼            ▼
-┌─────────────┐  ┌──────────────────────┐
-│ Claude Code │  │ Claude Desktop       │
-└─────────────┘  └──────────────────────┘
-```
+![pbrain architecture](docs/diagrams/architecture.svg)
+
+<!-- Source: docs/diagrams/architecture.d2 — re-render with:
+     d2 --theme 0 --dark-theme 200 --pad 20 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg -->
+
+The flow:
+
+- **Obsidian (Mac + iOS)** — where you write — syncs the **vault/** (a standalone git repo) across devices over iCloud.
+- The vault holds `life/` (daily journal), domain folders (`fitness/`, `startup/`, `side-quests/`, `software-dev/`, …), and `agent-work/` (everything Claude generates — `brainstorms/`, `chat-history/`, `drafts/`, `notes/`, `research/`, `people/`).
+- A launchd job runs **gbrain sync** every 30 min, indexing the vault into a local **gbrain index** (PGLite + Ollama embeddings, `~/.gbrain/` — local-only, free, private).
+- **Claude Code** and **Claude Desktop** both reach that index over MCP (stdio).
 
 ---
 
@@ -75,45 +57,19 @@ That's it for the core experience. `/init-obsidian` writes `~/.config/pbrain/vau
 
 First-run setup — you only need it once. Every other command reads `~/.config/pbrain/vault` and just works after this is done. Re-running is safe (idempotent) but only useful if you're switching vault locations, adding a git remote later, or adding the private dir after the fact.
 
-```
-/init-obsidian
-  │
-  ▼
-  PROBE state ────────────────────────────────► if already configured,
-  · Obsidian.app installed?                     report status and exit
-  · ~/.config/pbrain/vault exists & valid?      (or offer optional add-ons)
-  · iCloud Obsidian container present?
-  │
-  ▼
-  Obsidian.app missing? ──► prompt: `brew install --cask obsidian`
-  │
-  ▼
-  PICK vault location:
-    • default → ~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault
-    • custom → any path you want
-  │
-  ▼
-  BOOTSTRAP (idempotent — re-running on existing vault leaves it alone):
-    • mkdir vault dir
-    • git init
-    • write vault/.gitignore         ← .gbrain/, .DS_Store, private.nosync/
-    • write vault/CLAUDE.md          ← project-level CC instructions for
-    │                                  sessions opened inside the vault
-    │                                  (NOT slash commands — those live in
-    │                                   ~/.claude/commands)
-    • initial commit
-    • write ~/.config/pbrain/vault   ← pointer every other command reads
-  │
-  ▼ optional add-ons (asked one-by-one):
-  ├─► MIGRATE from an existing vault elsewhere?
-  │     rsync old → new, verify file count, source preserved for manual delete
-  │
-  ├─► SET UP vault/private.nosync/ for off-iCloud / off-git notes?
-  │     mkdir + README + .gitignore entry
-  │
-  └─► ADD git remote + push?
-        git remote add origin <url> && git push -u
-```
+![/init-obsidian flow](docs/diagrams/init-obsidian.svg)
+
+<!-- Source: docs/diagrams/init-obsidian.d2 — re-render with:
+     d2 --theme 0 --dark-theme 200 --pad 20 docs/diagrams/init-obsidian.d2 docs/diagrams/init-obsidian.svg -->
+
+Step by step:
+
+1. **PROBE state** — checks whether Obsidian.app is installed, `~/.config/pbrain/vault` is valid, and the iCloud Obsidian container is present.
+2. **Already configured?** → if yes, report status and exit (or offer the optional add-ons below).
+3. **Obsidian.app missing?** → prompt `brew install --cask obsidian`.
+4. **PICK vault location** — default (`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault`) or any custom path.
+5. **BOOTSTRAP** (idempotent — re-running on an existing vault leaves it alone): `mkdir` the vault dir, `git init`, write `vault/.gitignore` (`.gbrain/`, `.DS_Store`, `private.nosync/`), write `vault/CLAUDE.md` (project-level CC instructions for sessions opened inside the vault — *not* slash commands, those live in `~/.claude/commands`), initial commit, then write `~/.config/pbrain/vault` (the pointer every other command reads).
+6. **Optional add-ons** (asked one-by-one): MIGRATE from an existing vault (rsync old → new, verify file count, source preserved for manual delete); SET UP `vault/private.nosync/` for off-iCloud / off-git notes; ADD a git remote + push.
 
 **What's written inside the vault:** `vault/.gitignore`, `vault/CLAUDE.md`, optionally `vault/private.nosync/README.md`. That's it. Slash commands are *never* installed into the vault — they live in `~/.claude/commands` (via `/plugin install` or `scripts/install-commands.sh`).
 
@@ -189,6 +145,11 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 
 The commands compose into a full-day ritual. Run them top-to-bottom — most are zero-input, just type the slash command and answer the prompts.
 
+![pbrain daily flow](docs/diagrams/daily-flow.svg)
+
+<!-- Source: docs/diagrams/daily-flow.d2 — re-render with:
+     d2 --theme 0 --dark-theme 200 --pad 20 docs/diagrams/daily-flow.d2 docs/diagrams/daily-flow.svg -->
+
 | When | Command | What you do |
 |---|---|---|
 | Morning, before anything else | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. Clears the head. |
@@ -199,6 +160,11 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
 `/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
+
+![pbrain on-demand commands](docs/diagrams/on-demand.svg)
+
+<!-- Source: docs/diagrams/on-demand.d2 — re-render with:
+     d2 --theme 0 --dark-theme 200 --pad 20 docs/diagrams/on-demand.d2 docs/diagrams/on-demand.svg -->
 
 Each command's default path is overrideable via env var. Full reference:
 
