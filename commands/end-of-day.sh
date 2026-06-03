@@ -77,6 +77,16 @@ already_closed() {
 
 CLOSED="$(already_closed "$PLAN_FILE")"
 
+# Reminders + habits surfacing. No-ops (empty output) until the user opts in.
+# Firing due reminders here is deduped by fired_at, so it won't double-ping.
+pbrain_reminders_tick || true
+REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
+[[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
+[[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
+REMIND_CMD="$(pbrain_reminders_cmd)"
+
 cat <<PROMPT
 END_OF_DAY_SESSION
 date: $TODAY ($DOW)
@@ -84,6 +94,7 @@ plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"), already_closed: $CLOSED)
 journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
 fitness_file: $FITNESS_FILE (exists: $(exists "$FITNESS_FILE"))
 diet_file: $DIET_FILE (exists: $(exists "$DIET_FILE"))
+habits_setup_needed: $HABITS_SETUP_NEEDED
 
 --- PLAN ---
 $(read_or_missing "$PLAN_FILE")
@@ -96,6 +107,12 @@ $(read_or_missing "$FITNESS_FILE")
 
 --- DIET ---
 $(read_or_missing "$DIET_FILE")
+
+--- PENDING REMINDERS ---
+$REMINDERS_PENDING
+
+--- HABITS (this week / month vs caps) ---
+$HABITS_ROLLUP
 --- END CONTEXT ---
 
 INSTRUCTIONS: Walk the user through a close-of-day reflection and fill the
@@ -119,6 +136,11 @@ Step 2 — Ask, ONE question at a time. Wait for each answer before asking the n
   2) "What got dropped, and was that the right call?"
   3) "Energy curve — morning / afternoon / evening? (1–10 each, or a word each)"
   4) "One thing to carry into tomorrow."
+  5) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
+     unchecked item ("- [ ]"): "Did you get to the declutter task — {item}?"
+     SKIP this question entirely if there's no declutter item, it's already
+     ticked ("- [x]"), or the user's preferences (top of session) say not to ask
+     about decluttering.
 
 If Q1's answer makes it clear the day went sideways (illness, crisis,
 just-rough), skip Q2 and soften the rest.
@@ -193,6 +215,27 @@ without re-asking. Use the Edit tool on each file.
 4c) JOURNAL FILE (\$JOURNAL_FILE) — leave alone. The journal is the user's
     own raw voice from earlier in the day; the close does not edit it.
 
+4d) DECLUTTER — if you asked Q5 and the user did the task, tick its checkbox in
+    the plan file: "- [ ] {item}" → "- [x] {item}". If they didn't get to it,
+    leave it unchecked (it surfaces in /loose-ends). No new section, just the
+    tick.
+
+4e) REMINDERS — read the PENDING REMINDERS block above:
+    - If any are OVERDUE or were due today, ask once which (if any) the user
+      handled, and mark those done: \`bash "$REMIND_CMD" done <id>\` (id = [#N]).
+    - Offer once to set a reminder for anything that should resurface tomorrow
+      (often the "carry into tomorrow" answer or a dropped item worth not
+      losing): \`bash "$REMIND_CMD" add --text "<text>" --due "<YYYY-MM-DD HH:MM>"\`.
+      Write only on a yes. Don't pester — one short offer.
+
+4f) HABITS — read the HABITS block + \`habits_setup_needed\`:
+    - If \`habits_setup_needed\` == yes: mention ONCE (unless prefs say not to
+      nag) — "You haven't set up habit tracking yet — /habits picks a few habits
+      to build or cap. Worth a look." Don't block the close.
+    - If a rollup is present: note standouts in one line (a limit habit over
+      cap, a high-priority build habit that lagged). Logging today's habits is
+      handled automatically below — don't duplicate it here.
+
 Do these silently as part of writing the close — surface one short summary
 line per file you touched in your final message. Do NOT skip 4a/4b because
 they feel like extra work; this is the entire point of the new flow.
@@ -215,6 +258,7 @@ Hard rules:
 - Do NOT create a sibling close file. The plan file is the record.
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction (silent if no habits profile): logs the tracked habits the
+# user evidenced doing/skipping today. Self-improvement capture runs after.
+pbrain_emit_habits_extract "end-of-day" || true
 pbrain_emit_self_improve "end-of-day" || true

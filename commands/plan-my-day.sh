@@ -211,6 +211,11 @@ fi
 # PHASE 1 — today's plan already exists → review/update mode.
 # ---------------------------------------------------------------------------
 if [[ -f "$OUT_FILE" ]]; then
+  # Even on a re-run (plan already exists), fire any due reminders and surface
+  # pending ones — PHASE 2's tick/surface below is skipped once a plan exists,
+  # and /plan-my-day advertises itself as one of the commands that fires them.
+  pbrain_reminders_tick || true
+  _PMD_PENDING="$(pbrain_reminders_pending_text || true)"
   echo "PLAN_MY_DAY_EXISTING"
   echo "file: $OUT_FILE"
   echo ""
@@ -218,6 +223,12 @@ if [[ -f "$OUT_FILE" ]]; then
   echo ""
   echo "---"
   echo "Today's day plan already exists. Show it to the user and ask if they want to update the 'How it went' section, add more items, or revise blocks."
+  if [[ -n "${_PMD_PENDING//[[:space:]]/}" ]]; then
+    echo ""
+    echo "=== PENDING REMINDERS (due ones have already fired as notifications) ==="
+    echo "$_PMD_PENDING"
+    echo "Surface anything due today / overdue; if the user handled one, mark it: bash \"$(pbrain_reminders_cmd)\" done <id>."
+  fi
   exit 0
 fi
 
@@ -356,6 +367,18 @@ else:
 PYEOF
 )"
 
+# Reminders + habits surfacing. Every helper is a no-op (empty output) when the
+# user hasn't set anything up, so this costs nothing until they opt in. Firing
+# any due reminders here (opportunistic tick) is deduped by fired_at, so it
+# won't double-ping with the launchd poller if that's installed.
+pbrain_reminders_tick || true
+REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
+[[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
+[[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
+REMIND_CMD="$(pbrain_reminders_cmd)"
+
 cat <<PROMPT
 PLAN_MY_DAY_SESSION
 date: $TODAY
@@ -364,6 +387,7 @@ current_time: $NOW_TIME (24h, local)
 output_file: $OUT_FILE
 profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
+habits_setup_needed: $HABITS_SETUP_NEEDED
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -379,6 +403,12 @@ $CADENCE_SIGNAL
 
 === RECENT DAY PLANS (last 7) ===
 $RECENT_PLANS
+
+=== PENDING REMINDERS ===
+$REMINDERS_PENDING
+
+=== HABITS (this week / month vs caps) ===
+$HABITS_ROLLUP
 
 ---
 INSTRUCTIONS — follow these steps in order. Keep the tone warm and concise.
@@ -409,6 +439,10 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
       - \`current\` → fewer than 7 days since the last weekly review: say nothing.
       - \`due <days> <plans> <last_date|never>\` → it's Monday and \`<days>\` calendar days (gaps included) have passed since your last weekly review — over a week of activity, with \`<plans>\` day-plans logged in that window. Suggest once, don't block. Phrase with the real numbers, e.g.: "It's Monday and it's been <days> days since your last weekly review (\`<last_date>\`), with <plans> day-plans since — want to run /weekly-review first? A few minutes, and it gives today's plan that context. Or I plan now and you do it later." If \`<last_date>\` is \`never\`, say it's been <days> days of planning with no weekly review yet. If they say plan now, continue; offer to remind them at the end.
   - If the profile's \`current_focus\` array is empty, mention once: "You haven't pinned a current focus in your profile yet — want to name 1–3 things you're actively pushing this month? I'll save them so I can anchor future plans on them." Don't block planning today either way.
+  - REMINDERS — read the PENDING REMINDERS block above. If anything is due today or OVERDUE, surface it briefly in your first message (e.g. "Reminders for today: call dentist (3pm), pay rent (overdue)"). Those due ones have already fired as macOS notifications. Don't list undated "someday" reminders unless the user asks. If the user says one's handled, run \`bash "$REMIND_CMD" done <id>\` (id is the [#N] in the block). If there are none, say nothing.
+  - HABITS — read the HABITS block + \`habits_setup_needed\` above:
+      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits.
+      - If a HABITS rollup is present: note anything that needs attention today — a limit habit at/over cap (⚠️), or a high-priority build habit lagging / untouched this week — and factor it into the plan (e.g. slot a short block for a lagging build habit). One line, not a lecture.
 
 Step 1 — Show the user their lens, briefly:
   Print 2-3 lines max — their current_focus goals as bullets (or, if empty,
@@ -426,7 +460,14 @@ Step 2 — Ask all preference questions at once, in one message:
   3. Any locked-in commitments? (meetings, calls, appointments — with times)
   4. Roughly how many focused work hours do you have today?
   5. Anything you specifically want to AVOID today? (defaults to your profile's anti_patterns if you skip)
-  6. Mood for creative work today? (yes / maybe / not today)"
+  6. Mood for creative work today? (yes / maybe / not today)
+  7. Anything to declutter or tidy today? (inbox, desk, files, browser tabs, a nagging small mess — or 'none')"
+
+  DECLUTTER OVERRIDE: q7 is opt-out. If the user's standing preferences (shown
+  at the top of this session, if any) say not to ask about decluttering, DROP
+  q7 entirely and renumber — don't ask it. Otherwise always include it. If the
+  user ever says "stop asking me to declutter" this session, the self-improve
+  check at the end will offer to save that as a preference.
 
 Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relationships to decide if any touchpoints should be surfaced today. Rules of thumb (only suggest if the contact appears in personal_anchors.relationships):
     - parents (mom/dad) gap >= 6 days → suggest a call
@@ -525,6 +566,10 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   - {1-3 bullets: anything else worth flagging — interaction between fitness + work, weather, anything from the daily journal, day-wrecker signals}
 
+  ## Declutter
+
+  - {q7: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q7 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.}
+
   ---
 
   ## How it went (fill at end of day)
@@ -551,8 +596,17 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
 Step 5 — After writing, confirm: "Saved → $OUT_FILE"
   Then offer one short follow-up: "Want me to adjust any block, or are we good?"
+
+Step 6 — Reminders (only if relevant — don't force it):
+  If anything time-bound came up while planning (a call/appointment at a set
+  time, "pay X today", "don't forget Y at 6") and it isn't already a pending
+  reminder, offer ONCE to set it so it pings as a notification:
+    bash "$REMIND_CMD" add --text "<clean text>" --due "<YYYY-MM-DD HH:MM>" [--repeat daily|weekdays|weekly|monthly]
+  Resolve the due time relative to today ($TODAY) + the current time. Set it
+  only on a yes. Don't pester — at most one short offer covering all of them.
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction (silent if no habits profile): logs the tracked habits the
+# user said they did / will do today. Self-improvement capture runs after.
+pbrain_emit_habits_extract "plan-my-day" || true
 pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "goals profile" || true

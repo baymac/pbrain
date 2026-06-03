@@ -24,11 +24,12 @@ set -euo pipefail
 #   Daily entries:   $VAULT_DIR/fitness/diet-tracking/YYYY-MM-DD.md
 #
 # Overrides:
-#   PBRAIN_VAULT              — vault root
-#   PBRAIN_DIET_DIR           — daily-entries dir
-#   PBRAIN_FITNESS_DIR        — today's fitness entry (cross-ref)
-#   PBRAIN_DIET_PROFILE_FILE  — profile JSON path
-#   PBRAIN_DIET_PLAN_FILE     — diet plan markdown path
+#   PBRAIN_VAULT               — vault root
+#   PBRAIN_DIET_DIR            — daily-entries dir
+#   PBRAIN_FITNESS_DIR         — today's fitness entry (cross-ref)
+#   PBRAIN_DIET_PROFILE_FILE   — profile JSON path
+#   PBRAIN_DIET_PLAN_FILE      — diet plan markdown path
+#   PBRAIN_FOOD_LIBRARY_FILE   — named-foods library markdown (log by name; nutrient reference)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -45,6 +46,7 @@ pbrain_emit_prefs "diet-journal" || true
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_PLAN_FILE="${PBRAIN_DIET_PLAN_FILE:-$VAULT_DIR/fitness/Diet Plan.md}"
+FOOD_LIBRARY_FILE="${PBRAIN_FOOD_LIBRARY_FILE:-$VAULT_DIR/fitness/Food Library.md}"
 PROFILE_FILE="${PBRAIN_DIET_PROFILE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/diet-profile.json}"
 
 TODAY="$(date +%Y-%m-%d)"
@@ -336,6 +338,39 @@ fi
 
 DIET_PLAN_CONTENT="$(cat "$DIET_PLAN_FILE")"
 
+# Food library — a growing reference of named items the user eats, so they can
+# log "protein shake" without re-describing it, and so there's one place to see
+# everything they eat. Two sections: home/regular foods, and junk/outside food.
+# Create an empty stub the first time (idempotent); Claude fills it over time.
+if [[ ! -f "$FOOD_LIBRARY_FILE" ]]; then
+  mkdir -p "$(dirname "$FOOD_LIBRARY_FILE")"
+  cat > "$FOOD_LIBRARY_FILE" <<LIBEOF
+---
+type: food-library
+created: $TODAY
+tags: []
+---
+
+# Food Library
+
+Named items you eat, with macros — so you can log by name ("protein shake")
+instead of re-describing the recipe each time, and so there's one place to see
+everything you eat. This is for **nutrient tracking**, not real recipes: the
+description just needs enough detail to estimate macros.
+
+## Home / regular foods
+
+| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) |
+|---|---|---|---|---|---|---|---|
+
+## Junk / outside food
+
+| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) |
+|---|---|---|---|---|---|---|---|
+LIBEOF
+fi
+FOOD_LIBRARY_CONTENT="$(cat "$FOOD_LIBRARY_FILE" 2>/dev/null || echo "(no food library yet)")"
+
 RECENT_DIET="$(python3 - "$DIET_DIR" "$TODAY" <<'PYEOF'
 import os, glob, sys
 d, today = sys.argv[1], sys.argv[2]
@@ -376,6 +411,9 @@ $EXISTING_ENTRY
 === DIET PLAN ===
 $DIET_PLAN_CONTENT
 
+=== FOOD LIBRARY ($FOOD_LIBRARY_FILE) ===
+$FOOD_LIBRARY_CONTENT
+
 === TODAY'S FITNESS ===
 ${FITNESS_TODAY:-(no fitness entry for today yet)}
 
@@ -392,10 +430,15 @@ the running macro totals from the existing table), then ask:
 Step 2 — Based on intent:
 
   A) LOGGING A NEW MEAL OR ITEM
-     - Take their description, estimate macros for each item, add a new row
-       to the meal table, recompute the day's running totals.
+     - If the item matches a row in the FOOD LIBRARY above (by name, e.g.
+       "protein shake"), reuse its macros directly — don't re-ask for detail.
+     - Otherwise take their description and estimate macros for each item.
+     - Add a new row to the meal table, recompute the day's running totals.
      - Update each Nutrition Analysis category if the new food shifts it
        (protein hit hits target / fiber moves up / etc.).
+     - If a newly-described item looks like a recurring staple and isn't in the
+       library yet, offer ONCE to add it (home/regular vs junk/outside section)
+       — see the FOOD LIBRARY step at the end. Write only on a yes.
 
   B) UPDATING / CORRECTING AN EXISTING MEAL
      - Replace the row(s) cleanly. Recompute totals.
@@ -419,7 +462,18 @@ relative to the plan (e.g. "Protein is on track, carbs running 80g short
 for a training day — the suggested dinner closes that gap.").
 
 Step 5 — Confirm: "Updated → $OUT_FILE"
+
+Step 6 — FOOD LIBRARY upkeep (only if a new staple came up this session):
+  If the user logged a named item that looks like a recurring food and it's not
+  already in the FOOD LIBRARY, offer once: "Want me to save '<item>' to your
+  food library so you can just say the name next time?" On a yes, append a row
+  to $FOOD_LIBRARY_FILE under the right section — **Home / regular foods** for
+  things they make/eat normally, **Junk / outside food** for takeout / treats /
+  restaurant items — with a brief description (enough to estimate macros), a
+  serving, and Cals/P/C/F/Fiber. Keep the table columns aligned. Don't add
+  one-off meals; only genuine repeat items. Never write without a yes.
 UPDATE
+  pbrain_emit_habits_extract "diet-journal" || true
   exit 0
 fi
 
@@ -438,6 +492,9 @@ $PROFILE_JSON
 
 === DIET PLAN ===
 $DIET_PLAN_CONTENT
+
+=== FOOD LIBRARY ($FOOD_LIBRARY_FILE) ===
+$FOOD_LIBRARY_CONTENT
 
 === RECENT DIET HISTORY (last 5 days) ===
 $RECENT_DIET
@@ -459,6 +516,9 @@ Step 1 — Open with the choice:
 Step 2 — Always have them describe naturally what they've eaten so far.
 Don't force structure. Ask any missing essentials (hydration so far,
 supplements taken, any late-night eating last night that should carry over).
+  - If they name an item that's in the FOOD LIBRARY above, reuse its macros
+    directly instead of re-asking for detail (that's the whole point of the
+    library — "protein shake" should just resolve to its saved macros).
 
 Step 3 — If intent includes SUGGESTING MEALS (b or c):
   - Pull remaining macros = plan targets − what's logged.
@@ -546,10 +606,21 @@ Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
   at 110/150 g by lunch, you're on track for post-football refuel" — not
   "eat healthier".}
 
-Step 6 — End with: "Saved → $OUT_FILE. Re-run /diet-journal later to add
+Step 6 — FOOD LIBRARY upkeep (only if a recurring item came up this session):
+  If the user described a named item that looks like a repeat staple and it's
+  not already in the FOOD LIBRARY, offer once: "Want me to save '<item>' to your
+  food library so you can just say the name next time?" On a yes, append a row
+  to $FOOD_LIBRARY_FILE under **Home / regular foods** (things they make/eat
+  normally) or **Junk / outside food** (takeout / treats / restaurant), with a
+  brief description, serving, and Cals/P/C/F/Fiber. Only genuine repeat items,
+  never one-offs. Never write without a yes.
+
+Step 7 — End with: "Saved → $OUT_FILE. Re-run /diet-journal later to add
 meals or have me suggest the next one against remaining macros."
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction: log any tracked habits the user evidenced (silent if no
+# habits profile). Self-improvement: capture standing preferences / quality
+# fixes the user raised this session (silent unless there was genuine feedback).
+pbrain_emit_habits_extract "diet-journal" || true
 pbrain_emit_self_improve "diet-journal" "$DIET_PLAN_FILE" "diet plan" || true

@@ -37,6 +37,20 @@ Every entry includes:
 
 Cross-references today's `/fitness-journal` entry — pre/post-workout fuel timing, training-day carb bump, etc.
 
+## Food library
+
+A growing reference of the named items you eat — so you can log "protein shake" without re-describing the recipe each time, and so there's **one place to see everything you eat**. It's for *nutrient* tracking, not real recipes: each entry just needs enough description to estimate macros. Two sections:
+
+- **Home / regular foods** — staples you make or eat normally.
+- **Junk / outside food** — takeout, treats, restaurant items (kept separate so the pattern is visible).
+
+Lives in your vault at `$VAULT_DIR/fitness/Food Library.md` (created empty on first run). When you log a meal:
+
+- If you name an item that's in the library, the coach reuses its saved macros instead of re-asking.
+- If you describe a new item that looks like a recurring staple, it offers once to save it to the right section — written only on a yes.
+
+Edit the file directly any time; it's a normal Obsidian note.
+
 **Default destination:** `$VAULT_DIR/fitness/diet-tracking/YYYY-MM-DD.md`
 
 **Overrides:**
@@ -48,6 +62,7 @@ Cross-references today's `/fitness-journal` entry — pre/post-workout fuel timi
 | `PBRAIN_FITNESS_DIR` | Where the script reads today's fitness entry from (cross-ref) |
 | `PBRAIN_DIET_PLAN_FILE` | Diet plan markdown path (default: `$VAULT_DIR/fitness/Diet Plan.md`) |
 | `PBRAIN_DIET_PROFILE_FILE` | Profile JSON path (default: `~/.config/pbrain/diet-profile.json`) |
+| `PBRAIN_FOOD_LIBRARY_FILE` | Named-food library markdown (default: `$VAULT_DIR/fitness/Food Library.md`) |
 
 **Re-running setup:** delete the profile file to redo the interview; delete the plan file to recompute it from the existing profile.
 

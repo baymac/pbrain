@@ -15,6 +15,9 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
   - **Diet file:** flips planned meals to `eaten` (or `skipped`) with real items + macros, recomputes the Total/Net rows, rebuilds the Nutrition Analysis table against actuals, strips the stale "Suggested next meal(s)" block and replaces it with a short carry-forward list, updates the Coach note to the day that actually happened.
   - **Fitness file:** flips `status: planned` → `completed` (or `skipped`), preserves the sets the user already logged, appends an `## Other movement today` section for walks / ring closes / extra cardio if mentioned.
   - **Journal file:** untouched (it's the user's raw voice from earlier).
+  - **Declutter:** if the plan has an unchecked `## Declutter` item, asks whether you got to it and ticks the checkbox (`- [ ]` → `- [x]`). Skipped if there's no item or your prefs turned the declutter prompt off.
+  - **Reminders:** surfaces anything overdue / due today (already fired as notifications), lets you mark off what you handled, and offers once to set a reminder for anything worth carrying into tomorrow.
+  - **Habits:** logs any tracked habits you evidenced today and notes standouts (a limit habit over cap, a high-priority build habit that lagged). Silent if you haven't set up `/habits` (nudges once).
   - Bookkeeping only — the close never invents new analysis or new prescriptions.
 
 **Tone rules baked into the prompt:**
@@ -34,6 +37,8 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 | `PBRAIN_JOURNAL_DIR` | Today's daily journal (cross-reference) |
 | `PBRAIN_FITNESS_DIR` | Today's fitness session (cross-reference + bookkeeping update target) |
 | `PBRAIN_DIET_DIR` | Today's diet log (cross-reference + bookkeeping update target) |
+| `PBRAIN_HABITS_PROFILE_FILE` | Habits profile (cross-ref for the habit rollup) |
+| `PBRAIN_DB_FILE` | Shared SQLite store for reminders + habit events |
 
 **Example:**
 

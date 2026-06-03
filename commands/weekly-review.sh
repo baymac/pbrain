@@ -121,6 +121,15 @@ done
 echo ""
 echo "--- END WEEK CONTEXT ---"
 
+# Habit rollup (this week / month vs caps). Empty if habit tracking isn't set up.
+HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
+if [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]]; then
+  echo ""
+  echo "--- HABITS (this week / month vs caps) ---"
+  echo "$HABITS_ROLLUP"
+  echo "--- END HABITS ---"
+fi
+
 # Core plans, for the Step 4 enrichment pass. All are user-owned vault files:
 # enrichment proposes changes into the review and edits a plan file only on an
 # explicit per-change yes.
@@ -154,7 +163,7 @@ echo ""
 cat <<PROMPT
 INSTRUCTIONS: Walk a weekly review. You have a lot of context above — use it. Specifics or silence.
 
-Step 1 — Read every day above. Look for: recurring themes (what kept coming up), real wins (what actually shipped or moved), friction (where the week stalled or repeated), shifts (how thinking changed), unfinished threads (open questions that didn't get resolved).
+Step 1 — Read every day above. Look for: recurring themes (what kept coming up), real wins (what actually shipped or moved), friction (where the week stalled or repeated), shifts (how thinking changed), unfinished threads (open questions that didn't get resolved). If a HABITS rollup is present, weave its standouts into your synthesis — limit habits over cap, high-priority build habits that lagged, streaks worth naming. Don't dump the table; surface what matters.
 
 Step 2 — Present a TIGHT synthesis FIRST, then ask questions. Order:
   a) Say: "Here's what I'm seeing from your week:" then 3-5 bullets. Specific. Quote the user where you can. No generic positivity.
