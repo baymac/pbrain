@@ -133,7 +133,7 @@ Before any other slash command or personal-reflection task, check daily files in
 2. If the journal exists but `life/gratitude-journal/YYYY-MM-DD.md` is missing, suggest `/gratitude-journal` next. With the head cleared, gratitude anchors baseline to *enough*.
 3. Otherwise proceed.
 
-Suggest once, never block. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt.
+Suggest once, never block. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt. If a standing preference (in the injected USER PREFERENCES block — global or per-command) says to skip this nudge, don't make it. Any built-in suggestion yields to a standing preference that turns it off.
 
 ---
 

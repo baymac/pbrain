@@ -9,15 +9,20 @@ It's two halves, both carried by shared helpers (`lib/prefs.sh`, `lib/self-impro
 
 ## What gets captured, and where
 
-Feedback splits into three kinds, which go to different places:
+Feedback splits into kinds, which go to different places:
 
 | Kind | Means | Goes to | Survives `/plugin update`? |
 |---|---|---|---|
-| **Preference** | How *you* want this command to behave | `~/.config/pbrain/prefs/<command>.md` | yes (outside the plugin) |
+| **Preference (command)** | How *you* want one command to behave | `~/.config/pbrain/prefs/<command>.md` | yes (outside the plugin) |
+| **Preference (global)** | How *you* want every command to behave | `~/.config/pbrain/prefs/_global.md` | yes (outside the plugin) |
 | **Quality fix** | A bug or improvement that helps *everyone* | `~/.config/pbrain/feedback/<command>.md` | yes |
 | **Plan change** | A lasting change to a core plan you own | the plan file itself (your vault) | yes (it's your content) |
 
-Preferences are read back and injected on the next run — that's the half that actually closes the loop. Quality fixes are collected for you to send upstream; after saving one, the command offers to open a GitHub issue (only if `gh` is installed and you say yes). The prefs and feedback files are plain markdown, one per command, editable by hand any time.
+Preferences are read back and injected on the next run — that's the half that actually closes the loop. The global file is injected on *every* command, before that command's own prefs.
+
+### Turning off suggestions and nudges
+
+Every built-in suggestion yields to a standing preference that says to skip it — preferences always win over a default nudge. Tell any command "stop suggesting `/journal` or `/gratitude-journal` before other commands" (or "stop nudging me about X") and it saves that to the **global** file, so it takes effect across *all* commands — not just the one you were running. This matters because a nudge like the morning-sequence journal/gratitude check fires from many commands (`/plan-my-day`, `/brainstorm`, `/diet-journal`, `/fitness-journal`, `/organize-clippings`, …); a per-command preference could only silence one of them, so these cross-command skips live in `_global.md`. A preference that's specific to one command ("ask only one question in `/journal`") still goes to that command's file. You can also edit `_global.md` by hand any time. Quality fixes are collected for you to send upstream; after saving one, the command offers to open a GitHub issue (only if `gh` is installed and you say yes). The prefs and feedback files are plain markdown, one per command, editable by hand any time.
 
 ### Plan changes (in-session, same discipline)
 
@@ -48,7 +53,7 @@ Behavior is set by `PBRAIN_SELF_IMPROVE`:
 |---|---|---|
 | `PBRAIN_SELF_IMPROVE` | `off` / `prefs` / `dev` | `prefs` |
 | `PBRAIN_DEV_DIR` | Path to the editable repo; required for `dev` source edits | — |
-| `PBRAIN_PREFS_DIR` | Where per-command preferences live | `~/.config/pbrain/prefs` |
+| `PBRAIN_PREFS_DIR` | Where preferences live (`_global.md` + per-command `<cmd>.md`) | `~/.config/pbrain/prefs` |
 | `PBRAIN_FEEDBACK_DIR` | Where quality-fix notes live | `~/.config/pbrain/feedback` |
 
 ## Behavior you can count on

@@ -417,6 +417,11 @@ $HABITS_ROLLUP
 INSTRUCTIONS — follow these steps in order. Keep the tone warm and concise.
 
 Step 0 — Preflight checks (do these silently, then surface in one short message):
+  - PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
+    (global or per-command) says to skip the fitness-journal gate/nudge, SKIP
+    the FITNESS GATE entirely — go straight to Step 1/Step 2 and just ask once
+    "Roughly when's your physical activity today, and what is it?" if you need
+    it for the plan. A standing preference always overrides this gate.
   - FITNESS GATE (do this BEFORE anything in Step 1 or Step 2): If TODAY'S
     FITNESS JOURNAL == "MISSING", your first message must be ONLY about the
     fitness journal — do NOT show the Step 1 lens or the Step 2 check-in

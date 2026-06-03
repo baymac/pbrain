@@ -67,12 +67,13 @@ SUB="${1:-}"
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "log" ]]; then
   shift || true
-  H_NAME=""; H_DATE="$TODAY"; H_COUNT="1"; H_SOURCE="habits"; H_NOTE=""
+  H_NAME=""; H_DATE="$TODAY"; H_COUNT="1"; H_SOURCE="habits"; H_NOTE=""; H_AMOUNT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) H_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
       --date)   H_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
       --count)  H_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
+      --amount) H_AMOUNT="${2:-}"; shift 2 2>/dev/null || shift ;;
       --source) H_SOURCE="${2:-habits}"; shift 2 2>/dev/null || shift ;;
       --note)   H_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
@@ -82,9 +83,9 @@ if [[ "$SUB" == "log" ]]; then
     echo "habits: log requires --name" >&2
     exit 1
   fi
-  python3 - "$PBRAIN_DB_FILE" "$PROFILE_FILE" "$H_NAME" "$H_DATE" "$H_COUNT" "$H_SOURCE" "$H_NOTE" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF'
+  python3 - "$PBRAIN_DB_FILE" "$PROFILE_FILE" "$H_NAME" "$H_DATE" "$H_COUNT" "$H_SOURCE" "$H_NOTE" "$(date '+%Y-%m-%d %H:%M')" "$H_AMOUNT" <<'PYEOF'
 import sqlite3, sys, re, datetime, json
-db, profile, name, date, count, source, note, created = sys.argv[1:9]
+db, profile, name, date, count, source, note, created, amount = sys.argv[1:10]
 name = name.strip()
 
 # Resolve name (or id) -> stable habit_id via the profile. Only ACTIVE,
@@ -121,26 +122,32 @@ if not habit_id:
 if not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
     date = datetime.date.today().isoformat()
 try:
-    count = max(1, int(count))
+    count = max(1, int(float(count)))
 except (TypeError, ValueError):
     count = 1
+try:
+    amount = float(amount) if str(amount).strip() else None
+except (TypeError, ValueError):
+    amount = None
 note = (note or "").strip() or None
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("PRAGMA busy_timeout=5000")
     con.execute(
-        "INSERT INTO habit_events (habit_id, habit, occurred_on, count, source, note, created_at) "
-        "VALUES (?,?,?,?,?,?,?) "
+        "INSERT INTO habit_events (habit_id, habit, occurred_on, count, amount, source, note, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?) "
         "ON CONFLICT(habit_id, occurred_on) DO UPDATE SET "
         "  count=MAX(habit_events.count, excluded.count), "
+        "  amount=COALESCE(excluded.amount, habit_events.amount), "
         "  habit=excluded.habit, "
         "  source=excluded.source, "
         "  note=COALESCE(excluded.note, habit_events.note)",
-        (habit_id, disp, date, count, source, note, created),
+        (habit_id, disp, date, count, amount, source, note, created),
     )
     con.commit()
     con.close()
-    print(f"logged: {disp} on {date} (x{count})")
+    tail = f" — amount {amount}" if amount is not None else ""
+    print(f"logged: {disp} on {date} (x{count}){tail}")
 except Exception as e:
     print(f"habits: {e}", file=sys.stderr)
     sys.exit(1)
@@ -154,14 +161,17 @@ fi
 if [[ "$SUB" == "add" ]]; then
   shift || true
   A_NAME=""; A_TYPE="daily"; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
+  A_UNIT=""; A_MEASURE=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name)      A_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --type)      A_TYPE="${2:-daily}"; shift 2 2>/dev/null || shift ;;
-      --direction) A_DIR="${2:-at_least}"; shift 2 2>/dev/null || shift ;;
-      --target)    A_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --priority)  A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
-      --notes)     A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name)           A_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)           A_TYPE="${2:-daily}"; shift 2 2>/dev/null || shift ;;
+      --direction)      A_DIR="${2:-at_least}"; shift 2 2>/dev/null || shift ;;
+      --target)         A_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --priority)       A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
+      --unit)           A_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --measure-target) A_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --notes)          A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -211,9 +221,9 @@ print("\n".join(str(h.get("id","")).strip() for h in (d.get("habits") or []) if 
 ' 2>/dev/null || true)"
   NEW_ID="$(pbrain_habit_slug "$A_NAME" "$EXISTING_IDS")"
 
-  python3 - "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_TYPE" "$A_DIR" "$A_TARGET" "$A_PRIO" "$A_NOTES" <<'PYEOF'
+  python3 - "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_TYPE" "$A_DIR" "$A_TARGET" "$A_PRIO" "$A_NOTES" "$A_UNIT" "$A_MEASURE" <<'PYEOF'
 import json, re, sys
-path, hid, name, st, direction, target, priority, notes = sys.argv[1:9]
+path, hid, name, st, direction, target, priority, notes, unit, measure = sys.argv[1:11]
 with open(path) as fh:
     text = fh.read()
 m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
@@ -223,9 +233,17 @@ try:
     tv = int(target) if str(target).strip() else None
 except (TypeError, ValueError):
     tv = None
+# Optional measure: a unit + numeric target makes the habit amount-based.
+try:
+    mv = float(measure) if str(measure).strip() else None
+    if mv is not None and mv.is_integer():
+        mv = int(mv)
+except (TypeError, ValueError):
+    mv = None
 habits.append({
     "id": hid, "name": name.strip(), "schedule_type": st, "direction": direction,
-    "target_count": tv, "priority": priority, "archived": False, "notes": notes.strip(),
+    "target_count": tv, "priority": priority, "unit": unit.strip(),
+    "measure_target": mv, "archived": False, "notes": notes.strip(),
 })
 new_json = json.dumps(data, indent=2)
 if m:
@@ -234,7 +252,8 @@ else:
     text = text.rstrip() + f"\n\n```json\n{new_json}\n```\n"
 with open(path, "w") as fh:
     fh.write(text)
-print(f"added: {name.strip()} [{hid}] ({st}, {direction}, target {tv}, {priority})")
+measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
+print(f"added: {name.strip()} [{hid}] ({st}, {direction}, target {tv}, {priority}{measure_note})")
 PYEOF
   exit 0
 fi
@@ -245,15 +264,18 @@ fi
 if [[ "$SUB" == "edit" ]]; then
   shift || true
   E_ID=""; E_NAME="__keep__"; E_TYPE="__keep__"; E_DIR="__keep__"; E_TARGET="__keep__"; E_PRIO="__keep__"; E_NOTES="__keep__"
+  E_UNIT="__keep__"; E_MEASURE="__keep__"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --id)        E_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --name)      E_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --type)      E_TYPE="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --direction) E_DIR="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --target)    E_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --priority)  E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --notes)     E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --id)             E_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name)           E_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)           E_TYPE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --direction)      E_DIR="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --target)         E_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --priority)       E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --unit)           E_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --measure-target) E_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --notes)          E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -261,9 +283,9 @@ if [[ "$SUB" == "edit" ]]; then
     echo "habits: edit requires --id and an existing profile" >&2
     exit 1
   fi
-  python3 - "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_TYPE" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" <<'PYEOF'
+  python3 - "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_TYPE" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" <<'PYEOF'
 import json, re, sys
-path, hid, name, st, direction, target, priority, notes = sys.argv[1:9]
+path, hid, name, st, direction, target, priority, notes, unit, measure = sys.argv[1:11]
 KEEP = "__keep__"
 with open(path) as fh:
     text = fh.read()
@@ -291,6 +313,18 @@ if target != KEEP:
         found["target_count"] = None
 if priority != KEEP and priority in ("low", "medium", "high"):
     found["priority"] = priority
+if unit != KEEP:
+    found["unit"] = unit.strip()
+if measure != KEEP:
+    # empty string clears the measure (back to occurrence-based); a number sets it
+    if str(measure).strip():
+        try:
+            mv = float(measure)
+            found["measure_target"] = int(mv) if mv.is_integer() else mv
+        except (TypeError, ValueError):
+            found["measure_target"] = None
+    else:
+        found["measure_target"] = None
 if notes != KEEP:
     found["notes"] = notes.strip()
 new_json = json.dumps(data, indent=2)
@@ -479,13 +513,14 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "mark" ]]; then
   shift || true
-  M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""
+  M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --date)  M_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
-      --count) M_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
-      --note)  M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date)   M_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --count)  M_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
+      --amount) M_AMOUNT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -497,7 +532,7 @@ if [[ "$SUB" == "mark" ]]; then
     echo "not a tracked habit: $M_NAME — add it with /habits (not marked)"
     exit 0
   fi
-  pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE"
+  pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT"
   exit 0
 fi
 
@@ -570,7 +605,7 @@ if [[ ! -f "$PROFILE_FILE" ]]; then
 HABITS_SETUP_PROFILE
 profile_file: $PROFILE_FILE
 seed_dirs: ${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking} | ${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning} | ${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking} | ${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}
-add_cmd: bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high] [--notes "..."]
+add_cmd: bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
 
 INSTRUCTIONS — first-time habits setup. Don't log anything yet. You're helping
 the user define the habits they want to track. Ask ONE question at a time; wait
@@ -602,6 +637,12 @@ STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time
     (at_most, e.g. alcohol)?
   - target_count: how many times per period? (For a plain daily habit this is
     just 1 — every day. Ask only if not obvious.)
+  - measure (optional): does this habit have a NATURAL AMOUNT you'd rather track
+    than a yes/no? (e.g. "4L water", "30 min meditation", "20 km/week running").
+    If so, capture a unit (--unit "L") and the per-period target (--measure-target
+    4); fulfillment then checks the summed amount vs target ("2.5/4 L") instead of
+    done/not-done. Most habits are plain yes/no — only ask/set this when the user
+    frames it as a quantity. A measured habit's --target is then irrelevant.
   - priority: low / medium / high — how much it matters right now.
   - notes: optional short note (e.g. "10 min morning", "weekends only").
   Then create it immediately by running the add_cmd above with those values.
@@ -645,7 +686,12 @@ for h in data.get("habits") or []:
     prio = h.get("priority", "medium")
     target = h.get("target_count", h.get("cap_count"))
     arch = " [archived]" if h.get("archived") else ""
-    print("- %s [%s] (%s, %s, target %s, %s)%s" % (name, hid, st, direction, target, prio, arch))
+    mt = h.get("measure_target")
+    measure = ""
+    if mt is not None:
+        unit = str(h.get("unit", "")).strip()
+        measure = ", measure %s%s" % (mt, (" " + unit) if unit else "")
+    print("- %s [%s] (%s, %s, target %s, %s%s)%s" % (name, hid, st, direction, target, prio, measure, arch))
 ' 2>/dev/null || echo "(could not parse habits)"
   exit 0
 fi
@@ -686,9 +732,10 @@ if a "+N more" line shows, mention there are more lower-priority habits. 3–6 l
 Step 2 — Ask: "Want to open today's tracker, mark something, add or change a habit?"
 Use these commands — never hand-edit the profile JSON or the tracking table directly:
   - TRACK today: bash "$_SCRIPT_DIR/habits.sh" track --date $TODAY   (create/refresh today's checklist md)
-  - MARK done:   bash "$_SCRIPT_DIR/habits.sh" mark --name "<exact name>" --date $TODAY [--count N] [--note "..."]
-  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high] [--notes "..."]
-  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--type ...] [--direction ...] [--target N] [--priority ...] [--notes ...]
+  - MARK done:   bash "$_SCRIPT_DIR/habits.sh" mark --name "<exact name>" --date $TODAY [--count N] [--amount X] [--note "..."]
+                 (for a measured habit — one with a unit — pass --amount, e.g. --amount 2.5)
+  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
+  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--type ...] [--direction ...] [--target N] [--unit ...] [--measure-target N] [--priority ...] [--notes ...]
   - ARCHIVE:     bash "$_SCRIPT_DIR/habits.sh" archive --id <id>   (removes it from the dashboard, keeps history)
   - HISTORY:     bash "$_SCRIPT_DIR/habits.sh" history --name "<X>"
   For add/edit/archive, show the user what you'll run and get an explicit yes first.

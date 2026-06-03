@@ -14,13 +14,24 @@ Each habit carries three fields that say how it's evaluated:
 
 Plus a **priority** (low / medium / high) and an optional short note.
 
-| Example | schedule_type | direction | target_count |
-|---|---|---|---|
-| Brush at night | daily | at_least | 1 |
-| Drink 4L water | daily | at_least | 1 (amount in the note) |
-| Nail cut | weekly | at_least | 2 |
-| Long run | monthly | at_least | 5 |
-| Alcohol | weekly | at_most | 2 |
+### Measured habits (quantity tracking)
+
+A habit can optionally carry a **measure** — a `unit` and a `measure_target` — when what matters is an *amount*, not a yes/no:
+
+- **unit** — what you're counting, e.g. `L`, `min`, `km`, `g`, `pages`.
+- **measure_target** — the amount that fulfills the period (may be fractional, e.g. `2.5`).
+
+When a habit is measured, fulfillment checks the **summed amount over its period** against the target (`2.5/4 L`, `12/20 km this week`) instead of done/not-done — and `target_count` is then irrelevant. Most habits are genuinely binary; only set a measure when the user frames the habit as a quantity. You record the day's amount with `--amount` (it lands in the Count cell of the tracking file and the `amount` column in the DB).
+
+| Example | schedule_type | direction | target_count | unit | measure_target |
+|---|---|---|---|---|---|
+| Brush at night | daily | at_least | 1 | — | — |
+| Drink 4L water | daily | at_least | — | L | 4 |
+| Run 20 km/week | weekly | at_least | — | km | 20 |
+| Nail cut | weekly | at_least | 2 | — | — |
+| Long run | monthly | at_least | 5 | — | — |
+| Alcohol | weekly | at_most | 2 | — | — |
+| Sugar ≤30 g/day | daily | at_most | — | g | 30 |
 
 ## First-run setup
 
@@ -39,10 +50,13 @@ The structured data lives in a fenced ` ```json ` block. Each habit has a **stab
   "created": "2026-06-03",
   "habits": [
     { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily",  "direction": "at_least", "target_count": 1, "priority": "high",   "archived": false, "notes": "" },
+    { "id": "water",          "name": "Water",          "schedule_type": "daily",  "direction": "at_least", "target_count": null, "unit": "L", "measure_target": 4, "priority": "high", "archived": false, "notes": "" },
     { "id": "alcohol",        "name": "Alcohol",        "schedule_type": "weekly", "direction": "at_most",  "target_count": 2, "priority": "medium", "archived": false, "notes": "" }
   ]
 }
 ```
+
+(`unit` + `measure_target` are the optional measure; omit them — or leave `measure_target` null — for a plain yes/no habit.)
 
 Don't hand-edit ids — the `add`/`edit`/`archive` subcommands manage them and keep the JSON valid.
 
@@ -51,14 +65,15 @@ Don't hand-edit ids — the `add`/`edit`/`archive` subcommands manage them and k
 Each day has its own file: `life/habit-tracking/<date>.md`. It's generated from your profile as a table — a row per active habit, with empty cells to tick:
 
 ```
-| Habit          | Criteria  | Progress | Done | Count | Note     |
-|----------------|-----------|----------|------|-------|----------|
-| Brush at night | daily     | 5/7 wk   | x    |       |          |
-| Nail cut       | weekly ≥2 | 1/2 wk   |      |       |          |
-| Alcohol        | weekly ≤2 | 1/2 wk   | x    |       | one beer |
+| Habit          | Criteria   | Progress  | Done | Count | Note     |
+|----------------|------------|-----------|------|-------|----------|
+| Brush at night | daily      | 5/7 wk    | x    |       |          |
+| Water          | daily ≥4 L | 2.5/4 L   | x    | 2.5   |          |
+| Nail cut       | weekly ≥2  | 1/2 wk    |      |       |          |
+| Alcohol        | weekly ≤2  | 1/2 wk    | x    |       | one beer |
 ```
 
-You can open it in Obsidian and tick the **Done** column by hand, or let the agent mark cells for you (below). The `Progress` column shows where each habit stands so far (from the DB) for context.
+You can open it in Obsidian and tick the **Done** column by hand, or let the agent mark cells for you (below). The `Progress` column shows where each habit stands so far (from the DB) for context. For a **measured** habit (one with a unit), put the day's amount in the **Count** cell — that's the litres/minutes/km the rest of the tooling reads as your quantity.
 
 `/plan-my-day` offers, at the end, to create today's file (`/habits track`). The day's marks accumulate there.
 
@@ -83,6 +98,7 @@ Running `/habits` (with a profile in place) syncs your recent files, then shows 
 
 - daily: done today **✅** / not yet **⏳**, plus this-week N/7 and your streak,
 - weekly / monthly: progress like `2/2 this week ✅` or `1/2 this week ⏳`,
+- measured: amount-based progress with the unit, like `2.5/4 L today ⏳` or `12/20 km this week`,
 - limit habits: **⚠️ OVER** or `— at cap`,
 - last-done date; a `+N more` line if you track more than 20.
 
@@ -98,11 +114,11 @@ Then it offers to open today's tracker, mark a habit, add/edit/archive one, or s
 | `/habits history --name "X"` | Event history for one habit, newest first |
 
 Script-level API (used by the auto-marking, surfacing, and the dashboard's offers):
-`mark --name "X" --date YYYY-MM-DD [--count N] [--note "…"]` (the primary write path → ticks the md),
+`mark --name "X" --date YYYY-MM-DD [--count N] [--amount X] [--note "…"]` (the primary write path → ticks the md; `--amount` for measured habits),
 `track [--date …]`, `sync [--days N]` (mirror md → DB), `consolidate [--date …]` (sync + prune, run by `/end-of-day`),
-`add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority …] [--notes "…"]`,
-`edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--priority …] [--notes …]`,
-`archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive).
+`add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority …] [--notes "…"]`,
+`edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--unit …] [--measure-target N] [--priority …] [--notes …]` (pass `--measure-target ""` to clear a measure),
+`archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive; takes `--amount` too).
 
 ## Defaults and overrides
 

@@ -136,7 +136,7 @@ PYEOF
     echo "REMIND_ADDED id=$NEW_ID"
     echo "Set: \"$R_TEXT\" — due $DUE_TXT$REPEAT_TXT"
     if [[ "$(agent_installed)" == "no" ]]; then
-      echo "(Background firing isn't installed — reminders fire when /remind, /plan-my-day, or /end-of-day run. Run \`/remind install\` to have them fire on their own every ~5 min.)"
+      bash "$SELF" install || true
     fi
     ;;
 
@@ -333,10 +333,6 @@ calling the relevant subcommand with the Bash tool. Use the absolute path:
 3. COMPLETE / CANCEL ("mark #3 done", "I did the dentist one"): match their
    reference to an id in the PENDING block, then run
    \`bash "$SELF" done <id>\` (or \`cancel <id>\`).
-
-4. If background_poller_installed is "no" and the user wants reminders to fire
-   even when no pbrain command is running, mention once they can run
-   \`bash "$SELF" install\` to enable the every-5-min launchd poller.
 
 Keep it tight. Don't over-explain. One confirmation line is enough.
 ENTRY

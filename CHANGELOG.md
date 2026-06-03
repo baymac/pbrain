@@ -4,6 +4,12 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-03
+
+### Added
+
+- **`/habits` first-class quantity tracking.** A habit can now carry an optional *measure* — a `unit` and a `measure_target` (e.g. `L`/4 for "drink 4L water", `km`/20 for "run 20 km a week", `g`/30 for "keep sugar under 30g/day") — set via `add`/`edit --unit "L" --measure-target 4` (pass `--measure-target ""` to clear it back to a plain yes/no habit). For a measured habit, `mark`/`log` take `--amount` (fractional OK, e.g. `--amount 2.5`); the value lands in the **Count** cell of the dated tracking markdown and in a new nullable `amount REAL` column on `habit_events`. Fulfillment then sums the amount over the habit's schedule period and checks it against the target — `2.5/4 L today ⏳`, `12/20 km this week`, `45/30 g today — OVER ⚠️` — instead of done/not-done, so `target_count` is irrelevant for measured habits. The status evaluator, text rollup, dashboard, `list`, and the ride-along extraction emitter (which tags measured habits and prompts the agent to pass `--amount`) all understand the measure; the surfacing commands (`/plan-my-day`, `/end-of-day`, `/weekly-review`) inherit it for free through the shared rollup. Existing DBs gain the `amount` column via a guarded, idempotent migration in `lib/db.sh`; unmeasured habits keep working unchanged (`amount` stays NULL, occurrence `count` still drives fulfillment). New tests cover measured add/edit/status/rollup/mark/sync/log in `tests/habits.bats`. *(Closes the "first-class quantity tracking" habits follow-up in `TODOS.md`.)*
+
 ## [0.3.0] — 2026-06-03
 
 ### Added

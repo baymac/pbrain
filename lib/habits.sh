@@ -146,8 +146,19 @@ def norm(h):
     if prio not in ("low", "medium", "high"):
         prio = "medium"
     hid = str(h.get("id", "")).strip() or slug(name)
+    # Optional measure: a unit (str) + measure_target (number). When present the
+    # habit is evaluated by AMOUNT over its period (e.g. 2.5/4 L) instead of by
+    # occurrence count; target_count is then irrelevant.
+    unit = str(h.get("unit", "")).strip()
+    mt = h.get("measure_target")
+    try:
+        mt = float(mt) if mt not in (None, "") else None
+    except (TypeError, ValueError):
+        mt = None
+    measured = mt is not None
     return {"id": hid, "name": name, "schedule_type": st, "direction": direction,
-            "target_count": tc, "priority": prio,
+            "target_count": tc, "priority": prio, "unit": unit,
+            "measure_target": mt, "measured": measured,
             "archived": bool(h.get("archived")), "notes": str(h.get("notes", "")).strip()}
 
 habits = [norm(h) for h in (data.get("habits") or []) if str(h.get("name", "")).strip()]
@@ -160,25 +171,27 @@ month_start = today.replace(day=1)
 lookback = today - datetime.timedelta(days=400)                   # bounds the streak scan
 
 # Single windowed query for every active habit; aggregate per-habit in python.
-events = {}  # id -> {date_iso: count}
+# Each date maps to (count, amount): count = occurrences, amount = measured sum.
+events = {}  # id -> {date_iso: [count, amount]}
 ids = [h["id"] for h in active]
 if ids and os.path.exists(db):
     try:
         con = sqlite3.connect(db, timeout=5)
         con.execute("PRAGMA busy_timeout=5000")
-        q = ("SELECT habit_id, occurred_on, count FROM habit_events "
+        q = ("SELECT habit_id, occurred_on, count, amount FROM habit_events "
              "WHERE habit_id IN (%s) AND occurred_on>=? AND occurred_on<=?"
              % ",".join("?" * len(ids)))
-        for hid, d, c in con.execute(q, ids + [lookback.isoformat(), today.isoformat()]):
-            events.setdefault(hid, {})
-            events[hid][d] = events[hid].get(d, 0) + (c or 0)
+        for hid, d, c, a in con.execute(q, ids + [lookback.isoformat(), today.isoformat()]):
+            slot = events.setdefault(hid, {}).setdefault(d, [0, 0.0])
+            slot[0] += (c or 0)
+            slot[1] += (a or 0.0)
         con.close()
     except Exception:
         events = {}
 
-def in_range(dates, start, end):
+def in_range(dates, start, end, idx=0):
     s, e = start.isoformat(), end.isoformat()
-    return sum(c for d, c in dates.items() if s <= d <= e)
+    return sum(v[idx] for d, v in dates.items() if s <= d <= e)
 
 def streak(dates):
     if not dates:
@@ -196,12 +209,20 @@ prio_rank = {"high": 0, "medium": 1, "low": 2}
 out = []
 for h in active:
     dates = events.get(h["id"], {})
-    today_count = dates.get(today.isoformat(), 0)
-    week_count = in_range(dates, week_start, week_end)
-    month_count = in_range(dates, month_start, today)
+    slot = dates.get(today.isoformat(), [0, 0.0])
+    today_count = slot[0]
+    today_amount = slot[1]
+    week_count = in_range(dates, week_start, week_end, 0)
+    month_count = in_range(dates, month_start, today, 0)
+    week_amount = in_range(dates, week_start, week_end, 1)
+    month_amount = in_range(dates, month_start, today, 1)
     last = max(dates) if dates else None
     st, tc, direction = h["schedule_type"], h["target_count"], h["direction"]
-    if st == "daily":
+    if h["measured"]:
+        # amount-based: progress is the summed measure over the period vs target
+        amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}[st]
+        used, target = amt, h["measure_target"]
+    elif st == "daily":
         used, target = today_count, (tc if tc else 1)
     elif st == "weekly":
         used, target = week_count, tc
@@ -215,7 +236,9 @@ for h in active:
         fulfilled = (used >= target) if target is not None else (used > 0)
     row = dict(h)
     row.update({"today_count": today_count, "week_count": week_count,
-                "month_count": month_count, "period_used": used, "period_target": target,
+                "month_count": month_count, "today_amount": today_amount,
+                "week_amount": week_amount, "month_amount": month_amount,
+                "period_used": used, "period_target": target,
                 "last_done": last, "streak": streak(dates) if st == "daily" else 0,
                 "fulfilled": fulfilled, "over": over, "at_cap": at_cap})
     out.append(row)
@@ -248,14 +271,32 @@ habits = data.get("habits") or []
 if not habits:
     sys.exit(0)
 LIMIT = 20
+
+def fmt(n):
+    # drop trailing .0 so 4.0 → "4" but 2.5 stays "2.5"
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return str(n)
+
 lines = []
 for h in habits[:LIMIT]:
     st, direction = h["schedule_type"], h["direction"]
     used, target = h["period_used"], h["period_target"]
-    tgt = target if target is not None else "—"
+    tgt = fmt(target) if target is not None else "—"
     tag = "·limit" if direction == "at_most" else ""
     head = f"- {h['name']} ({st}{tag}, {h['priority']}): "
-    if st == "daily":
+    if h["measured"]:
+        # amount-based: "2.5/4 L today ✅" — period word per schedule_type
+        period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}[st]
+        unit = (" " + h["unit"]) if h["unit"] else ""
+        if direction == "at_most":
+            flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
+        else:
+            flag = " ✅" if h["fulfilled"] else " ⏳"
+        body = f"{fmt(used)}/{tgt}{unit} {period_word}{flag}"
+        if st == "daily" and direction == "at_least" and h["streak"] > 0:
+            body += f" · streak {h['streak']}"
+    elif st == "daily":
         if direction == "at_most":
             body = f"{h['today_count']} today" + (" — OVER ⚠️" if h["over"] else "")
         else:
@@ -269,7 +310,7 @@ for h in habits[:LIMIT]:
             flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
         else:
             flag = " ✅" if h["fulfilled"] else " ⏳"
-        body = f"{used}/{tgt} {period_word}{flag}"
+        body = f"{fmt(used)}/{tgt} {period_word}{flag}"
     last = h["last_done"]
     body += f" · last {last}" if last else " · never logged"
     lines.append(head + body)
@@ -351,17 +392,34 @@ def load_habits(profile):
             tc = int(tc) if tc not in (None, "") else None
         except (TypeError, ValueError):
             tc = None
+        unit = str(h.get("unit", "")).strip()
+        mt = h.get("measure_target")
+        try:
+            mt = float(mt) if mt not in (None, "") else None
+        except (TypeError, ValueError):
+            mt = None
         out.append({"id": str(h.get("id", "")).strip() or slugify(name), "name": name,
                     "schedule_type": st, "direction": direction, "target_count": tc,
                     "priority": str(h.get("priority", "medium")).strip().lower(),
+                    "unit": unit, "measure_target": mt, "measured": mt is not None,
                     "archived": bool(h.get("archived"))})
     return out
 
+
+def fmtnum(n):
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return str(n)
+
 def criteria_str(h):
     st = h["schedule_type"]
+    sym = "≤" if h["direction"] == "at_most" else "≥"
+    if h["measured"]:
+        # measured habits read by amount: "daily ≥4 L", "weekly ≥20 km"
+        unit = (" " + h["unit"]) if h["unit"] else ""
+        return f"{st} {sym}{fmtnum(h['measure_target'])}{unit}"
     if st == "daily":
         return "daily (limit)" if h["direction"] == "at_most" else "daily"
-    sym = "≤" if h["direction"] == "at_most" else "≥"
     tc = h["target_count"] if h["target_count"] is not None else "?"
     return f"{st} {sym}{tc}"
 
@@ -374,17 +432,28 @@ def db_progress(con, h, date):
     today = datetime.date.fromisoformat(date)
     week_start = today - datetime.timedelta(days=today.weekday())
     month_start = today.replace(day=1)
-    def cnt(start):
-        row = con.execute("SELECT COALESCE(SUM(count),0) FROM habit_events "
+    col = "amount" if h["measured"] else "count"
+    def agg(start):
+        row = con.execute(f"SELECT COALESCE(SUM({col}),0) FROM habit_events "
                           "WHERE habit_id=? AND occurred_on>=? AND occurred_on<=?",
                           (h["id"], start.isoformat(), today.isoformat())).fetchone()
         return row[0] if row else 0
-    st = h["schedule_type"]; tc = h["target_count"]
+    st = h["schedule_type"]
+    if h["measured"]:
+        # amount-based progress, e.g. "2.5/4 L wk" / "12/20 km mo" / "1.5/4 L day"
+        unit = (" " + h["unit"]) if h["unit"] else ""
+        tgt = fmtnum(h["measure_target"]) if h["measure_target"] is not None else "?"
+        if st == "weekly":
+            return f"{fmtnum(agg(week_start))}/{tgt}{unit} wk"
+        if st == "monthly":
+            return f"{fmtnum(agg(month_start))}/{tgt}{unit} mo"
+        return f"{fmtnum(agg(today))}/{tgt}{unit} day"
+    tc = h["target_count"]
     if st == "weekly":
-        return f"{cnt(week_start)}/{tc if tc is not None else '?'} wk"
+        return f"{agg(week_start)}/{tc if tc is not None else '?'} wk"
     if st == "monthly":
-        return f"{cnt(month_start)}/{tc if tc is not None else '?'} mo"
-    return f"{cnt(week_start)}/7 wk"
+        return f"{agg(month_start)}/{tc if tc is not None else '?'} mo"
+    return f"{agg(week_start)}/7 wk"
 
 def front(date):
     return ("---\n"
@@ -430,7 +499,7 @@ def new_rows(habits, con, date):
     return [{"name": h["name"], "criteria": criteria_str(h), "progress": db_progress(con, h, date),
              "done": "", "count": "", "note": ""} for h in habits]
 
-def sync_one(con, f, date, name2id, now):
+def sync_one(con, f, date, by_name, now):
     if not os.path.exists(f):
         return 0
     _, rows, _ = parse_table(open(f).read())
@@ -441,12 +510,23 @@ def sync_one(con, f, date, name2id, now):
         nm = r["name"].strip()
         if not nm:
             continue
-        hid = name2id.get(nm.lower()) or slugify(nm)
-        try:
-            c = max(1, int(r["count"])) if str(r["count"]).strip() else 1
-        except (TypeError, ValueError):
+        h = by_name.get(nm.lower())
+        hid = (h["id"] if h else None) or slugify(nm)
+        cell = str(r["count"]).strip()
+        if h and h["measured"]:
+            # the Count cell holds the measured amount (e.g. 2.5); count stays 1
+            try:
+                amount = float(cell) if cell else None
+            except (TypeError, ValueError):
+                amount = None
             c = 1
-        done.append((hid, nm, c, (r["note"].strip() or None)))
+        else:
+            amount = None
+            try:
+                c = max(1, int(float(cell))) if cell else 1
+            except (TypeError, ValueError):
+                c = 1
+        done.append((hid, nm, c, amount, (r["note"].strip() or None)))
     ids = [d[0] for d in done]
     # mirror: the DB for this date must match the md's done rows
     if ids:
@@ -454,12 +534,13 @@ def sync_one(con, f, date, name2id, now):
                     % ",".join("?" * len(ids)), [date] + ids)
     else:
         con.execute("DELETE FROM habit_events WHERE occurred_on=?", (date,))
-    for hid, nm, c, note in done:
+    for hid, nm, c, amount, note in done:
         con.execute(
-            "INSERT INTO habit_events (habit_id,habit,occurred_on,count,source,note,created_at) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(habit_id,occurred_on) DO UPDATE SET "
-            "count=excluded.count, habit=excluded.habit, source=excluded.source, note=excluded.note",
-            (hid, nm, date, c, "habit-tracking", note, now))
+            "INSERT INTO habit_events (habit_id,habit,occurred_on,count,amount,source,note,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(habit_id,occurred_on) DO UPDATE SET "
+            "count=excluded.count, amount=excluded.amount, habit=excluded.habit, "
+            "source=excluded.source, note=excluded.note",
+            (hid, nm, date, c, amount, "habit-tracking", note, now))
     return len(done)
 
 op = sys.argv[1]
@@ -490,7 +571,7 @@ if op == "init":
     print(f)
 
 elif op == "mark":
-    profile, db, f, date, name, count, note = sys.argv[2:9]
+    profile, db, f, date, name, count, note, amount = sys.argv[2:10]
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -504,12 +585,21 @@ elif op == "mark":
             f"| {r['name']} | {r['criteria']} | {r['progress']} | {r['done']} | {r['count']} | {r['note']} |"
             for r in new_rows([x for x in habits if not x["archived"]], con, date)]) + "\n")
     pre, rows, post = parse_table(open(f).read())
-    try:
-        cval = str(max(1, int(count)))
-    except (TypeError, ValueError):
-        cval = "1"
-    if cval == "1":
-        cval = ""   # leave default count blank to keep the cell clean
+    if h["measured"]:
+        # measured habit: the Count cell carries the amount (e.g. "2.5").
+        # Prefer --amount; fall back to --count if that's the number given.
+        raw = amount.strip() if amount.strip() else count.strip()
+        try:
+            cval = fmtnum(float(raw)) if raw else ""
+        except (TypeError, ValueError):
+            cval = ""
+    else:
+        try:
+            cval = str(max(1, int(float(count))))
+        except (TypeError, ValueError):
+            cval = "1"
+        if cval == "1":
+            cval = ""   # leave default count blank to keep the cell clean
     target = h["name"].strip().lower()
     found = False
     for r in rows:
@@ -536,14 +626,14 @@ elif op == "sync":
         print("synced 0")
         sys.exit(0)
     habits = load_habits(profile)
-    name2id = {h["name"].strip().lower(): h["id"] for h in habits}
+    by_name = {h["name"].strip().lower(): h for h in habits}
     end = datetime.date.fromisoformat(end_date)
     con = sqlite3.connect(db)
     con.execute("PRAGMA busy_timeout=5000")
     total = 0
     for n in range(int(days) + 1):
         d = (end - datetime.timedelta(days=n)).isoformat()
-        total += sync_one(con, os.path.join(trackdir, d + ".md"), d, name2id, now)
+        total += sync_one(con, os.path.join(trackdir, d + ".md"), d, by_name, now)
     con.commit()
     con.close()
     print(f"synced {total}")
@@ -551,11 +641,11 @@ elif op == "sync":
 elif op == "consolidate":
     profile, db, f, date, now = sys.argv[2:7]
     habits = load_habits(profile)
-    name2id = {h["name"].strip().lower(): h["id"] for h in habits}
+    by_name = {h["name"].strip().lower(): h for h in habits}
     if os.path.exists(db):
         con = sqlite3.connect(db)
         con.execute("PRAGMA busy_timeout=5000")
-        sync_one(con, f, date, name2id, now)
+        sync_one(con, f, date, by_name, now)
         con.commit()
         con.close()
     # prune the day's file to only the habits actually done
@@ -579,15 +669,16 @@ pbrain_habit_track_init() {
 }
 
 # Mark a habit done in the date's tracking file (creating it if needed). Rejects
-# names that aren't a tracked habit. count/note optional.
-pbrain_habit_mark() {  # <date> <name> [count] [note]
+# names that aren't a tracked habit. count/note/amount optional. For a measured
+# habit (one with a unit + target) the amount is what's recorded.
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount]
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   file="$(pbrain_habit_track_file "$date")"
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
-    "$date" "${2:-}" "${3:-1}" "${4:-}"
+    "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by
@@ -713,7 +804,13 @@ for h in data.get("habits") or []:
     if not n:
         continue
     kind = str(h.get("kind", "build")).strip().lower()
-    out.append(f"{n} [{kind}]")
+    mt = h.get("measure_target")
+    if mt not in (None, ""):
+        unit = str(h.get("unit", "")).strip()
+        tag = "measured: " + str(mt) + ((" " + unit) if unit else "")
+        out.append(f"{n} [{kind}, {tag}]")
+    else:
+        out.append(f"{n} [{kind}]")
 print(" | ".join(out))
 ' 2>/dev/null || true)"
   [[ -n "$names" ]] || return 0
@@ -729,7 +826,9 @@ print(" | ".join(out))
   printf '%s\n' "If — and only if — the user evidenced any of these habits this session"
   printf '%s\n' "(did it, is about to, or explicitly skipped it), MARK each ONE TIME in"
   printf '%s\n' "today's tracking markdown with:"
-  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact habit name>\" --date $today [--count N] [--note \"...\"]"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact habit name>\" --date $today [--count N] [--amount X] [--note \"...\"]"
+  printf '%s\n' "For a habit tagged [measured: …] above, pass the quantity with --amount (e.g."
+  printf '%s\n' "--amount 2.5 for 2.5 L of water); plain habits need no count/amount at all."
   printf '%s\n' "This ticks the habit in today's habit-tracking/<date>.md (the human-facing"
   printf '%s\n' "log); /end-of-day consolidates that file into the analysis DB. Match the"
   printf '%s\n' "user's words to a habit name above; don't invent or infer habits they didn't"
@@ -752,7 +851,7 @@ print(" | ".join(out))
     printf '%s\n' "Suggested recently — do NOT re-suggest these: $recent"
   fi
   printf '%s\n' "If the user wants it, add it with:"
-  printf '%s\n' "  bash \"$cmd_path\" add --name \"<X>\" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high]"
+  printf '%s\n' "  bash \"$cmd_path\" add --name \"<X>\" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit \"L\"] [--measure-target N] [--priority low|medium|high]"
   printf '%s\n' "Whether or not they accept, record the suggestion so it isn't re-nagged:"
   printf '%s\n' "  bash \"$cmd_path\" suggest-seen --name \"<X>\""
   printf '%s\n' "If the user has told you they don't want habit suggestions, skip this."

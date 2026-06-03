@@ -423,6 +423,124 @@ PY
   [[ "$output" == *"done today ✅"* ]]
 }
 
+# ── measured habits (first-class quantity tracking) ──────────────────────────
+@test "add stores a unit + measure_target on the habit" {
+  run HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 --priority high
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"4 L"* ]]
+  run pbrain_habits_json
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "water")
+assert h["unit"] == "L", h
+assert h["measure_target"] == 4, h
+'
+}
+
+@test "add keeps a fractional measure_target as a float" {
+  HABITS add --name "Coffee" --type daily --direction at_most --unit cups --measure-target 2.5
+  run pbrain_habits_json
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "coffee")
+assert h["measure_target"] == 2.5, h
+'
+}
+
+@test "status evaluates a measured daily habit by amount, not occurrences" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
+  HABITS sync --days 0 >/dev/null
+  run pbrain_habits_status 2026-06-03
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "water")
+assert h["measured"] is True
+assert h["period_used"] == 2.5 and h["period_target"] == 4
+assert h["fulfilled"] is False        # 2.5 < 4
+'
+  HABITS mark --name "Water" --date 2026-06-03 --amount 4 >/dev/null
+  HABITS sync --days 0 >/dev/null
+  run pbrain_habits_status 2026-06-03
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "water")
+assert h["fulfilled"] is True         # 4 >= 4
+'
+}
+
+@test "status sums amounts over the week for a measured weekly habit" {
+  HABITS add --name "Run" --type weekly --direction at_least --unit km --measure-target 20 >/dev/null
+  HABITS mark --name "Run" --date 2026-06-01 --amount 8 >/dev/null
+  HABITS mark --name "Run" --date 2026-06-03 --amount 12 >/dev/null
+  HABITS sync --days 7 >/dev/null
+  run pbrain_habits_status 2026-06-03
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "run")
+assert h["period_used"] == 20 and h["fulfilled"] is True, h
+'
+}
+
+@test "rollup renders measured progress with the unit" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 --priority high >/dev/null
+  HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
+  HABITS sync --days 0 >/dev/null
+  run pbrain_habits_rollup 2026-06-03
+  [[ "$output" == *"2.5/4 L today ⏳"* ]]
+}
+
+@test "rollup flags a measured limit habit over its target" {
+  HABITS add --name "Sugar" --type daily --direction at_most --unit g --measure-target 30 >/dev/null
+  HABITS mark --name "Sugar" --date 2026-06-03 --amount 45 >/dev/null
+  HABITS sync --days 0 >/dev/null
+  run pbrain_habits_rollup 2026-06-03
+  [[ "$output" == *"45/30 g today"* ]]
+  [[ "$output" == *"OVER"* ]]
+}
+
+@test "mark writes the amount into the Count cell of the tracking md" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"daily ≥4 L"* ]]
+  [[ "$body" == *"| Water |"*"| x | 2.5 |"* ]]
+}
+
+@test "sync stores a measured amount in the amount column (count stays 1)" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
+  HABITS sync --days 0 >/dev/null
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select count,amount from habit_events where habit_id='water' and occurred_on='2026-06-03'\").fetchone())" "$PBRAIN_DB_FILE"
+  [ "$output" = "(1, 2.5)" ]
+}
+
+@test "log records an amount on a measured habit" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  HABITS log --name "Water" --date 2026-06-03 --amount 3.5 --source journal
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select amount from habit_events where habit_id='water'\").fetchone()[0])" "$PBRAIN_DB_FILE"
+  [ "$output" = "3.5" ]
+}
+
+@test "edit can clear a measure back to occurrence-based" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  HABITS edit --id water --measure-target ""
+  run pbrain_habits_json
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "water")
+assert h["measure_target"] is None, h
+'
+}
+
+@test "emit_habits_extract tags measured habits and mentions --amount" {
+  HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
+  run pbrain_emit_habits_extract journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"measured: 4 L"* ]]
+  [[ "$output" == *"--amount"* ]]
+}
+
 # ── new-habit suggestion nudge + TTL suppression ─────────────────────────────
 @test "emit_habits_extract includes a gated suggest block" {
   _write_profile
