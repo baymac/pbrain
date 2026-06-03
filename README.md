@@ -137,7 +137,9 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
 | `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
-| `/diet-journal` | Diet log + nutrition analysis | `$VAULT/fitness/diet-tracking/` |
+| `/habits` | Track habits to build or cap; patterns vs caps; auto-logged from your journals | `$VAULT/life/Habits Profile.md` + local DB |
+| `/remind <text>` | Reminders that fire as macOS notifications; ride along with plan/end-of-day | local SQLite DB (no vault file) |
+| `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
 
@@ -159,7 +161,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
-`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
+`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/habits`, `/remind <text>`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` and `/remind` also surface automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -175,11 +177,13 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
 | `PBRAIN_PREFS_DIR` | all commands (per-command preferences) | `~/.config/pbrain/prefs` |
 | `PBRAIN_FEEDBACK_DIR` | all commands (quality-fix capture) | `~/.config/pbrain/feedback` |
+| `PBRAIN_DB_FILE` | `/habits`, `/remind` (shared SQLite store: habit events + reminders) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_DIET_DIR` | `/diet-journal` | `$VAULT/fitness/diet-tracking` |
 | `PBRAIN_DIET_PLAN_FILE` | `/diet-journal` | `$VAULT/fitness/Diet Plan.md` |
 | `PBRAIN_DIET_PROFILE_FILE` | `/diet-journal` | `~/.config/pbrain/diet-profile.json` |
+| `PBRAIN_FOOD_LIBRARY_FILE` | `/diet-journal` (named-food library — log by name) | `$VAULT/fitness/Food Library.md` |
 | `PBRAIN_FITNESS_DIR` | `/fitness-journal`, read by `/diet-journal`, `/plan-my-day` | `$VAULT/fitness/daily-tracking` |
 | `PBRAIN_GYM_PLAN_FILE` | `/fitness-journal` | `$VAULT/fitness/Gym Plan.md` |
 | `PBRAIN_FITNESS_PLANS_DIR` | `/fitness-journal` | `$VAULT/fitness/plans` |
@@ -187,6 +191,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
 | `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
 | `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/weekly-review` | `$VAULT/life/Goals Profile.md` (markdown; JSON in a fenced block) |
+| `PBRAIN_HABITS_PROFILE_FILE` | `/habits`, read by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/Habits Profile.md` (markdown; JSON in a fenced block) |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
 | `PBRAIN_STALE_DAYS` | `/loose-ends` | `7` (age at which an item counts as stale) |

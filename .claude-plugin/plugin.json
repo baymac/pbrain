@@ -1,12 +1,12 @@
 {
   "name": "pbrain",
-  "version": "0.2.0",
-  "description": "Daily-ritual scaffolding for Obsidian — journal, gratitude, fitness, diet, plan-my-day, brainstorm, organize clippings. All commands read/write into an Obsidian-synced vault.",
+  "version": "0.3.0",
+  "description": "Daily-ritual scaffolding for Obsidian — journal, gratitude, fitness, diet, plan-my-day, brainstorm, habits, reminders, organize clippings. All commands read/write into an Obsidian-synced vault.",
   "author": {
     "name": "baymac",
     "url": "https://github.com/baymac"
   },
   "homepage": "https://github.com/baymac/pbrain",
   "repository": "https://github.com/baymac/pbrain",
-  "keywords": ["pbrain", "obsidian", "journal", "journaling", "gratitude", "fitness", "diet", "planning", "second-brain", "knowledge-management", "personal", "daily-ritual"]
+  "keywords": ["pbrain", "obsidian", "journal", "journaling", "gratitude", "fitness", "diet", "planning", "habits", "habit-tracking", "reminders", "second-brain", "knowledge-management", "personal", "daily-ritual"]
 }

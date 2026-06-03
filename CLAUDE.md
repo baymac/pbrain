@@ -47,13 +47,13 @@ If a new content type doesn't fit any of these, ask before creating a new subdir
 
 The day starts on `/journal`, then `/gratitude-journal`. Both anchor the user's baseline before agent work happens. The journal goes first: it's a raw brain dump that clears the head (today's mood, yesterday's residue, loud thoughts, open questions). Gratitude then lands on cleared ground — you can't genuinely ground on *enough* while still carrying unprocessed residue.
 
-When the user invokes any slash command other than `/journal`, `/gratitude-journal`, or `/init-obsidian` — OR asks for help with personal reflection / capture / brainstorming — check the daily files in this order:
+When the user invokes any slash command other than `/journal`, `/gratitude-journal`, `/init-obsidian`, `/remind`, or `/habits` — OR asks for help with personal reflection / capture / brainstorming — check the daily files in this order:
 
 1. **Journal first.** If `vault/life/daily-tracking/YYYY-MM-DD.md` doesn't exist, suggest `/journal` before proceeding. The raw dump clears the head and surfaces what's actually on the user's mind.
 2. **Then gratitude.** If the journal exists but `vault/life/gratitude-journal/YYYY-MM-DD.md` doesn't, suggest `/gratitude-journal` before proceeding. With the head cleared, gratitude anchors baseline to *enough* so the rest of the day runs on overflow.
 3. **Otherwise proceed.**
 
-Suggest once, never block. The user can override and continue. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt from the check (they're the entry points).
+Suggest once, never block. The user can override and continue. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt from the check (they're the entry points); `/remind` and `/habits` are exempt too (quick utilities you fire any time).
 
 ---
 
@@ -69,6 +69,9 @@ pbrain/
 ├── lib/prefs.sh                        ← per-command preference injection (pbrain_emit_prefs)
 ├── lib/self-improve.sh                 ← end-of-session feedback capture (pbrain_emit_self_improve)
 ├── lib/profile.sh                      ← goals-profile JSON extractor (pbrain_profile_json)
+├── lib/db.sh                           ← shared SQLite store (pbrain_db_init; habit events + reminders)
+├── lib/habits.sh                       ← habits profile/rollup + ride-along extraction (pbrain_emit_habits_extract)
+├── lib/reminders.sh                    ← reminder notify/tick/surfacing (pbrain_notify, pbrain_reminders_*)
 ├── tests/                              ← bats tests for the shared lib/ helpers
 ├── docs/                               ← one short user-facing doc per command
 ├── gbrain/                             ← gbrain operations (separate from the plugin)
@@ -87,7 +90,7 @@ There's no `.claude/commands` symlink at the repo root — by design. Slash comm
 ## Conventions for editing scripts
 
 - Shell: `#!/usr/bin/env bash` with `set -euo pipefail` on every script.
-- Complex logic (JSON parsing, markdown conversion): inline Python 3 heredoc inside the shell script. No external deps — stdlib only (no pip packages). Modules in use: `json`, `re`, `sys`, `os`, `datetime`, `subprocess`, `shutil`, `glob`, `random`, `collections`, `uuid`.
+- Complex logic (JSON parsing, markdown conversion): inline Python 3 heredoc inside the shell script. No external deps — stdlib only (no pip packages). Modules in use: `json`, `re`, `sys`, `os`, `datetime`, `calendar`, `sqlite3`, `subprocess`, `shutil`, `glob`, `random`, `collections`, `uuid`. (`sqlite3` is Python stdlib — the shared store in `lib/db.sh` uses it, not the `sqlite3` CLI binary.)
 - Scripts must be idempotent. Re-running on unchanged state should produce the same result without side effects.
 - All `.sh` files must be executable (`chmod +x`).
 - Slash command sources live **only** in `commands/`. Commands become available globally via `~/.claude/commands` → `<repo>/commands` (one-time user symlink). Never duplicate sources elsewhere.
@@ -118,7 +121,7 @@ Sources live in `commands/`. Available in every CC session once the user symlink
 | `/init-obsidian` | bootstraps a vault, optional iCloud migration + private dir + git remote, writes `~/.config/pbrain/vault` | — |
 | `/journal` | `$VAULT_DIR/life/daily-tracking/` | `PBRAIN_JOURNAL_DIR` |
 | `/brainstorm <topic>` | `$VAULT_DIR/agent-work/brainstorms/{tbd,backlog,done}/` | `PBRAIN_BRAINSTORMS_DIR` |
-| `/diet-journal` | `$VAULT_DIR/fitness/diet-tracking/` | `PBRAIN_DIET_DIR` (+ `PBRAIN_FITNESS_DIR` for cross-ref, `PBRAIN_DIET_PLAN_FILE` → `$VAULT_DIR/fitness/Diet Plan.md`, `PBRAIN_DIET_PROFILE_FILE` → profile JSON at `~/.config/pbrain/diet-profile.json`) |
+| `/diet-journal` | `$VAULT_DIR/fitness/diet-tracking/` | `PBRAIN_DIET_DIR` (+ `PBRAIN_FITNESS_DIR` for cross-ref, `PBRAIN_DIET_PLAN_FILE` → `$VAULT_DIR/fitness/Diet Plan.md`, `PBRAIN_DIET_PROFILE_FILE` → profile JSON at `~/.config/pbrain/diet-profile.json`, `PBRAIN_FOOD_LIBRARY_FILE` → named-foods library at `$VAULT_DIR/fitness/Food Library.md`) |
 | `/fitness-journal` | `$VAULT_DIR/fitness/daily-tracking/` | `PBRAIN_FITNESS_DIR` (+ `PBRAIN_GYM_PLAN_FILE`, `PBRAIN_FITNESS_PLANS_DIR` → per-activity plans at `$VAULT_DIR/fitness/plans/`, `PBRAIN_FITNESS_ACTIVITIES_FILE` → activities JSON config at `~/.config/pbrain/fitness-activities.json`; `PBRAIN_DIET_DIR` for the post-session `/diet-journal` suggestion cross-ref) |
 | `/gratitude-journal` | `$VAULT_DIR/life/gratitude-journal/` | `PBRAIN_GRATITUDE_DIR` |
 | `/plan-my-day` | `$VAULT_DIR/life/daily-planning/` | `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE` → goals profile at `$VAULT_DIR/life/Goals Profile.md` (markdown; structured data in a fenced `json` block) (+ `PBRAIN_FITNESS_DIR`, `PBRAIN_JOURNAL_DIR`, `PBRAIN_WEEKLY_DIR` for cross-ref; the last drives the Monday weekly-review nudge) |
@@ -127,8 +130,10 @@ Sources live in `commands/`. Available in every CC session once the user symlink
 | `/recall <query>` | read-only; case-insensitive markdown grep across `life/`, `agent-work/`, `startup/`, `side-quests/`, `software-dev/`, `notes/` (uses `rg` if available, falls back to `grep -r`) | `PBRAIN_RECALL_SCOPE` (space-separated subdir list relative to vault; missing subdirs are skipped) |
 | `/loose-ends` | read-only surfacing dashboard; aggregates stale `tbd/` brainstorms, unanswered journal/brainstorm open questions, unchecked plan todos, recurring tomorrow-seeds, and `current_focus` drift. Writes nothing. | `PBRAIN_STALE_DAYS` (default `7`), `PBRAIN_LOOSE_ENDS_LOOKBACK` (default `30`); reads `PBRAIN_JOURNAL_DIR`, `PBRAIN_BRAINSTORMS_DIR`, `PBRAIN_PLAN_DIR`, `PBRAIN_PLAN_PROFILE_FILE` |
 | `/organize-clippings` | source: `$VAULT_DIR/Clippings/`; destinations dynamically discovered from `$VAULT_DIR` top-level dirs (always excludes `agent-work/` and `Clippings/`), with the user picking a subset at session start | `PBRAIN_CLIPPINGS_DIR`, `PBRAIN_CLIPPINGS_TARGETS` (comma-separated subset or `all` to skip the prompt) |
+| `/habits` | habits profile at `$VAULT_DIR/life/Habits Profile.md` (markdown; JSON in a fenced block); event log in the shared SQLite DB. First run builds the profile, then a dashboard (week/month counts vs caps). Auto-logged from journaling/planning commands via `pbrain_emit_habits_extract` | `PBRAIN_HABITS_PROFILE_FILE`, `PBRAIN_DB_FILE` |
+| `/remind <text>` | reminders in the shared SQLite DB; fire as macOS notifications (osascript), surfaced + opportunistically fired in `/plan-my-day` and `/end-of-day`, with an optional `/remind install` launchd poller. `tick` subcommand bypasses `lib/vault.sh` (poller must not need a vault) | `PBRAIN_DB_FILE` |
 
-`/init-obsidian` is the only command in this table that doesn't go through `lib/vault.sh` — it runs *before* a vault is configured. It writes the config that every other command reads.
+`/init-obsidian` is the only command in this table that doesn't go through `lib/vault.sh` — it runs *before* a vault is configured. It writes the config that every other command reads. (`/remind tick`, the background poller path, also bypasses `lib/vault.sh` on purpose — it only needs the DB, and must not exit when no vault dir exists.)
 
 ### Upgrade prompt
 
@@ -148,6 +153,12 @@ Two shared helpers, defined in `lib/prefs.sh` and `lib/self-improve.sh` and sour
 - `pbrain_emit_self_improve <cmd> [plan-file] [plan-label]` — at the end of output. Emits a `--- SELF-IMPROVE CHECK (mode: …) ---` block telling you to reflect on whether the user gave a genuine standing preference or correction *this session*. **Fire only on explicit feedback — stay silent on neutral sessions.** Then capture per the block: preferences consolidate into `prefs/<cmd>.md` (read existing first, update don't duplicate), quality fixes append to `~/.config/pbrain/feedback/<cmd>.md` with an optional `gh issue` offer. When a `plan-file`+`plan-label` are passed (the plan-owning commands — `/plan-my-day` → goals profile, `/diet-journal` → diet plan, `/fitness-journal` → fitness plans), the block also gains a **PLAN UPDATE** route: a lasting plan change raised in-session is proposed against the plan file and written only on an explicit per-change yes (keeping any fenced JSON valid). `/weekly-review` does plan enrichment via its richer Step 4 instead, so it calls this with no plan args.
 
 Mode comes from `PBRAIN_SELF_IMPROVE` (`prefs` default / `off` / `dev`). `dev` is honoured only when `PBRAIN_DEV_DIR` is set, and lets you *propose* edits to live command source — always as a diff requiring explicit yes, never auto-applied. Both helpers are written to never exit non-zero (they're sourced into commands under `set -euo pipefail`); call sites add `|| true` as belt-and-suspenders. Tests live in `tests/*.bats` (run `bats tests/`).
+
+### Shared SQLite layer + habit extraction
+
+`lib/db.sh`, `lib/habits.sh`, and `lib/reminders.sh` are sourced through `lib/vault.sh` too (after `lib/profile.sh`, in that dependency order). They back `/habits` and `/remind` on one local SQLite DB (`~/.config/pbrain/pbrain.db`, override `PBRAIN_DB_FILE`) — operational state (habit events + the reminder queue) that's better queried than grepped. Human-facing definitions stay markdown in the vault (habits profile, food library), browsable in Obsidian.
+
+`pbrain_emit_habits_extract <cmd>` rides along like the self-improve helpers: it appends a HABIT EXTRACTION block telling you to log any tracked habits the user evidenced this session (via `commands/habits.sh log …`), and is **silent when no habits profile exists** — so it costs nothing until the user opts in. It's wired into `/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, and `/end-of-day`. The last two also surface habit patterns (rollup vs caps) and reminders inline. All these helpers follow the same never-exit-non-zero discipline (tests in `tests/db.bats`, `tests/habits.bats`, `tests/reminders.bats`).
 
 ---
 
