@@ -81,6 +81,12 @@ _PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 [[ -f "$_PBRAIN_LIB_DIR/prefs.sh" ]] && source "$_PBRAIN_LIB_DIR/prefs.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/self-improve.sh" ]] && source "$_PBRAIN_LIB_DIR/self-improve.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/profile.sh" ]] && source "$_PBRAIN_LIB_DIR/profile.sh" || true
+# Shared SQLite store + the habits / reminders helpers built on it. Order
+# matters: db.sh first (defines PBRAIN_DB_FILE), then habits.sh (needs
+# pbrain_profile_json from profile.sh and the DB) and reminders.sh.
+[[ -f "$_PBRAIN_LIB_DIR/db.sh" ]] && source "$_PBRAIN_LIB_DIR/db.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/habits.sh" ]] && source "$_PBRAIN_LIB_DIR/habits.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/reminders.sh" ]] && source "$_PBRAIN_LIB_DIR/reminders.sh" || true
 unset _PBRAIN_LIB_DIR
 
 # Best-effort version check. Prints `UPGRADE_AVAILABLE <old> <new>` to stdout

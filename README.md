@@ -137,7 +137,9 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
 | `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
-| `/diet-journal` | Diet log + nutrition analysis | `$VAULT/fitness/diet-tracking/` |
+| `/habits` | Track habits, each with its own criteria (daily / N-per-week / N-per-month, build or cap); day-to-day log in dated `life/habit-tracking/<date>.md` files (DB synced from them for analysis); progress vs each, top 20 by priority; auto-marked from your journals | `$VAULT/life/Habits Profile.md` + `$VAULT/life/habit-tracking/` + local DB |
+| `/remind <text>` | Reminders that fire as macOS notifications; ride along with plan/end-of-day | local SQLite DB (no vault file) |
+| `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
 
@@ -159,7 +161,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
-`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed.
+`/brainstorm <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/habits`, `/remind <text>`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` and `/remind` also surface automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -173,13 +175,15 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path |
 | `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
-| `PBRAIN_PREFS_DIR` | all commands (per-command preferences) | `~/.config/pbrain/prefs` |
+| `PBRAIN_PREFS_DIR` | all commands (`_global.md` + per-command `<cmd>.md` preferences) | `~/.config/pbrain/prefs` |
 | `PBRAIN_FEEDBACK_DIR` | all commands (quality-fix capture) | `~/.config/pbrain/feedback` |
+| `PBRAIN_DB_FILE` | `/habits`, `/remind` (shared SQLite store: habit events + reminders) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_DIET_DIR` | `/diet-journal` | `$VAULT/fitness/diet-tracking` |
 | `PBRAIN_DIET_PLAN_FILE` | `/diet-journal` | `$VAULT/fitness/Diet Plan.md` |
 | `PBRAIN_DIET_PROFILE_FILE` | `/diet-journal` | `~/.config/pbrain/diet-profile.json` |
+| `PBRAIN_FOOD_LIBRARY_FILE` | `/diet-journal` (named-food library — log by name) | `$VAULT/fitness/Food Library.md` |
 | `PBRAIN_FITNESS_DIR` | `/fitness-journal`, read by `/diet-journal`, `/plan-my-day` | `$VAULT/fitness/daily-tracking` |
 | `PBRAIN_GYM_PLAN_FILE` | `/fitness-journal` | `$VAULT/fitness/Gym Plan.md` |
 | `PBRAIN_FITNESS_PLANS_DIR` | `/fitness-journal` | `$VAULT/fitness/plans` |
@@ -187,6 +191,10 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
 | `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
 | `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/weekly-review` | `$VAULT/life/Goals Profile.md` (markdown; JSON in a fenced block) |
+| `PBRAIN_HABITS_PROFILE_FILE` | `/habits`, read by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/Habits Profile.md` (markdown; JSON in a fenced block) |
+| `PBRAIN_HABIT_TRACK_DIR` | `/habits` (dated tracking files), synced→DB by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/habit-tracking/` |
+| `PBRAIN_HABIT_SUGGEST_FILE` | `/habits` + journaling commands (new-habit nudge suppress-list) | `~/.config/pbrain/habit-suggest-seen` |
+| `PBRAIN_HABIT_SUGGEST_TTL_DAYS` | `/habits` + journaling commands | `14` (days a suggested habit stays suppressed) |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
 | `PBRAIN_STALE_DAYS` | `/loose-ends` | `7` (age at which an item counts as stale) |
@@ -236,7 +244,18 @@ pbrain/
 │   └── plugin.json                     ← Claude plugin manifest
 ├── commands/                           ← .md + .sh pairs for each slash command
 ├── lib/
-│   └── vault.sh                        ← shared VAULT_DIR resolver, sourced by each command
+│   ├── vault.sh                        ← shared VAULT_DIR resolver + entry point for helpers
+│   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
+│   ├── prefs.sh                        ← per-command preference injection
+│   ├── self-improve.sh                 ← end-of-session feedback capture
+│   ├── profile.sh                      ← goals-profile JSON extractor
+│   ├── db.sh                           ← shared SQLite store (habit events + reminders)
+│   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
+│   └── reminders.sh                    ← reminder notify/tick/surfacing
+├── scripts/
+│   ├── install-commands.sh             ← symlink commands into ~/.claude/commands/
+│   └── uninstall-commands.sh           ← reverse of install
+├── tests/                              ← bats test suite for lib/ helpers
 ├── docs/                               ← one short doc per command (user-facing)
 ├── gbrain/                             ← gbrain ops (sync, launchd, docs)
 │   ├── scripts/

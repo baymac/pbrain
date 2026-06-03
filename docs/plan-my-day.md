@@ -52,13 +52,19 @@ It's a normal Obsidian note (standard frontmatter + a short intro), with the str
 
 After setup, every run:
 
-1. Reads your profile + today's `/fitness-journal` + today's `/journal` + the last 7 day-plans + a 30-day cadence signal across recent plans.
+1. Reads your profile + today's `/fitness-journal` + today's `/journal` + the last 7 day-plans + a 30-day cadence signal across recent plans + any pending reminders + your habit rollup (week/month vs caps).
 2. Surfaces your current focus areas as the anchor for today (or nudges you to set them if empty).
-3. Asks a short 6-question check-in (energy, today's push from your focus areas, commitments, available hours, what to avoid, mood for creative).
+3. Asks a short 7-question check-in (energy, today's push from your focus areas, commitments, available hours, what to avoid, mood for creative, and **anything to declutter** — see below).
 4. Sweeps the cadence signal against your `personal_anchors` — only suggests calls/check-ins for contacts you actually listed.
-5. Generates a structured day plan tied back to the chosen goals.
+5. Surfaces what needs attention from reminders + habits (see below), and generates a structured day plan tied back to the chosen goals.
 
-The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors** (fitness + commitments), **Work** (blocks annotated with which goal they serve), **Breaks & movement**, **Eating**, **Relationships** (only if due and named in profile), **Creative** (tied to your craft), **Rest**, **Avoiding today** (union of your answer + profile anti-patterns), **Notes**, and a **How it went** template for end-of-day reflection — including a **Goal progress** row.
+The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors** (fitness + commitments), **Work** (blocks annotated with which goal they serve), **Breaks & movement**, **Eating**, **Relationships** (only if due and named in profile), **Creative** (tied to your craft), **Rest**, **Avoiding today** (union of your answer + profile anti-patterns), **Notes**, **Declutter** (a tidy task to tick off later), and a **How it went** template for end-of-day reflection — including a **Goal progress** row.
+
+## Declutter, reminders, habits
+
+- **Declutter** — the check-in asks if there's a small mess to tidy today (inbox, desk, files, tabs). Whatever you name lands in a **`## Declutter`** checkbox in the plan, and `/end-of-day` asks whether you got to it and ticks it off. The question is **opt-out**: say "stop asking me to declutter" and the self-improve loop saves that preference, after which it's dropped.
+- **Reminders** — anything due today or overdue is surfaced at the top (and has already fired as a macOS notification). Mark one done just by saying so. If a set-time thing comes up while planning ("call X at 3"), the planner offers to set it as a reminder. See [`remind.md`](remind.md).
+- **Habits** — if you've set up [`/habits`](habits.md), the planner notes anything that needs attention (a limit habit over its cap, a high-priority build habit lagging this week) and weaves it into the day. Habits you mention are logged automatically. If you haven't set habits up, it nudges once (non-blocking).
 
 **Cadence thresholds:** parents ≥ 6 days → suggest a call, siblings ≥ 14, friends ≥ 7, creative ≥ 4 (if yes/maybe), walk ≥ 2 (if a walk habit is in your profile).
 
@@ -73,6 +79,8 @@ The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors
 | `PBRAIN_VAULT` | Vault root |
 | `PBRAIN_PLAN_DIR` | Where today's plan is written |
 | `PBRAIN_PLAN_PROFILE_FILE` | Goals profile note (default: `$VAULT/life/Goals Profile.md`; JSON in a fenced block) |
+| `PBRAIN_HABITS_PROFILE_FILE` | Habits profile note (default: `$VAULT/life/Habits Profile.md`; cross-ref for the habit rollup) |
+| `PBRAIN_DB_FILE` | Shared SQLite store for reminders + habit events (default: `~/.config/pbrain/pbrain.db`) |
 | `PBRAIN_FITNESS_DIR` | Where the script reads today's fitness entry from (cross-ref) |
 | `PBRAIN_JOURNAL_DIR` | Where the script reads today's daily journal from (cross-ref) |
 | `PBRAIN_WEEKLY_DIR` | Where the script checks for last week's review (Monday nudge, cross-ref) |

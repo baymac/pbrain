@@ -42,7 +42,7 @@
 # running under `set -euo pipefail`. Call sites still append `|| true`.
 
 pbrain_emit_self_improve() {
-  local cmd mode prefs_dir feedback_dir prefs_file feedback_file
+  local cmd mode prefs_dir feedback_dir prefs_file feedback_file global_file
   local dev_dir dev_branch dev_dirty plan_file plan_label
   cmd="${1:-}"
   [[ -n "$cmd" ]] || return 0
@@ -76,6 +76,7 @@ pbrain_emit_self_improve() {
   prefs_dir="${PBRAIN_PREFS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/prefs}"
   feedback_dir="${PBRAIN_FEEDBACK_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/feedback}"
   prefs_file="$prefs_dir/$cmd.md"
+  global_file="$prefs_dir/_global.md"
   feedback_file="$feedback_dir/$cmd.md"
 
   printf '%s\n' ""
@@ -92,14 +93,22 @@ pbrain_emit_self_improve() {
   printf '%s\n' ""
   printf '%s\n' "Only if there was a genuine standing preference or correction:"
   printf '%s\n' "  1. Classify each item as either:"
-  printf '%s\n' "     - PREFERENCE: how THIS user wants /$cmd to behave."
+  printf '%s\n' "     - PREFERENCE: how this user wants pbrain to behave. Sub-classify scope:"
+  printf '%s\n' "         * GLOBAL  — applies across commands, NOT just /$cmd. Anything that"
+  printf '%s\n' "           silences a suggestion/nudge fired by more than one command belongs"
+  printf '%s\n' "           here (e.g. \"stop suggesting /journal or /gratitude-journal before"
+  printf '%s\n' "           other commands\", \"don't nudge me about X anywhere\"). The"
+  printf '%s\n' "           morning-sequence check is global — a skip of it is GLOBAL."
+  printf '%s\n' "         * COMMAND — applies to /$cmd only (how /$cmd itself should behave)."
   printf '%s\n' "     - QUALITY FIX: a bug or improvement that would help everyone."
   printf '%s\n' "  2. Show the exact line(s) you would save and get an explicit yes before"
   printf '%s\n' "     writing anything."
   printf '%s\n' "  3. On yes:"
-  printf '%s\n' "     - PREFERENCE -> consolidate into $prefs_file. Read it first; if a related"
-  printf '%s\n' "       line already exists, update/replace it (reconcile any contradiction with"
-  printf '%s\n' "       the user) instead of appending a duplicate. Create the file if missing."
+  printf '%s\n' "     - PREFERENCE (GLOBAL) -> consolidate into $global_file. Read it first;"
+  printf '%s\n' "       update a related line rather than duplicating. Create the file if missing."
+  printf '%s\n' "     - PREFERENCE (COMMAND) -> consolidate into $prefs_file. Read it first; if a"
+  printf '%s\n' "       related line already exists, update/replace it (reconcile any contradiction"
+  printf '%s\n' "       with the user) instead of appending a duplicate. Create the file if missing."
   printf '%s\n' "     - QUALITY FIX -> append to $feedback_file (create if missing). Then offer"
   printf '%s\n' "       once: \"Want me to open a GitHub issue for this?\" Only run \`gh issue"
   printf '%s\n' "       create\` if they say yes AND \`gh\` is available."

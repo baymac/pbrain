@@ -633,6 +633,6 @@ Step 6 — Write the final content to: $OUT_FILE
   $DIET_SUGGESTION
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction (silent if no habits profile) + self-improvement capture.
+pbrain_emit_habits_extract "fitness-journal" || true
 pbrain_emit_self_improve "fitness-journal" "$PLANS_DIR" "fitness plans (gym plan at $GYM_PLAN_FILE, plus per-activity plans under this dir)" || true

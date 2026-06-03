@@ -5,19 +5,31 @@
 #
 #   pbrain_emit_prefs <command-name>
 #
-# It reads the user's standing preferences for that command from
-#   ~/.config/pbrain/prefs/<command-name>.md
-# and, if the file exists and is non-empty, prints a clearly labelled block
-# to stdout so the calling Claude session applies those preferences while it
-# does the command's work. When the file is absent or empty it prints
-# NOTHING — the common case for fresh users — so the per-run token cost stays
-# near zero until a preference has actually been captured.
+# It reads the user's standing preferences from two markdown files and, for
+# each that exists and is non-empty, prints a clearly labelled block to stdout
+# so the calling Claude session applies those preferences while it does the
+# command's work:
+#
+#   ~/.config/pbrain/prefs/_global.md        — apply to EVERY command
+#   ~/.config/pbrain/prefs/<command-name>.md — apply to this command only
+#
+# The global file is where cross-command standing preferences live — most
+# importantly, "stop nudging / suggesting X" rules. A nudge like the
+# morning-sequence journal/gratitude check fires from many commands, so a
+# per-command pref could never silence it everywhere; the global file can, and
+# every command's instructions defer to it. The global block is emitted first
+# so a per-command pref can still refine it.
+#
+# When a file is absent or empty it contributes NOTHING — the common case for
+# fresh users — so the per-run token cost stays near zero until a preference
+# has actually been captured.
 #
 # The companion writer side lives in lib/self-improve.sh, which is what
 # captures new preferences into these files (consolidate-on-write).
 #
 # Env knobs:
 #   PBRAIN_PREFS_DIR   override the prefs directory (default ~/.config/pbrain/prefs)
+#                      (holds both _global.md and the per-command <cmd>.md files)
 #
 # This function NEVER exits non-zero and NEVER prints to stderr on the happy
 # path: it is sourced into every command, which runs under `set -euo pipefail`,
@@ -25,11 +37,35 @@
 # `|| true` as a belt-and-suspenders guard.
 
 pbrain_emit_prefs() {
-  local cmd prefs_dir prefs_file contents
+  local cmd prefs_dir global_file prefs_file global_contents contents
   cmd="${1:-}"
   [[ -n "$cmd" ]] || return 0
 
   prefs_dir="${PBRAIN_PREFS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/prefs}"
+
+  # Global standing preferences — apply to EVERY command. Emitted first so a
+  # per-command pref below can still refine them. This is the home for
+  # cross-command "stop suggesting / don't nudge me about X" rules, including
+  # silencing the morning-sequence journal/gratitude check, which fires from
+  # many commands and so can't be silenced by a single command's pref file.
+  global_file="$prefs_dir/_global.md"
+  if [[ -f "$global_file" ]]; then
+    # Read the file; bail silently on any read error. Whitespace-only == empty.
+    global_contents="$(cat "$global_file" 2>/dev/null || true)"
+    if [[ -n "${global_contents//[[:space:]]/}" ]]; then
+      printf '%s\n' "--- USER PREFERENCES (global — all pbrain commands) ---"
+      printf '%s\n' "Standing preferences this user has set for ALL pbrain commands. Apply"
+      printf '%s\n' "them throughout this session; they override command defaults AND any"
+      printf '%s\n' "built-in suggestion or nudge wherever they conflict — including the"
+      printf '%s\n' "morning-sequence journal/gratitude check. If a preference here says to"
+      printf '%s\n' "skip a suggestion, do not make it. Source: $global_file"
+      printf '%s\n' ""
+      printf '%s\n' "$global_contents"
+      printf '%s\n' "--- END USER PREFERENCES (global) ---"
+      printf '%s\n' ""
+    fi
+  fi
+
   prefs_file="$prefs_dir/$cmd.md"
 
   [[ -f "$prefs_file" ]] || return 0

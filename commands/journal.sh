@@ -61,6 +61,7 @@ Step 3 — Append the new content to the right sections in $OUT_FILE
   questions go under ## Open questions as bullets, with the user's answer
   indented under each one (or "—" if they skipped).
 EXISTING
+  pbrain_emit_habits_extract "journal" || true
   exit 0
 fi
 
@@ -129,6 +130,6 @@ If a question was skipped, record "—" as the answer. If Step 2 produced
 no questions at all, write: —}
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction (silent if no habits profile) + self-improvement capture.
+pbrain_emit_habits_extract "journal" || true
 pbrain_emit_self_improve "journal" || true

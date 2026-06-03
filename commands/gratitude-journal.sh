@@ -134,6 +134,6 @@ tags: []
 {reflection answer — verbatim}
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# Habit extraction (silent if no habits profile) + self-improvement capture.
+pbrain_emit_habits_extract "gratitude-journal" || true
 pbrain_emit_self_improve "gratitude-journal" || true

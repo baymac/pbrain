@@ -121,6 +121,20 @@ done
 echo ""
 echo "--- END WEEK CONTEXT ---"
 
+# Habit rollup (this week / month vs each habit's criteria). Empty if habit
+# tracking isn't set up. HABITS_CMD lets Step 4 add/archive habits on a yes.
+# Sync the week's tracking md into the DB first so the rollup is accurate.
+pbrain_habits_sync_range 8 || true
+HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
+HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
+if [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]]; then
+  echo ""
+  echo "--- HABITS (this week / month vs each habit's criteria) ---"
+  echo "$HABITS_ROLLUP"
+  echo "habits_cmd: $HABITS_CMD"
+  echo "--- END HABITS ---"
+fi
+
 # Core plans, for the Step 4 enrichment pass. All are user-owned vault files:
 # enrichment proposes changes into the review and edits a plan file only on an
 # explicit per-change yes.
@@ -154,7 +168,7 @@ echo ""
 cat <<PROMPT
 INSTRUCTIONS: Walk a weekly review. You have a lot of context above — use it. Specifics or silence.
 
-Step 1 — Read every day above. Look for: recurring themes (what kept coming up), real wins (what actually shipped or moved), friction (where the week stalled or repeated), shifts (how thinking changed), unfinished threads (open questions that didn't get resolved).
+Step 1 — Read every day above. Look for: recurring themes (what kept coming up), real wins (what actually shipped or moved), friction (where the week stalled or repeated), shifts (how thinking changed), unfinished threads (open questions that didn't get resolved). If a HABITS rollup is present, weave its standouts into your synthesis — limit habits over cap, high-priority build habits that lagged, streaks worth naming. Don't dump the table; surface what matters.
 
 Step 2 — Present a TIGHT synthesis FIRST, then ask questions. Order:
   a) Say: "Here's what I'm seeing from your week:" then 3-5 bullets. Specific. Quote the user where you can. No generic positivity.
@@ -192,6 +206,13 @@ Dates: $FIRST_DATE → $LAST_DATE
 {filled in by Step 4 — the concrete plan enrichments you proposed and what the
 user decided. If you proposed nothing, write "None this week."}
 
+## Habit review
+{filled in by Step 4b — a one-paragraph read of how habits went this week (from
+the HABITS rollup: what's sticking, what's lagging or over) plus any add/remove
+proposals and what the user decided. If habit tracking isn't set up, write
+"No habits tracked." If set up but nothing to change, give the read and write
+"No habit changes."}
+
 Step 4 — Plan enrichment. Using the CORE PLANS context above and the week's data,
 propose concrete updates to the user's plans. Be specific and evidence-based — tie
 each proposal to something that actually happened this week (e.g. "you skipped legs
@@ -209,6 +230,16 @@ keep its fenced JSON block valid. Default is propose-in-review, not write-in-pla
 
 Record in "## Proposed plan changes" what you proposed and what the user decided
 (written into the relevant plan / left as a proposal / declined).
+
+Step 4b — Habit review (only if a HABITS rollup is present above). Give a short
+read of how the week's habits went, then — if the week clearly warrants it —
+propose adding a habit the user has been doing but isn't tracking, or archiving
+one that's gone stale / no longer serves them. Evidence-based only; propose
+nothing if there's no signal. These are user-owned: do NOT change the habit set
+by default. Only run a command if the user explicitly says yes this session:
+  - add:     bash "$HABITS_CMD" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high]
+  - archive: bash "$HABITS_CMD" archive --id <id>   (keeps history)
+Write the read + proposals + what the user decided into "## Habit review".
 
 Step 5 — Print the file path. One closing line, no fanfare.
 
