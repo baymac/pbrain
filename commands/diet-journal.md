@@ -1,11 +1,19 @@
 ---
-description: Daily diet journal — tracks what you ate, analyzes nutrition quality, saves to vault/fitness/diet-tracking/
+description: Daily diet log — user lists meals or snacks, agent estimates macros against the diet plan, updates diet-tracking/<date>.md. First run builds a personalized macro plan via interview. Adds new meals, swaps planned ones, recomputes totals.
 ---
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
 ```bash
 bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/diet-journal.sh"
 ```
+
+**Run bash immediately. Do not say anything to the user until you have the INSTRUCTIONS block.**
+
+The script emits one of several tokens — follow the INSTRUCTIONS for whichever fires. Key hard rules:
+- First-time setup: interview in 2–3 question batches (not one at a time, not all at once). Don't log food until the plan is built.
+- Returning session: show a one-line macro summary, then ask what to update. Don't re-explain the plan.
+- Never invent food items the user didn't mention. Estimate macros from their description; reuse the Food Library if the item matches.
+- Recompute totals after every change. Keep the Nutrition Analysis table anchored to actuals, not projections.
 
 ## Morning sequence check (do this first)
 

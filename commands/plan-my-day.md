@@ -7,6 +7,8 @@ Run this with the Bash tool first, then follow the INSTRUCTIONS block in its out
 bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/plan-my-day.sh"
 ```
 
+**Run bash immediately.** The script injects today's goals profile, fitness session, and carryover items as context. Follow the INSTRUCTIONS in its output. The fitness session is the one hard anchor — always place it in the plan. Don't plan beyond today.
+
 ## Morning sequence check (do this first)
 
 Planning the day works best on top of the morning anchors. Use today's date in `YYYY-MM-DD` format.
