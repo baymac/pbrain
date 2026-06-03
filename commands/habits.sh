@@ -3,22 +3,38 @@ set -euo pipefail
 
 # habits.sh — habit tracking.
 #
-# First run interviews the user to build a habits PROFILE (which habits to
-# track, each with a kind [build/limit], a priority [low/medium/high], and a cap
-# [max/target N times per week or month]). The profile is a vault markdown note
-# carrying its data in a fenced ```json block — same shape discipline as the
-# goals profile, browsable in Obsidian.
+# First run interviews the user to build a habits PROFILE — one question at a
+# time. Each habit carries its OWN fulfillment criteria:
+#   schedule_type : daily | weekly | monthly
+#   direction     : at_least (build) | at_most (limit)
+#   target_count  : integer N (or null)
+#   priority      : low | medium | high
+# (e.g. "brush at night" = daily/at_least/1; "nail cut" = weekly/at_least/2;
+#  "long run" = monthly/at_least/5; "alcohol" = weekly/at_most/2.)
 #
-# Every subsequent run shows a dashboard: this-week / this-month counts vs caps,
-# what's lagging, what's over. Events are logged into the shared SQLite DB
-# (lib/db.sh) — both from /habits directly and, via the ride-along extraction
-# emitter, from ordinary journaling commands.
+# The profile is a vault markdown note carrying its data in a fenced ```json
+# block — same discipline as the goals profile, browsable in Obsidian. Each
+# habit has a STABLE id (slug) minted once and never changed: renames touch only
+# the display name, so event history (in SQLite, keyed by habit_id) stays
+# attached. Removing a habit soft-archives it (history preserved).
+#
+# Every subsequent run shows a dashboard: per-habit progress vs each criteria
+# (✅ met / ⏳ not yet / ⚠️ over), top 20 by priority. Events are logged into
+# the shared SQLite DB (lib/db.sh) — both from /habits directly and, via the
+# ride-along extraction emitter, from ordinary journaling commands.
 #
 # Subcommands:
-#   habits.sh                              first run → setup; else → dashboard
+#   habits.sh                        first run → setup; else → dashboard
 #   habits.sh log --name "X" --date YYYY-MM-DD [--count N] [--source cmd] [--note "..."]
-#   habits.sh rollup [--date YYYY-MM-DD]   text rollup (week/month vs caps)
-#   habits.sh list                         list configured habits
+#   habits.sh add --name "X" --type daily|weekly|monthly --direction at_least|at_most
+#                 [--target N] [--priority low|medium|high] [--notes "..."]
+#   habits.sh edit --id <id> [--name ...] [--type ...] [--direction ...]
+#                  [--target N] [--priority ...] [--notes ...]
+#   habits.sh archive --id <id>      soft-delete (keeps history)
+#   habits.sh history --name "X"     event history for one habit (newest first)
+#   habits.sh rollup [--date YYYY-MM-DD]   text rollup (top 20 vs criteria)
+#   habits.sh status [--date YYYY-MM-DD]   structured status JSON (machine)
+#   habits.sh list                   list configured habits
 #
 # Default profile:  $VAULT_DIR/life/Habits Profile.md
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
@@ -45,14 +61,16 @@ SUB="${1:-}"
 
 # ---------------------------------------------------------------------------
 # log — append/update a habit event. Used by Claude (via the extraction emitter)
-# and callable directly. Idempotent per (habit, day): re-logging updates the row.
+# and callable directly. Resolves --name (or --id) to the habit's STABLE id via
+# the profile; REJECTS names that aren't a tracked habit (keeps the event log
+# clean — every row maps to a defined habit). Idempotent per (habit_id, day).
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "log" ]]; then
   shift || true
   H_NAME=""; H_DATE="$TODAY"; H_COUNT="1"; H_SOURCE="habits"; H_NOTE=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name)   H_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name|--id) H_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
       --date)   H_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
       --count)  H_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
       --source) H_SOURCE="${2:-habits}"; shift 2 2>/dev/null || shift ;;
@@ -64,11 +82,42 @@ if [[ "$SUB" == "log" ]]; then
     echo "habits: log requires --name" >&2
     exit 1
   fi
-  python3 - "$PBRAIN_DB_FILE" "$H_NAME" "$H_DATE" "$H_COUNT" "$H_SOURCE" "$H_NOTE" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF'
-import sqlite3, sys, re, datetime
-db, name, date, count, source, note, created = sys.argv[1:8]
+  python3 - "$PBRAIN_DB_FILE" "$PROFILE_FILE" "$H_NAME" "$H_DATE" "$H_COUNT" "$H_SOURCE" "$H_NOTE" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF'
+import sqlite3, sys, re, datetime, json
+db, profile, name, date, count, source, note, created = sys.argv[1:9]
 name = name.strip()
-# validate date; fall back to today on garbage
+
+# Resolve name (or id) -> stable habit_id via the profile. Only ACTIVE,
+# tracked habits can be logged; unknown names are rejected so the event log
+# never accumulates orphan rows that nothing displays.
+data = {}
+try:
+    with open(profile) as fh:
+        text = fh.read()
+    m = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+
+def slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+    return s or "habit"
+
+habit_id = None
+disp = name
+nm_l = name.lower()
+for h in (data.get("habits") or []):
+    if h.get("archived"):
+        continue
+    if str(h.get("name", "")).strip().lower() == nm_l or str(h.get("id", "")).strip().lower() == nm_l:
+        habit_id = str(h.get("id", "")).strip() or slug(name)
+        disp = str(h.get("name", "")).strip() or name
+        break
+
+if not habit_id:
+    print(f"not a tracked habit: {name} — add it with /habits (not logged)")
+    sys.exit(0)
+
 if not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
     date = datetime.date.today().isoformat()
 try:
@@ -80,17 +129,18 @@ try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("PRAGMA busy_timeout=5000")
     con.execute(
-        "INSERT INTO habit_events (habit, occurred_on, count, source, note, created_at) "
-        "VALUES (?,?,?,?,?,?) "
-        "ON CONFLICT(habit, occurred_on) DO UPDATE SET "
+        "INSERT INTO habit_events (habit_id, habit, occurred_on, count, source, note, created_at) "
+        "VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT(habit_id, occurred_on) DO UPDATE SET "
         "  count=MAX(habit_events.count, excluded.count), "
+        "  habit=excluded.habit, "
         "  source=excluded.source, "
         "  note=COALESCE(excluded.note, habit_events.note)",
-        (name, date, count, source, note, created),
+        (habit_id, disp, date, count, source, note, created),
     )
     con.commit()
     con.close()
-    print(f"logged: {name} on {date} (x{count})")
+    print(f"logged: {disp} on {date} (x{count})")
 except Exception as e:
     print(f"habits: {e}", file=sys.stderr)
     sys.exit(1)
@@ -99,7 +149,269 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# rollup — text rollup of week/month counts vs caps (reused by plan-my-day/eod).
+# add — define a new habit: mint a stable id, append to the profile JSON.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "add" ]]; then
+  shift || true
+  A_NAME=""; A_TYPE="daily"; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)      A_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)      A_TYPE="${2:-daily}"; shift 2 2>/dev/null || shift ;;
+      --direction) A_DIR="${2:-at_least}"; shift 2 2>/dev/null || shift ;;
+      --target)    A_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --priority)  A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
+      --notes)     A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${A_NAME//[[:space:]]/}" ]]; then
+    echo "habits: add requires --name" >&2
+    exit 1
+  fi
+  case "$A_TYPE" in daily|weekly|monthly) ;; *) echo "habits: --type must be daily|weekly|monthly" >&2; exit 1 ;; esac
+  case "$A_DIR" in at_least|at_most) ;; *) echo "habits: --direction must be at_least|at_most" >&2; exit 1 ;; esac
+  case "$A_PRIO" in low|medium|high) ;; *) A_PRIO="medium" ;; esac
+
+  # Ensure the profile exists with a json block before appending.
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    mkdir -p "$(dirname "$PROFILE_FILE")"
+    cat > "$PROFILE_FILE" <<EOF
+---
+type: habits-profile
+date: $TODAY
+tags: []
+---
+
+# Habits profile
+
+The habits /habits tracks. Edit names/notes freely; structure lives in the JSON
+block below. Each habit has a stable \`id\` — don't change it (history is keyed
+to it). \`schedule_type\` = daily|weekly|monthly; \`direction\` = at_least (build)
+or at_most (limit); \`target_count\` = times per period.
+
+\`\`\`json
+{
+  "created": "$TODAY",
+  "habits": []
+}
+\`\`\`
+EOF
+  fi
+
+  # DRY: mint the slug via the shared pbrain_habit_slug, feeding it the ids
+  # already taken so collisions get a -2/-3 suffix.
+  EXISTING_IDS="$(pbrain_habits_json | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+print("\n".join(str(h.get("id","")).strip() for h in (d.get("habits") or []) if h.get("id")))
+' 2>/dev/null || true)"
+  NEW_ID="$(pbrain_habit_slug "$A_NAME" "$EXISTING_IDS")"
+
+  python3 - "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_TYPE" "$A_DIR" "$A_TARGET" "$A_PRIO" "$A_NOTES" <<'PYEOF'
+import json, re, sys
+path, hid, name, st, direction, target, priority, notes = sys.argv[1:9]
+with open(path) as fh:
+    text = fh.read()
+m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+data = json.loads(m.group(2)) if m else {"habits": []}
+habits = data.setdefault("habits", [])
+try:
+    tv = int(target) if str(target).strip() else None
+except (TypeError, ValueError):
+    tv = None
+habits.append({
+    "id": hid, "name": name.strip(), "schedule_type": st, "direction": direction,
+    "target_count": tv, "priority": priority, "archived": False, "notes": notes.strip(),
+})
+new_json = json.dumps(data, indent=2)
+if m:
+    text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+else:
+    text = text.rstrip() + f"\n\n```json\n{new_json}\n```\n"
+with open(path, "w") as fh:
+    fh.write(text)
+print(f"added: {name.strip()} [{hid}] ({st}, {direction}, target {tv}, {priority})")
+PYEOF
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# edit — change a habit's fields by id. Renaming keeps the id (history intact).
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "edit" ]]; then
+  shift || true
+  E_ID=""; E_NAME="__keep__"; E_TYPE="__keep__"; E_DIR="__keep__"; E_TARGET="__keep__"; E_PRIO="__keep__"; E_NOTES="__keep__"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id)        E_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name)      E_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)      E_TYPE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --direction) E_DIR="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --target)    E_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --priority)  E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --notes)     E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${E_ID//[[:space:]]/}" || ! -f "$PROFILE_FILE" ]]; then
+    echo "habits: edit requires --id and an existing profile" >&2
+    exit 1
+  fi
+  python3 - "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_TYPE" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" <<'PYEOF'
+import json, re, sys
+path, hid, name, st, direction, target, priority, notes = sys.argv[1:9]
+KEEP = "__keep__"
+with open(path) as fh:
+    text = fh.read()
+m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+if not m:
+    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+data = json.loads(m.group(2))
+found = None
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip() == hid:
+        found = h
+        break
+if found is None:
+    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+if name != KEEP and name.strip():
+    found["name"] = name.strip()
+if st != KEEP and st in ("daily", "weekly", "monthly"):
+    found["schedule_type"] = st
+if direction != KEEP and direction in ("at_least", "at_most"):
+    found["direction"] = direction
+if target != KEEP:
+    try:
+        found["target_count"] = int(target) if str(target).strip() else None
+    except (TypeError, ValueError):
+        found["target_count"] = None
+if priority != KEEP and priority in ("low", "medium", "high"):
+    found["priority"] = priority
+if notes != KEEP:
+    found["notes"] = notes.strip()
+new_json = json.dumps(data, indent=2)
+text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+with open(path, "w") as fh:
+    fh.write(text)
+print(f"edited: {found.get('name')} [{hid}]")
+PYEOF
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# archive — soft-delete a habit by id. Events are preserved (history queryable).
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "archive" ]]; then
+  shift || true
+  AR_ID=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id) AR_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${AR_ID//[[:space:]]/}" || ! -f "$PROFILE_FILE" ]]; then
+    echo "habits: archive requires --id and an existing profile" >&2
+    exit 1
+  fi
+  python3 - "$PROFILE_FILE" "$AR_ID" <<'PYEOF'
+import json, re, sys
+path, hid = sys.argv[1], sys.argv[2]
+with open(path) as fh:
+    text = fh.read()
+m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+if not m:
+    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+data = json.loads(m.group(2))
+found = None
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip() == hid:
+        h["archived"] = True
+        found = h
+        break
+if found is None:
+    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+new_json = json.dumps(data, indent=2)
+text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+with open(path, "w") as fh:
+    fh.write(text)
+print(f"archived: {found.get('name')} [{hid}] (history kept)")
+PYEOF
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# history — event history for one habit (newest first). Resolves --name/--id.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "history" ]]; then
+  shift || true
+  HI_NAME=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name|--id) HI_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${HI_NAME//[[:space:]]/}" ]]; then
+    echo "habits: history requires --name" >&2
+    exit 1
+  fi
+  python3 - "$PBRAIN_DB_FILE" "$PROFILE_FILE" "$HI_NAME" <<'PYEOF'
+import sqlite3, sys, re, json, os
+db, profile, name = sys.argv[1], sys.argv[2], sys.argv[3].strip()
+
+def slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+    return s or "habit"
+
+# resolve to a habit_id via the profile, falling back to the slug of the input
+habit_id, disp = None, name
+try:
+    with open(profile) as fh:
+        m = re.search(r"```json\s*\n(.*?)```", fh.read(), re.DOTALL)
+        data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+nm_l = name.lower()
+for h in (data.get("habits") or []):
+    if str(h.get("name", "")).strip().lower() == nm_l or str(h.get("id", "")).strip().lower() == nm_l:
+        habit_id = str(h.get("id", "")).strip() or slug(name)
+        disp = str(h.get("name", "")).strip() or name
+        break
+if not habit_id:
+    habit_id = slug(name)
+
+print(f"HISTORY: {disp} [{habit_id}]")
+rows = []
+if os.path.exists(db):
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("PRAGMA busy_timeout=5000")
+        rows = con.execute(
+            "SELECT occurred_on, count, source, note FROM habit_events "
+            "WHERE habit_id=? ORDER BY occurred_on DESC", (habit_id,)
+        ).fetchall()
+        con.close()
+    except Exception:
+        rows = []
+if not rows:
+    print("(no history yet)")
+else:
+    for d, c, src, note in rows:
+        extra = f" x{c}" if (c or 1) != 1 else ""
+        tail = f" — {note}" if note else ""
+        print(f"- {d}{extra} ({src or '?'}){tail}")
+    print(f"({len(rows)} day(s) logged)")
+PYEOF
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# rollup — text rollup (top 20 vs criteria). Reused by plan-my-day/eod/weekly.
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "rollup" ]]; then
   shift || true
@@ -120,86 +432,185 @@ if [[ "$SUB" == "rollup" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# status — structured per-habit status JSON (machine-readable).
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "status" ]]; then
+  shift || true
+  S_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) S_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  pbrain_habits_status "$S_DATE"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# track — create/refresh the dated tracking markdown (the human-facing log).
+# Generated from the profile: a row per active habit with empty Done cells.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "track" || "$SUB" == "track-init" ]]; then
+  shift || true
+  T_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) T_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "habits: no profile yet — run /habits to set up your habits first" >&2
+    exit 1
+  fi
+  FILE="$(pbrain_habit_track_init "$T_DATE")"
+  echo "HABITS_TRACK_FILE"
+  echo "file: $FILE"
+  echo "date: $T_DATE"
+  echo "(today's habit checklist — mark 'x' in the Done column as you do each one;"
+  echo " /end-of-day consolidates it to the DB and prunes what you didn't do)"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# mark — mark a habit done in the dated tracking md (the primary write path).
+# Resolves --name to a tracked habit; rejects unknown names.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "mark" ]]; then
+  shift || true
+  M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date)  M_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --count) M_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
+      --note)  M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${M_NAME//[[:space:]]/}" ]]; then
+    echo "habits: mark requires --name" >&2
+    exit 1
+  fi
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "not a tracked habit: $M_NAME — add it with /habits (not marked)"
+    exit 0
+  fi
+  pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# sync — mirror the last N days of tracking md into the DB (default 7). Run by
+# read commands so the analysis store reflects the markdown before querying.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "sync" ]]; then
+  shift || true
+  S_DAYS="7"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --days) S_DAYS="${2:-7}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  pbrain_habits_sync_range "$S_DAYS"
+  echo "synced last $S_DAYS day(s) of habit tracking into the DB"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# consolidate — sync one date's md into the DB, then prune that file to only the
+# habits actually done. Run by /end-of-day.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "consolidate" ]]; then
+  shift || true
+  C_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) C_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "(no habits profile — nothing to consolidate)"
+    exit 0
+  fi
+  pbrain_habit_consolidate "$C_DATE"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# suggest-seen — record that a new-habit candidate was suggested, so the
+# cross-command nudge doesn't re-suggest it for a while. Called by the agent.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "suggest-seen" ]]; then
+  shift || true
+  SS_NAME=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name|--id) SS_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${SS_NAME//[[:space:]]/}" ]]; then
+    echo "habits: suggest-seen requires --name" >&2
+    exit 1
+  fi
+  pbrain_habit_suggest_record "$(pbrain_habit_slug "$SS_NAME")" "$TODAY"
+  echo "noted: won't re-suggest '$SS_NAME' for a while"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # PHASE 0 — first-run setup (no profile yet).
 # ---------------------------------------------------------------------------
 if [[ ! -f "$PROFILE_FILE" ]]; then
   cat <<SETUP
 HABITS_SETUP_PROFILE
 profile_file: $PROFILE_FILE
+seed_dirs: ${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking} | ${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning} | ${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking} | ${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}
+add_cmd: bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high] [--notes "..."]
 
 INSTRUCTIONS — first-time habits setup. Don't log anything yet. You're helping
-the user define the small set of habits they want to track over time.
+the user define the habits they want to track. Ask ONE question at a time; wait
+for each answer before the next. Do NOT batch questions, and do NOT ask about
+caps/limits as an opening "pattern" question. There is no 5–8 limit — a person
+can track many habits.
 
-Step 1 — Tell the user this is a one-time setup (re-runnable by editing or
-deleting the profile). Frame it: "Let's pick a handful of habits to track —
-both ones you want to build and ones you want to keep a lid on. Keep it small;
-5–8 is plenty."
+STEP 1 — Ask exactly this first, and nothing else:
+  "Want me to suggest habits from your recent pbrain entries, or would you
+   rather tell me the habits you want to track?"
 
-Step 2 — Interview the user, in 1–2 batches:
-  - Which habits do you want to BUILD (do regularly)? e.g. meditate, read,
-    gym, call family, journal, walk, deep work, instrument practice.
-  - Which do you want to LIMIT (cap)? e.g. alcohol, doomscrolling, takeout,
-    late-night screens, gaming.
-  - For EACH habit:
-      • priority — low / medium / high (how much it matters right now)?
-      • cap — how many times per WEEK or per MONTH? For build habits this is a
-        target (at least N); for limit habits it's a ceiling (at most N).
-      • a short note if useful (e.g. "10 min morning", "weekends only").
-  - Don't force a cap if the user genuinely has none — leave cap_count null.
+STEP 2a — IF "suggest from entries":
+  - Read the last ~30 days of files under the seed_dirs above (journals, daily
+    plans, fitness, diet). Grep/scan for recurring activities the user actually
+    did or mentioned repeatedly (e.g. "walked", "meditated", "gym", "read",
+    "skipped X"). Ground every candidate in real entries — do NOT invent habits.
+  - Present the candidate list ONCE for a quick yes/no per item. Then go through
+    the ACCEPTED ones one at a time for their criteria (Step 3).
 
-Step 3 — Write the profile to:
-  $PROFILE_FILE
+STEP 2b — IF "I'll specify":
+  - Ask for the habits one at a time. After each habit name, immediately gather
+    that habit's criteria (Step 3) before moving to the next habit.
 
-  An Obsidian note in EXACTLY this shape — standard frontmatter, a short intro,
-  then the structured data in a fenced JSON block (this is what the dashboard +
-  extraction read):
+STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time:
+  - schedule_type: is this DAILY (every day, e.g. brush at night, 4L water),
+    WEEKLY (N times a week, e.g. nail cut twice), or MONTHLY (N times a month,
+    e.g. a long run 5x)?
+  - direction: are you trying to DO it (at_least) or KEEP IT UNDER a limit
+    (at_most, e.g. alcohol)?
+  - target_count: how many times per period? (For a plain daily habit this is
+    just 1 — every day. Ask only if not obvious.)
+  - priority: low / medium / high — how much it matters right now.
+  - notes: optional short note (e.g. "10 min morning", "weekends only").
+  Then create it immediately by running the add_cmd above with those values.
+  The command mints a stable id and writes valid JSON — never hand-edit the file.
 
-  ---
-  type: habits-profile
-  date: $TODAY
-  tags: []
-  ---
-
-  # Habits profile
-
-  The habits /habits tracks. Edit freely; the structured data lives in the JSON
-  block below. \`build\` = do at least cap_count per period; \`limit\` = stay at or
-  under cap_count per period.
-
-  \`\`\`json
-  {
-    "created": "$TODAY",
-    "habits": [
-      {
-        "name": "Meditate",
-        "kind": "build",
-        "priority": "high",
-        "cap_period": "week",
-        "cap_count": 7,
-        "notes": "10 min, morning"
-      },
-      {
-        "name": "Alcohol",
-        "kind": "limit",
-        "priority": "medium",
-        "cap_period": "week",
-        "cap_count": 2,
-        "notes": ""
-      }
-    ]
-  }
-  \`\`\`
-
-  - mkdir -p the parent dir before writing.
-  - kind is "build" or "limit"; priority is "low"/"medium"/"high";
-    cap_period is "week" or "month"; cap_count is an integer or null.
-  - Keep the fenced JSON valid — the dashboard and every command's habit
-    extraction parse it.
-  - Use the user's own habit names.
-
-Step 4 — Confirm: "Habits profile saved at $PROFILE_FILE. From now on I'll log
-these from your journals and planning sessions, and /habits will show your
-patterns. Re-run /habits any time to see where you stand."
+STEP 4 — When done, run \`bash "$_SCRIPT_DIR/habits.sh"\` once more to show the
+dashboard, and confirm: "Habits profile saved. I'll log these from your journals
+and planning sessions; re-run /habits any time to see where you stand, add or
+remove habits, or check a habit's history."
 SETUP
   exit 0
 fi
@@ -224,22 +635,28 @@ fi
 if [[ "$SUB" == "list" ]]; then
   echo "HABITS_LIST"
   printf '%s' "$PROFILE_JSON" | python3 -c '
-import json, sys
+import json, sys, re
 data = json.load(sys.stdin)
 for h in data.get("habits") or []:
-    name = h.get("name", "?")
-    kind = h.get("kind", "build")
+    name = str(h.get("name", "?"))
+    hid = str(h.get("id", "")) or re.sub(r"[^a-z0-9]+","-",name.strip().lower()).strip("-")
+    st = h.get("schedule_type") or ("monthly" if str(h.get("cap_period","")).startswith("month") else ("weekly" if str(h.get("cap_period","")).startswith("week") else "daily"))
+    direction = h.get("direction") or ("at_most" if h.get("kind")=="limit" else "at_least")
     prio = h.get("priority", "medium")
-    cap = h.get("cap_count")
-    period = h.get("cap_period", "week")
-    print("- %s (%s, %s, %s/%s)" % (name, kind, prio, cap, period))
+    target = h.get("target_count", h.get("cap_count"))
+    arch = " [archived]" if h.get("archived") else ""
+    print("- %s [%s] (%s, %s, target %s, %s)%s" % (name, hid, st, direction, target, prio, arch))
 ' 2>/dev/null || echo "(could not parse habits)"
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# Default — dashboard.
+# Default — dashboard (structured status → tight read + offer to update).
+# Sync recent tracking md into the DB first so today's marks are reflected.
 # ---------------------------------------------------------------------------
+pbrain_habits_sync_range 35 || true
+TRACK_FILE="$(pbrain_habit_track_file "$TODAY")"
+STATUS_JSON="$(pbrain_habits_status "$TODAY" || true)"
 ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 [[ -n "${ROLLUP//[[:space:]]/}" ]] || ROLLUP="(no events logged yet)"
 
@@ -247,26 +664,35 @@ cat <<DASH
 HABITS_DASHBOARD
 date: $TODAY
 profile_file: $PROFILE_FILE
+track_file: $TRACK_FILE
 
-=== HABITS PROFILE ===
-$PROFILE_JSON
+=== STATUS (structured; top 20 by priority shown in rollup) ===
+$STATUS_JSON
 
-=== ROLLUP (this week / month vs caps) ===
+=== ROLLUP (per habit vs its criteria) ===
 $ROLLUP
 
 ---
 INSTRUCTIONS — present the user's habit standing and offer to update.
 
-Step 1 — Give a tight read of the ROLLUP above (don't just dump it). Lead with
-what needs attention: limit habits at/over cap (⚠️), high-priority build habits
-lagging or untouched this week, and any nice streaks worth naming. 3–6 lines.
+Habit data lives in a dated markdown log you (and I) edit — today's is at
+track_file above. The DB you see in the rollup is synced from those files.
 
-Step 2 — Ask: "Anything to log for today, or want to tweak the habit list?"
-  - To LOG today's habits, run for each one the user did/skipped:
-      bash "$_SCRIPT_DIR/habits.sh" log --name "<exact name>" --date $TODAY --source habits
-  - To EDIT the habit set (add/remove a habit, change a priority or cap), edit
-    the fenced JSON block in $PROFILE_FILE directly, keeping it valid. Show the
-    change and get an explicit yes before writing.
+Step 1 — Give a tight read of the ROLLUP (don't dump it). Lead with what needs
+attention: limit habits over cap (⚠️), high-priority habits not yet fulfilled
+this period (⏳), nice streaks worth naming. The list is the top 20 by priority;
+if a "+N more" line shows, mention there are more lower-priority habits. 3–6 lines.
+
+Step 2 — Ask: "Want to open today's tracker, mark something, add or change a habit?"
+Use these commands — never hand-edit the profile JSON or the tracking table directly:
+  - TRACK today: bash "$_SCRIPT_DIR/habits.sh" track --date $TODAY   (create/refresh today's checklist md)
+  - MARK done:   bash "$_SCRIPT_DIR/habits.sh" mark --name "<exact name>" --date $TODAY [--count N] [--note "..."]
+  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority low|medium|high] [--notes "..."]
+  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--type ...] [--direction ...] [--target N] [--priority ...] [--notes ...]
+  - ARCHIVE:     bash "$_SCRIPT_DIR/habits.sh" archive --id <id>   (removes it from the dashboard, keeps history)
+  - HISTORY:     bash "$_SCRIPT_DIR/habits.sh" history --name "<X>"
+  For add/edit/archive, show the user what you'll run and get an explicit yes first.
+  The user can also just open today's track_file in Obsidian and tick cells by hand.
 
 Step 3 — Keep it brief. This is a dashboard, not a coaching session.
 DASH

@@ -1,58 +1,108 @@
 # /habits
 
-Track a small set of habits over time — both ones you want to **build** (do regularly) and ones you want to **limit** (keep under a cap). First run defines the set; every run after shows where you stand.
+Track your habits over time — each with its **own** fulfillment criteria. There's no cap on how many you track. First run defines the set (one question at a time); every run after shows where you stand against each habit's criteria.
+
+**Two layers.** Definitions live in `Habits Profile.md` (the *what*). The day-to-day log lives in **dated markdown files** — `life/habit-tracking/<date>.md` — exactly like `/journal` and `/fitness-journal`. Those files are what you work with. A local SQLite DB is a *derived* analysis store, synced from the markdown, that the history/rollup/weekly-review reads. You edit markdown; the DB stays in sync underneath.
+
+## The criteria model
+
+Each habit carries three fields that say how it's evaluated:
+
+- **schedule_type** — `daily` (every day, e.g. brush at night, 4L water), `weekly` (N times a week, e.g. nail cut twice), or `monthly` (N times a month, e.g. a long run 5×).
+- **direction** — `at_least` (a habit you're building) or `at_most` (a habit you're capping, e.g. alcohol).
+- **target_count** — how many times within the period. For a plain daily habit this is just 1 (every day).
+
+Plus a **priority** (low / medium / high) and an optional short note.
+
+| Example | schedule_type | direction | target_count |
+|---|---|---|---|
+| Brush at night | daily | at_least | 1 |
+| Drink 4L water | daily | at_least | 1 (amount in the note) |
+| Nail cut | weekly | at_least | 2 |
+| Long run | monthly | at_least | 5 |
+| Alcohol | weekly | at_most | 2 |
 
 ## First-run setup
 
-Acts as a setup interview the first time you run it. You define a handful of habits (5–8 is plenty). For each:
+A setup interview the first time you run it — **one question at a time**. It opens by asking whether to **suggest habits from your recent pbrain entries** (it scans the last ~30 days of journals/plans/fitness/diet for things you actually do) or let you **specify them yourself**. Either way, each habit then gets its own criteria, and is created with the `add` subcommand.
 
-- **kind** — `build` (do at least N times) or `limit` (stay at or under N times).
-- **priority** — low / medium / high.
-- **cap** — a count per **week** or per **month** (a target for build habits, a ceiling for limit habits). Optional — leave it off if there's no natural cap.
-- an optional short note ("10 min morning", "weekends only").
-
-Written to a normal Obsidian note in your vault:
+Written to a normal Obsidian note:
 
 ```
 $VAULT/life/Habits Profile.md
 ```
 
-It's a markdown note with the structured data in a fenced ` ```json ` block (same pattern as your goals profile), so you can edit it directly or delete it to redo setup. Shape:
+The structured data lives in a fenced ` ```json ` block. Each habit has a **stable `id`** (a slug) — minted once and never changed. Renaming a habit touches only its display name; its history (kept in SQLite, keyed by `id`) stays attached. Removing a habit **soft-archives** it, so history is preserved. Shape:
 
 ```json
 {
   "created": "2026-06-03",
   "habits": [
-    { "name": "Meditate", "kind": "build", "priority": "high", "cap_period": "week", "cap_count": 7, "notes": "10 min, morning" },
-    { "name": "Alcohol",  "kind": "limit", "priority": "medium", "cap_period": "week", "cap_count": 2, "notes": "" }
+    { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily",  "direction": "at_least", "target_count": 1, "priority": "high",   "archived": false, "notes": "" },
+    { "id": "alcohol",        "name": "Alcohol",        "schedule_type": "weekly", "direction": "at_most",  "target_count": 2, "priority": "medium", "archived": false, "notes": "" }
   ]
 }
 ```
 
-## How habits get logged
+Don't hand-edit ids — the `add`/`edit`/`archive` subcommands manage them and keep the JSON valid.
 
-You rarely log by hand. Once the profile exists, every daily journaling and planning command (`/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/end-of-day`) watches for habits you actually mention and logs them automatically. Events go into the shared SQLite DB (`~/.config/pbrain/pbrain.db`), **one row per habit per day** — so the same habit mentioned across several commands isn't double-counted, and re-running a command is safe.
+## Daily tracking files (the human surface)
 
-`/plan-my-day` and `/end-of-day` also actively surface habit patterns and ask about today's habits. `/weekly-review` **surfaces** the week's rollup (it doesn't log — the week's habits were already captured day-by-day by the commands above).
+Each day has its own file: `life/habit-tracking/<date>.md`. It's generated from your profile as a table — a row per active habit, with empty cells to tick:
+
+```
+| Habit          | Criteria  | Progress | Done | Count | Note     |
+|----------------|-----------|----------|------|-------|----------|
+| Brush at night | daily     | 5/7 wk   | x    |       |          |
+| Nail cut       | weekly ≥2 | 1/2 wk   |      |       |          |
+| Alcohol        | weekly ≤2 | 1/2 wk   | x    |       | one beer |
+```
+
+You can open it in Obsidian and tick the **Done** column by hand, or let the agent mark cells for you (below). The `Progress` column shows where each habit stands so far (from the DB) for context.
+
+`/plan-my-day` offers, at the end, to create today's file (`/habits track`). The day's marks accumulate there.
+
+## How habits get marked
+
+You rarely mark by hand. Once the profile exists, every daily journaling and planning command (`/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/end-of-day`) watches for habits you actually mention and **ticks them in today's tracking file** automatically (`/habits mark`). Marking a name that isn't a tracked habit is **rejected** (you add it first).
+
+Those commands also nudge: if you show a standing intention to build a new habit that isn't tracked yet, they'll offer to add it — at most once, and they won't re-nag the same idea for ~2 weeks.
+
+## How the DB stays accurate (sync + consolidate)
+
+The markdown is the source of truth; the SQLite DB (`~/.config/pbrain/pbrain.db`) is synced from it, keyed by stable `habit_id`, one row per habit per day:
+
+- **sync** mirrors a day's file into the DB — so unticking a habit in the markdown removes its event. Read commands sync recent days before showing the rollup, so what you see is current.
+- **`/end-of-day` consolidates**: it marks the day's habits from your journal/plan/fitness/diet, syncs today into the DB, then **prunes the day's file to only the habits you actually did** — leaving a clean record and accurate analysis data for weekly/monthly review.
+
+You refer to the markdown files; the subcommands that need history (rollup, status, weekly review) read the DB.
 
 ## The dashboard
 
-Running `/habits` (with a profile in place) shows a rollup per habit:
+Running `/habits` (with a profile in place) syncs your recent files, then shows the **top 20 by priority**, each against its own criteria:
 
-- this-week and this-month counts vs your cap,
-- last-done date,
-- flags: limit habits **over cap** (⚠️), high-priority build habits **lagging / untouched this week**, build habits with their **target met** (✅).
+- daily: done today **✅** / not yet **⏳**, plus this-week N/7 and your streak,
+- weekly / monthly: progress like `2/2 this week ✅` or `1/2 this week ⏳`,
+- limit habits: **⚠️ OVER** or `— at cap`,
+- last-done date; a `+N more` line if you track more than 20.
 
-Then it offers to log today's habits or tweak the list.
+Then it offers to open today's tracker, mark a habit, add/edit/archive one, or show history.
 
 ## Subcommands
 
 | Command | What it does |
 |---|---|
 | `/habits` | Setup (first run) or dashboard |
-| `/habits list` | List the configured habits |
+| `/habits track [--date]` | Create/refresh the dated tracking file |
+| `/habits list` | List the configured habits (with ids) |
+| `/habits history --name "X"` | Event history for one habit, newest first |
 
-Script-level API (used by the auto-logging): `log --name "X" --date YYYY-MM-DD [--count N] [--source cmd] [--note "…"]`, `rollup [--date YYYY-MM-DD]`.
+Script-level API (used by the auto-marking, surfacing, and the dashboard's offers):
+`mark --name "X" --date YYYY-MM-DD [--count N] [--note "…"]` (the primary write path → ticks the md),
+`track [--date …]`, `sync [--days N]` (mirror md → DB), `consolidate [--date …]` (sync + prune, run by `/end-of-day`),
+`add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--priority …] [--notes "…"]`,
+`edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--priority …] [--notes …]`,
+`archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive).
 
 ## Defaults and overrides
 
@@ -62,6 +112,11 @@ Script-level API (used by the auto-logging): `log --name "X" --date YYYY-MM-DD [
 |---|---|---|
 | `PBRAIN_VAULT` | Vault root | iCloud Obsidian path |
 | `PBRAIN_HABITS_PROFILE_FILE` | Habits profile markdown path | `$VAULT/life/Habits Profile.md` |
-| `PBRAIN_DB_FILE` | SQLite event-log DB (shared with `/remind`) | `~/.config/pbrain/pbrain.db` |
+| `PBRAIN_HABIT_TRACK_DIR` | Dated tracking-file directory | `$VAULT/life/habit-tracking` |
+| `PBRAIN_DB_FILE` | SQLite analysis DB (shared with `/remind`) | `~/.config/pbrain/pbrain.db` |
+| `PBRAIN_HABIT_SUGGEST_FILE` | New-habit suggestion suppress-list | `~/.config/pbrain/habit-suggest-seen` |
+| `PBRAIN_HABIT_SUGGEST_TTL_DAYS` | Days to suppress a re-suggestion | `14` |
 
-**Re-running setup:** edit the JSON block directly when habits change, or delete `Habits Profile.md` to redo the interview.
+**Re-running setup:** add/edit/archive via the dashboard's offers, or delete `Habits Profile.md` to redo the interview.
+
+**Migration:** older event logs (keyed by habit name) are migrated to stable-id keys automatically on first run — one-time, guarded, idempotent.

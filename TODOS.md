@@ -49,6 +49,16 @@ Sources studied:
 
 ---
 
+## Habits follow-ups
+
+Deferred from the `/habits` criteria-model redesign (eng review 2026-06-03). The redesign deliberately kept a markdown-only data model (stable `habit_id` slugs in the profile JSON, events keyed by id) and per-period yes/no fulfillment, to stay simple and avoid premature infra.
+
+- [ ] **Habits dimension table (star schema)** — when a real analysis dashboard exists, mirror habit definitions from `life/Habits Profile.md`'s JSON into a synced SQLite `habits` table (upserted each run, keyed by `habit_id`) so the dashboard runs pure SQL (`habits ⨝ habit_events`) without parsing markdown. **Why deferred:** the markdown-only model is already dashboard-capable by parsing one JSON block; a second source of truth isn't justified until a dashboard consumer actually exists and query volume demands it. **Depends on:** a real dashboard being built. *(scope option B, declined in favor of stable-ids-in-markdown during the redesign.)*
+
+- [ ] **First-class quantity tracking** — let a habit carry an optional measure (unit + target, e.g. `unit=L, target=4` for "drink 4L water"; `unit=min, target=30`), let `log` record an amount, and let fulfillment check `amount ≥ target` instead of just done/not-done. Enables partial-progress views ("2.5/4L"). **Why deferred:** the redesign models fulfillment as per-period yes/no and parks quantities in the note field; most habits are genuinely binary, so quantity is optional complexity. Revisit if the note workaround gets annoying. **Depends on:** nothing — builds on the new `(schedule_type, direction, target_count)` criteria model.
+
+---
+
 ## Explicit non-goals
 
 Document opinions, not just todos. These patterns exist in the adjacent tools but **pbrain deliberately does not adopt them.**

@@ -374,9 +374,12 @@ PYEOF
 pbrain_reminders_tick || true
 REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
 [[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+# Sync recent habit-tracking md into the DB so the rollup reflects them.
+pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
+HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 REMIND_CMD="$(pbrain_reminders_cmd)"
 
 cat <<PROMPT
@@ -407,7 +410,7 @@ $RECENT_PLANS
 === PENDING REMINDERS ===
 $REMINDERS_PENDING
 
-=== HABITS (this week / month vs caps) ===
+=== HABITS (this week / month vs each habit's criteria) ===
 $HABITS_ROLLUP
 
 ---
@@ -604,6 +607,14 @@ Step 6 — Reminders (only if relevant — don't force it):
     bash "$REMIND_CMD" add --text "<clean text>" --due "<YYYY-MM-DD HH:MM>" [--repeat daily|weekdays|weekly|monthly]
   Resolve the due time relative to today ($TODAY) + the current time. Set it
   only on a yes. Don't pester — at most one short offer covering all of them.
+
+Step 7 — Habit tracker (only if \`habits_setup_needed\` == no). At the very end,
+  offer ONCE to start today's habit tracker: "Want me to set up today's habit
+  tracker?" On a yes, run:
+    bash "$HABITS_CMD" track --date $TODAY
+  That creates today's habit-tracking checklist (a markdown table generated from
+  your habits). The user ticks habits there through the day — or I mark them as
+  you mention them — and /end-of-day consolidates it. Don't force it; one offer.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the

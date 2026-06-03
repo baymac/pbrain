@@ -82,9 +82,13 @@ CLOSED="$(already_closed "$PLAN_FILE")"
 pbrain_reminders_tick || true
 REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
 [[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+# Sync recent habit-tracking md into the DB so the rollup reflects today's marks.
+pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
+HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
+HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || true)"
 REMIND_CMD="$(pbrain_reminders_cmd)"
 
 cat <<PROMPT
@@ -111,7 +115,7 @@ $(read_or_missing "$DIET_FILE")
 --- PENDING REMINDERS ---
 $REMINDERS_PENDING
 
---- HABITS (this week / month vs caps) ---
+--- HABITS (this week / month vs each habit's criteria) ---
 $HABITS_ROLLUP
 --- END CONTEXT ---
 
@@ -233,8 +237,14 @@ without re-asking. Use the Edit tool on each file.
       nag) — "You haven't set up habit tracking yet — /habits picks a few habits
       to build or cap. Worth a look." Don't block the close.
     - If a rollup is present: note standouts in one line (a limit habit over
-      cap, a high-priority build habit that lagged). Logging today's habits is
-      handled automatically below — don't duplicate it here.
+      cap, a high-priority build habit that lagged). Marking today's habits in
+      the tracking md is handled by the HABIT EXTRACTION block below — do that
+      FIRST (mark everything the day's PLAN/JOURNAL/FITNESS/DIET above shows the
+      user did), THEN consolidate the day:
+        bash "$HABITS_CMD" consolidate --date $TODAY
+      Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
+      analysis DB and prunes the habits you didn't do from the day's entry, so
+      weekly/monthly reviews have accurate data. Run it once, after marking.
 
 Do these silently as part of writing the close — surface one short summary
 line per file you touched in your final message. Do NOT skip 4a/4b because

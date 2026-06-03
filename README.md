@@ -137,7 +137,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
 | `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
-| `/habits` | Track habits to build or cap; patterns vs caps; auto-logged from your journals | `$VAULT/life/Habits Profile.md` + local DB |
+| `/habits` | Track habits, each with its own criteria (daily / N-per-week / N-per-month, build or cap); day-to-day log in dated `life/habit-tracking/<date>.md` files (DB synced from them for analysis); progress vs each, top 20 by priority; auto-marked from your journals | `$VAULT/life/Habits Profile.md` + `$VAULT/life/habit-tracking/` + local DB |
 | `/remind <text>` | Reminders that fire as macOS notifications; ride along with plan/end-of-day | local SQLite DB (no vault file) |
 | `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
@@ -192,6 +192,9 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
 | `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/weekly-review` | `$VAULT/life/Goals Profile.md` (markdown; JSON in a fenced block) |
 | `PBRAIN_HABITS_PROFILE_FILE` | `/habits`, read by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/Habits Profile.md` (markdown; JSON in a fenced block) |
+| `PBRAIN_HABIT_TRACK_DIR` | `/habits` (dated tracking files), synced→DB by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/habit-tracking/` |
+| `PBRAIN_HABIT_SUGGEST_FILE` | `/habits` + journaling commands (new-habit nudge suppress-list) | `~/.config/pbrain/habit-suggest-seen` |
+| `PBRAIN_HABIT_SUGGEST_TTL_DAYS` | `/habits` + journaling commands | `14` (days a suggested habit stays suppressed) |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
 | `PBRAIN_STALE_DAYS` | `/loose-ends` | `7` (age at which an item counts as stale) |

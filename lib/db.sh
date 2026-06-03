@@ -44,9 +44,16 @@ try:
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=5000")
     con.executescript("""
+    -- habit_events is keyed by a STABLE habit_id (a slug minted once per habit
+    -- and never changed), NOT by the display name. Renaming a habit changes only
+    -- its name in the profile; its history stays attached via habit_id. The
+    -- `habit` column is a name SNAPSHOT at log time (handy for history listings
+    -- and debugging) — it is never the join key. Fresh DBs get this shape; older
+    -- DBs are migrated to it below.
     CREATE TABLE IF NOT EXISTS habit_events (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        habit       TEXT NOT NULL,
+        habit_id    TEXT,                          -- stable slug; the real key
+        habit       TEXT NOT NULL,                 -- display-name snapshot at log time
         occurred_on TEXT NOT NULL,                 -- YYYY-MM-DD (local)
         count       INTEGER NOT NULL DEFAULT 1,
         source      TEXT NOT NULL DEFAULT '',      -- command that logged it
@@ -55,13 +62,6 @@ try:
     );
     CREATE INDEX IF NOT EXISTS idx_habit_events_habit ON habit_events(habit);
     CREATE INDEX IF NOT EXISTS idx_habit_events_date  ON habit_events(occurred_on);
-    -- one row per (habit, day): a habit is "done" on a day or not, so logging
-    -- the same habit again that day (from any command) updates the row rather
-    -- than adding a second event. This keeps the per-day unit honest even when
-    -- several commands each extract the same real-world habit, and makes the
-    -- extraction step idempotent across re-runs.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_events_uniq
-        ON habit_events(habit, occurred_on);
 
     CREATE TABLE IF NOT EXISTS reminders (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +77,57 @@ try:
     CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
     CREATE INDEX IF NOT EXISTS idx_reminders_due    ON reminders(due_at);
     """)
+
+    # --- habit_events migration: key by stable habit_id ------------------
+    # Older DBs (created before the habit_id redesign) have habit_events
+    # without a habit_id column and a UNIQUE index on (habit, occurred_on).
+    # Migrate them in place, exactly once. Guarded by a PRAGMA table_info
+    # check so this is a no-op on fresh and already-migrated DBs.
+    #
+    #   ┌─ old row ───────────────┐        ┌─ migrated row ─────────────────┐
+    #   │ habit="Meditate"        │   ─►   │ habit_id="meditate"            │
+    #   │ occurred_on, count, ... │        │ habit="Meditate" (snapshot)    │
+    #   └─────────────────────────┘        │ occurred_on, count, ...        │
+    #                                       └────────────────────────────────┘
+    #
+    # The backfill slug MUST match commands/habits.sh + lib/habits.sh
+    # (pbrain_habit_slug) so migrated events line up with the profile's
+    # habit ids. Algorithm is pinned by tests/db.bats + tests/habits.bats.
+    cols = [r[1] for r in con.execute("PRAGMA table_info(habit_events)").fetchall()]
+    if cols and "habit_id" not in cols:
+        import re
+        con.execute("ALTER TABLE habit_events ADD COLUMN habit_id TEXT")
+
+        def _slug(name):
+            s = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+            return s or "habit"
+
+        for rid, nm in con.execute(
+            "SELECT id, habit FROM habit_events WHERE habit_id IS NULL OR habit_id=''"
+        ).fetchall():
+            con.execute("UPDATE habit_events SET habit_id=? WHERE id=?", (_slug(nm), rid))
+
+        # Two distinct names can slugify to the same id on the same day
+        # (e.g. "Walk" and "walk!"). Collapse such collisions to one row
+        # (keep the earliest) before the unique index goes on.
+        con.execute(
+            "DELETE FROM habit_events WHERE id NOT IN "
+            "(SELECT MIN(id) FROM habit_events GROUP BY habit_id, occurred_on)"
+        )
+        # Drop the old (habit, occurred_on) unique index; the new one below
+        # re-keys on (habit_id, occurred_on).
+        con.execute("DROP INDEX IF EXISTS idx_habit_events_uniq")
+
+    # habit_id indexes — created after the column is guaranteed to exist on
+    # every code path (fresh CREATE TABLE above, or the ALTER just now).
+    con.executescript("""
+    CREATE INDEX IF NOT EXISTS idx_habit_events_hid ON habit_events(habit_id);
+    -- one row per (habit_id, day): logging the same habit again that day
+    -- (from any command) updates the row rather than adding a second event.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_events_uniq
+        ON habit_events(habit_id, occurred_on);
+    """)
+
     con.commit()
     con.close()
 except Exception:
