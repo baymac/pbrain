@@ -120,6 +120,15 @@ doesn't apply to them.
     week, skipping meals, news binges, social-media spirals, gaming benders.)
   - We'll add these to a "Avoiding today" block whenever they're relevant.
 
+  Daily time anchors (the fixed skeleton your day revolves around)
+  - What time do you typically work out or do physical activity? (rough start time)
+  - What time do you usually eat lunch?
+  - What time do you usually have dinner?
+  - Do you do a regular walk? Morning, after dinner, or not at all — and roughly when?
+  - What time do you usually wake up?
+  - What time do you aim to be in bed?
+  - On a normal workday, how many focused work hours do you realistically get in?
+
   Personal anchors (the non-work stuff)
   - Relationships you want to stay close to? (parents, siblings, partner,
     specific friends — just first names or labels, no contact info needed.)
@@ -167,6 +176,15 @@ Step 3 — Write the profile to:
       "deep_work_block_min": 90,
       "energy_peak": "morning|afternoon|evening|mixed",
       "day_wreckers": ["sleep<7h", "no exercise", "no sunlight"]
+    },
+    "daily_anchors": {
+      "wake_time": "HH:MM",
+      "workout_time": "HH:MM",
+      "lunch_time": "HH:MM",
+      "dinner_time": "HH:MM",
+      "walk_time": "HH:MM or null",
+      "bed_target": "HH:MM",
+      "focused_hours_per_day": 5
     },
     "anti_patterns": ["doomscrolling", "late nights", "..."],
     "personal_anchors": {
@@ -298,6 +316,46 @@ print("\n".join(lines))
 PYEOF
 )"
 
+TIMING_SIGNAL="$(python3 - "$PLAN_DIR" <<'PYEOF'
+import os, glob, re, sys, collections
+plan_dir = sys.argv[1]
+files = sorted(glob.glob(os.path.join(plan_dir, "*.md")))[-21:]
+categories = {
+    "workout": [r"\b(gym|workout|fitness|apple fitness|lower body|upper body|push|pull|legs|cardio|football)\b"],
+    "lunch": [r"\blunch\b"],
+    "dinner": [r"\bdinner\b"],
+    "walk": [r"\b(outdoor walk|night walk|evening walk|morning walk)\b"],
+    "wind_down": [r"\b(wind-down|low-light close|hygiene, bed|bed)\b"],
+}
+times = collections.defaultdict(list)
+for f in files:
+    try:
+        fh = open(f)
+        text = fh.read()
+        fh.close()
+    except Exception:
+        continue
+    for m in re.finditer(r"\|\s*(\d{1,2}):(\d{2})[^|]*\|([^|]+)\|", text):
+        start_h, start_m, action = m.group(1), m.group(2), m.group(3).lower()
+        start_min = int(start_h) * 60 + int(start_m)
+        for cat, patterns in categories.items():
+            if any(re.search(p, action) for p in patterns):
+                times[cat].append(start_min)
+                break
+def fmt(cat):
+    lst = times.get(cat, [])
+    if not lst:
+        return "unknown"
+    avg = sum(lst) / len(lst)
+    h = int(avg) // 60
+    m_val = int(avg) % 60
+    spread = (max(lst) - min(lst)) // 60 if len(lst) > 1 else 0
+    return "%02d:%02d (+/-%dh from %d plans)" % (h, m_val, spread, len(lst))
+for cat in ["workout", "lunch", "dinner", "walk", "wind_down"]:
+    print("- %s: %s" % (cat, fmt(cat)))
+PYEOF
+)"
+
 # Weekly-review nudge: Mondays only. Measures the calendar span since the last
 # weekly review covered through (parsed from the review's "Dates: X → Y" line,
 # falling back to the ISO-week Sunday of the filename) and nudges once >= 7 days
@@ -401,6 +459,9 @@ $FITNESS_TODAY
 === TODAY'S DAILY JOURNAL ===
 $DAILY_TODAY
 
+=== TIMING SIGNAL (learned anchor times from last 21 plans) ===
+$TIMING_SIGNAL
+
 === CADENCE SIGNAL (last 30 plans) ===
 $CADENCE_SIGNAL
 
@@ -461,21 +522,34 @@ Step 1 — Show the user their lens, briefly:
      • Drop 3 kg by July (this week: 4 gym sessions + diet streak)
      • Learn jazz piano (this week: 4×30 min practice)"
 
+Step 1.5 — Anchor confirmation (its own message, before Step 2):
+  Read the profile JSON for a "daily_anchors" block. If present, use those values as defaults (label them "(profile)").
+  If absent, use the TIMING SIGNAL averages above as inferred defaults (label them "(inferred from past plans)").
+  Only include anchors that have a real value — skip any that are "unknown".
+  Present a compact pre-filled list:
+
+    "Here are your anchor times for today — all good, or anything different?
+     • Workout: {time} {(profile) or (inferred)}
+     • Lunch: {time} {source}
+     • Dinner: {time} {source}
+     • Walk: {time or 'none'} {source}
+     • Bed: {time} {source}
+    (Say what's different, e.g. 'dinner at 11:30pm, no walk today' — or 'all good'.)"
+
+  Wait for their reply. Store the confirmed anchor times as the fixed skeleton for Step 4.
+  Track which anchors differ from the profile's daily_anchors (or that the profile has no daily_anchors yet) — Step 5 will offer to save any changes.
+
 Step 2 — Ask all preference questions at once, in one message:
   "Quick check-in before we plan today:
   1. Energy/mood right now? (1–10 + one word)
-  2. Top 3 things for today, ranked — **now** (start with this), **next** (after now is done), **later** (if there's time). Each can come from your focus areas above or anything else pressing.
-  3. Any locked-in commitments? (meetings, calls, appointments — with times)
-  4. Roughly how many focused work hours do you have today?
-  5. Anything you specifically want to AVOID today? (defaults to your profile's anti_patterns if you skip)
-  6. Mood for creative work today? (yes / maybe / not today)
-  7. Anything to declutter or tidy today? (inbox, desk, files, browser tabs, a nagging small mess — or 'none')"
+  2. Your 3 main intentional blocks today, in chronological order — **block 1**, **block 2**, **block 3**. Each can be anything: a work session, creative time, going outside to meet someone, a DJ set, a gym session — whatever makes this day feel deliberate. Give each a start time. Each block is at least {deep_work_block_min from profile} min. Example: 'block 1: Lettuce cron fix (16:00), block 2: DJ practice (19:00), block 3: dinner with client (21:00)'.
+  3. Any locked-in commitments not already covered above? (meetings, calls, exact-time appointments)
+  4. Roughly how many focused hours do you have today?
+  5. Anything to specifically AVOID today? (defaults to profile anti_patterns if you skip)
+  6. Mood for creative work? (yes / maybe / not today)
+  7. Anything to declutter or tidy? (inbox, desk, files, browser tabs — or 'none')"
 
-  DECLUTTER OVERRIDE: q7 is opt-out. If the user's standing preferences (shown
-  at the top of this session, if any) say not to ask about decluttering, DROP
-  q7 entirely and renumber — don't ask it. Otherwise always include it. If the
-  user ever says "stop asking me to declutter" this session, the self-improve
-  check at the end will offer to save that as a preference.
+  DECLUTTER OVERRIDE: q7 is opt-out. If the user's standing preferences say not to ask about decluttering, DROP q7 entirely and renumber — don't ask it. Otherwise always include it. If the user says "stop asking me to declutter" this session, the self-improve check at the end will offer to save that as a preference.
 
 Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relationships to decide if any touchpoints should be surfaced today. Rules of thumb (only suggest if the contact appears in personal_anchors.relationships):
     - parents (mom/dad) gap >= 6 days → suggest a call
@@ -485,17 +559,20 @@ Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relati
     - walk gap >= 2 days AND "daily walk" or similar is in personal_anchors.health_habits → suggest one
   Phrase as suggestions, not commands. Skip anything the profile doesn't endorse.
 
-Step 4 — Generate the day plan and write it to: $OUT_FILE.
+Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet).
   STRUCTURE: lead with a consolidated **Today at a glance** table (time range + action + tie). All subjective detail — coaching, eating, breaks, rest, avoids — comes AFTER the table as supporting sections. The table is the operating doc; the sections are reference.
 
-  Time-range rules:
-  - Anchor the schedule to working_style.focus_window + the fitness session time + any locked-in commitments from q3.
-  - Use concrete ranges (e.g. "10:30 AM–12:00 PM" in 12h, or "10:30–12:00" in 24h) whenever you can derive them from the profile, fitness journal, or user input. Don't write "Morning / Midday" labels — pick real ranges.
-  - If the user gave specific times, honor them. Otherwise derive from current time + focus_window + deep_work_block_min.
-  - Include in the table: each work block (Now/Next/Later), the fitness anchor, every meal window, post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative), or "—" if standalone.
+  Time-range rules — ANCHOR-FIRST approach:
+  Step 4a — Use the confirmed anchors from Step 1.5 as the fixed skeleton rows. Then layer on top:
+    1. Explicit block times from q2 and locked-in commitments from q3 — absolute, never shift these.
+    2. The confirmed anchors (workout, lunch, dinner, walk, bed) — these are non-negotiable skeleton rows.
+    Maximum 15–30 min variance from any confirmed anchor time. More than that is a plan error.
+    The skeleton arc is: wake → workout → post-workout/lunch → blocks → dinner → walk → wind-down → bed. Fill gaps with transitions, breaks, meals.
+  Step 4b — Place the 3 main blocks (from q2) at their stated times, spanning the full day from wake to sleep — these are NOT anchored to current time, they represent the chronological arc of the whole day regardless of when /plan-my-day is run. Each block must be at least deep_work_block_min wide (from the profile). Blocks can be any type: focused work, creative, social, outdoor — label them accurately in the table Tie column. Fill the gaps between blocks with meals, movement, transitions, wind-down. Cap total intentional block time at q4 hours.
+  Step 4c — Use 24h times throughout (HH:MM–HH:MM). Never use "Morning / Midday / Evening" labels. Every row must have both a start and end time. Maximum 15–30 min deviation from learned/stated anchors unless the user explicitly set a different time.
+  - Include in the table: each named block (Block 1/2/3 with time windows), the fitness anchor, every meal window, post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative, Social), or "—" if standalone.
   - Keep the table tight — one line per action, no wrapped text. Time | Action | Tie.
-
-  Every Work row should tie back to a current_focus goal where possible (annotate the Tie column with the short goal name).
+  - Named blocks (Block 1/2/3) should tie to a current_focus goal or profile category in the Tie column where possible.
 
   ---
   type: plan
@@ -530,14 +607,14 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
   ## Anchors
 
   - {fitness session — note the focus + RPE / duration from the fitness journal, not the time (which is in the table)}
-  - {each locked-in commitment from q3 with brief context, not the time}
+  - {each locked-in commitment from q3 with brief context, not the time — skip if none}
 
-  ## Work
+  ## Blocks
 
-  - **Now:** {q2 top — concrete task + a sentence on scope or what "done" means. Annotate "→ <goal>" if it ties to a current_focus area.}
-  - **Next:** {q2 second — concrete task + scope. Annotate "→ <goal>" if applicable.}
-  - **Later:** {q2 third — concrete task + scope. Annotate "→ <goal>" if applicable.}
-  - Cap on focused hours today: {q4 number} — that's the ceiling, not the floor.
+  - **Block 1 (HH:MM–HH:MM):** {q2 first block — type (work/creative/social/etc), concrete description + what "done" looks like. Time window must match the table row exactly. Minimum deep_work_block_min wide. Annotate "→ <goal/category>" if it ties back.}
+  - **Block 2 (HH:MM–HH:MM):** {q2 second block — same format. Can be any type.}
+  - **Block 3 (HH:MM–HH:MM):** {q2 third block — same format. Can be any type.}
+  - Cap on intentional block time today: {q4 number}h — ceiling, not floor.
 
   ## Breaks & movement
 
@@ -559,7 +636,7 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   ## Creative
 
-  - {if yes/maybe in q6, suggest 1 concrete block tied to a craft from profile.personal_anchors.creative_pursuits — "30-60 min music practice", "Draft one section after dinner", "Edit 10 photos", etc.}
+  - {if yes/maybe in q6, suggest 1 concrete block tied to a craft from profile.personal_anchors.creative_pursuits — "30-60 min music practice", "Draft one section after dinner", "Edit 10 photos", etc. If creative was already named as one of the 3 main blocks in q2, just reference it here — don't double-list.}
   - {if not today, write "Skipping creative today — recharge"}
 
   ## Rest
@@ -576,7 +653,7 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
 
   ## Declutter
 
-  - {q7: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q7 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.}
+  - {q7: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q7 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.  Note: q7 here corresponds to the new q7 (declutter) in Step 2.}
 
   ---
 
@@ -602,8 +679,18 @@ Step 4 — Generate the day plan and write it to: $OUT_FILE.
   ### Tomorrow seed
   -
 
+Step 4d — Show the full **Today at a glance** table to the user and ask for confirmation:
+  Show the table, then ask: "Does this look right? You can change any times, swap blocks, add or remove rows — just tell me what to adjust. Say 'looks good' to save."
+  Wait for their response. Apply any edits they request (time changes, new rows, renamed actions, dropped rows). Repeat the updated table if changes were made.
+  Once the user says it looks good (or gives no objections), write the complete plan — table + all sections — to $OUT_FILE.
+
 Step 5 — After writing, confirm: "Saved → $OUT_FILE"
-  Then offer one short follow-up: "Want me to adjust any block, or are we good?"
+
+Step 5b — Anchor profile update (only if anchors changed or profile has no daily_anchors yet):
+  If today's confirmed anchors from Step 1.5 differ from the profile's daily_anchors, OR the profile has no daily_anchors block at all:
+  Offer once: "Today's anchor times differ from your profile — want me to save these as your new defaults?"
+  On yes: read $PROFILE_FILE, parse the JSON block, update (or add) the "daily_anchors" keys with today's confirmed values, write the file back. Only update the keys the user touched today — do not wipe other keys. Keep all other profile fields and the markdown prose intact. The JSON block must remain valid.
+  On no or if anchors matched exactly: skip silently.
 
 Step 6 — Reminders (only if relevant — don't force it):
   If anything time-bound came up while planning (a call/appointment at a set
