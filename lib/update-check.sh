@@ -22,7 +22,10 @@ _pbrain_update_check() {
   local lib_dir state_dir cache plugin_json local_ver remote_url
   local cached remote_json remote_ver higher now mtime ttl
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-  state_dir="${XDG_STATE_HOME:-$HOME/.config}/pbrain"
+  # All pbrain state lives under ~/.config/pbrain (XDG_CONFIG_HOME) — keep the
+  # update cache there too, so it stays inside the one dir agents sandbox-allow
+  # (Codex `--add-dir ~/.config/pbrain`) and never splits from the rest.
+  state_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain"
   cache="$state_dir/update-cache"
   plugin_json="${CLAUDE_PLUGIN_ROOT:-$lib_dir/..}/.claude-plugin/plugin.json"
   remote_url="${PBRAIN_REMOTE_PLUGIN_URL:-https://raw.githubusercontent.com/baymac/pbrain/main/.claude-plugin/plugin.json}"
