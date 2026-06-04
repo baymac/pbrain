@@ -35,6 +35,10 @@ set -euo pipefail
 #   habits.sh rollup [--date YYYY-MM-DD]   text rollup (top 20 vs criteria)
 #   habits.sh status [--date YYYY-MM-DD]   structured status JSON (machine)
 #   habits.sh list                   list configured habits
+#   habits.sh track [--date YYYY-MM-DD]  init today's tracking md from profile
+#   habits.sh mark --name "X" [--date YYYY-MM-DD] [--count N] [--amount N] [--note "..."]
+#   habits.sh sync [--days N] [--date YYYY-MM-DD]  mirror md → DB (default 7 days)
+#   habits.sh consolidate [--date YYYY-MM-DD]  sync md → DB then prune unchecked rows
 #
 # Default profile:  $VAULT_DIR/life/Habits Profile.md
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
@@ -551,7 +555,7 @@ if [[ "$SUB" == "sync" ]]; then
       *) shift ;;
     esac
   done
-  pbrain_habits_sync_range "$S_DAYS" "${S_DATE:-}"
+  pbrain_habits_sync_range "$S_DAYS" "$S_DATE"
   echo "synced last $S_DAYS day(s) of habit tracking into the DB"
   exit 0
 fi

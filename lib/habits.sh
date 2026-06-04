@@ -348,7 +348,7 @@ pbrain_habit_track_file() {
 
 # _pbrain_habit_track_py <op> <args…> — the single owner of the md table format.
 #   init        <profile> <db> <file> <date>
-#   mark        <profile> <db> <file> <date> <name> <count> <note>
+#   mark        <profile> <db> <file> <date> <name> <count> <note> <amount>
 #   sync        <profile> <db> <dir>  <end_date> <days> <now>
 #   consolidate <profile> <db> <file> <date> <now>
 _pbrain_habit_track_py() {
@@ -686,9 +686,9 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount]
 # are left untouched.
 pbrain_habits_sync_range() {  # [days] [end_date]
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
-  local end_date="${2:-$(date +%Y-%m-%d)}"
+  local _end_date="${2:-$(date +%Y-%m-%d)}"
   _pbrain_habit_track_py sync "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" \
-    "$(pbrain_habit_track_dir)" "$end_date" "${1:-7}" "$(date '+%Y-%m-%d %H:%M')" >/dev/null 2>&1 || true
+    "$(pbrain_habit_track_dir)" "$_end_date" "${1:-7}" "$(date '+%Y-%m-%d %H:%M')" >/dev/null 2>&1 || true
 }
 
 # Sync one date's md into the DB and prune that file to the habits actually done.

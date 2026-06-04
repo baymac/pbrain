@@ -515,6 +515,24 @@ assert h["period_used"] == 20 and h["fulfilled"] is True, h
   [ "$output" = "(1, 2.5)" ]
 }
 
+@test "sync without --date defaults to today (empty-string fallback)" {
+  _write_profile
+  TODAY="$(date +%Y-%m-%d)"
+  HABITS mark --name "Brush at night" --date "$TODAY"
+  HABITS sync --days 0
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select count(*) from habit_events where occurred_on=?\", [sys.argv[2]]).fetchone()[0])" "$PBRAIN_DB_FILE" "$TODAY"
+  [ "$output" = "1" ]
+}
+
+@test "sync --days N --date covers the full N-day window" {
+  _write_profile
+  HABITS mark --name "Brush at night" --date 2026-06-01
+  HABITS mark --name "Alcohol" --date 2026-06-03
+  HABITS sync --days 2 --date 2026-06-03
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sorted(r[0] for r in c.execute(\"select habit_id from habit_events where occurred_on>='2026-06-01'\")))" "$PBRAIN_DB_FILE"
+  [ "$output" = "['alcohol', 'brush-at-night']" ]
+}
+
 @test "log records an amount on a measured habit" {
   HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
   HABITS log --name "Water" --date 2026-06-03 --amount 3.5 --source journal
