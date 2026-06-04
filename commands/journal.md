@@ -12,7 +12,7 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 The script emits one of two tokens:
 
 - `JOURNAL_SESSION` — new day. **Wait for the user to write.** Your only opener is one short line: "Ready when you are." Then stop. Do not ask what's on their mind.
-- `JOURNAL_SESSION_RESUME` — today's file already exists. Summarize the existing entry in one line (Focus + counts), then ask: "Anything to add?" Then stop.
+- `JOURNAL_SESSION_RESUME` — today's file already exists. Summarize the existing entry in one line (Focus + counts), then ask: "Anything to add?" Then stop. After the user responds, scan the existing entry's **Open questions** section and ask up to 2–3 follow-ups on unresolved threads, one at a time, before writing.
 
 Hard rules (apply regardless of token):
 - Max 2–3 follow-up questions total. Ask them one at a time. If there are no unresolved threads, skip straight to writing — silence is fine.
