@@ -55,7 +55,8 @@ try:
         habit_id    TEXT,                          -- stable slug; the real key
         habit       TEXT NOT NULL,                 -- display-name snapshot at log time
         occurred_on TEXT NOT NULL,                 -- YYYY-MM-DD (local)
-        count       INTEGER NOT NULL DEFAULT 1,
+        count       INTEGER NOT NULL DEFAULT 1,    -- occurrence count (times done that day)
+        amount      REAL,                          -- measured value for that day (e.g. 2.5 L); NULL = unmeasured habit
         source      TEXT NOT NULL DEFAULT '',      -- command that logged it
         note        TEXT,
         created_at  TEXT NOT NULL
@@ -117,6 +118,14 @@ try:
         # Drop the old (habit, occurred_on) unique index; the new one below
         # re-keys on (habit_id, occurred_on).
         con.execute("DROP INDEX IF EXISTS idx_habit_events_uniq")
+
+    # --- habit_events migration: add the measured `amount` column ---------
+    # First-class quantity tracking stores a per-day measured value (e.g.
+    # 2.5 L of water) here; older DBs predate it. Add it once, nullable, so
+    # existing rows (unmeasured) stay NULL. Guarded by the same table_info
+    # check so it's a no-op on fresh and already-migrated DBs.
+    if cols and "amount" not in cols:
+        con.execute("ALTER TABLE habit_events ADD COLUMN amount REAL")
 
     # habit_id indexes — created after the column is guaranteed to exist on
     # every code path (fresh CREATE TABLE above, or the ALTER just now).
