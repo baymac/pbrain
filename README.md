@@ -2,6 +2,14 @@
 
 > **Daily-ritual scaffolding for Obsidian + Claude Code.** Local-first slash commands for journaling, gratitude, fitness, diet, daily planning, brainstorming, and clipping triage. macOS only. Your vault stays on your machine — no accounts, no servers, no telemetry.
 
+## Demo
+
+<img src="docs/media/pbrain-promo.gif" alt="pbrain demo — a daily ritual in your terminal" width="100%">
+
+▶ **[Watch with sound (HD)](docs/media/pbrain-promo.mp4)** (44s) — `/journal`, `/fitness-journal`, `/diet-journal`, `/habits`, and `/remind` writing straight into your Obsidian vault, and what a year of that compounds into.
+
+<!-- GIF autoplays inline on GitHub. mp4 link above for HD+audio. Source composition: promo-video/ (HyperFrames). -->
+
 **Obsidian** is the writing surface. A markdown **vault** is the corpus (iCloud-synced or plain local — your choice). **pbrain** slash commands handle the rituals. Optionally, **gbrain** adds an AI memory layer exposed to Claude via MCP.
 
 **Compatibility:** macOS only (Obsidian Desktop + iCloud Drive container). iOS works for read/write through the synced vault on iPhone/iPad, but the slash commands themselves run from Claude Code on macOS (or the OpenAI Codex CLI — see [Codex interoperability](#codex-interoperability)). Linux, Windows, and Android aren't supported.
@@ -303,6 +311,7 @@ pbrain/
 │   │   ├── gbrain-beyond-notes.md      ← capabilities beyond search
 │   │   └── gbrain-bug-report.md        ← upstream bug repro
 │   └── .logs/                          ← gitignored: sync-runs.jsonl, upgrade-status.json
+├── promo-video/                        ← HyperFrames source composition for the promo video (renders excluded via .gitignore)
 ├── CLAUDE.md
 └── README.md
 ```

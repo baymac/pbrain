@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face { font-family: "Source Serif 4"; font-style: italic; font-weight: 300; font-display: block; src: url("fonts/SourceSerif4-300-italic.woff2") format("woff2"); }
+      @font-face { font-family: "Source Serif 4"; font-style: italic; font-weight: 900; font-display: block; src: url("fonts/SourceSerif4-900-italic.woff2") format("woff2"); }
+      @font-face { font-family: "Source Serif 4"; font-style: normal; font-weight: 300; font-display: block; src: url("fonts/SourceSerif4-300.woff2") format("woff2"); }
+      @font-face { font-family: "Source Serif 4"; font-style: normal; font-weight: 900; font-display: block; src: url("fonts/SourceSerif4-900.woff2") format("woff2"); }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+        background: #0c0a12; font-family: "Source Serif 4", serif; color: #ece8f4;
+      }
+      .scene { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; overflow: hidden; background: #0c0a12; }
+      #scene0 { z-index: 1; }
+      #scene1 { z-index: 2; opacity: 0; }
+      #scene2 { z-index: 3; opacity: 0; }
+      #scene3 { z-index: 4; opacity: 0; }
+      #scene4 { z-index: 5; opacity: 0; }
+      #scene5 { z-index: 6; opacity: 0; }
+      #scene6 { z-index: 7; opacity: 0; }
+      #scene7 { z-index: 8; opacity: 0; }
+      #scene8 { z-index: 9; opacity: 0; }
+
+      .content { position: relative; z-index: 5; width: 100%; height: 100%; display: flex; box-sizing: border-box; }
+      .glow { position: absolute; border-radius: 50%; filter: blur(90px); pointer-events: none; z-index: 1; }
+      .ghost { position: absolute; font-family: "Source Serif 4", serif; font-weight: 900; color: #ffffff; opacity: 0.04; letter-spacing: -0.03em; white-space: nowrap; pointer-events: none; z-index: 1; }
+      .mono { font-family: "JetBrains Mono", monospace; }
+      .tnum { font-variant-numeric: tabular-nums; }
+
+      /* ---------- Scene 0 — Hook ---------- */
+      #scene0 .content { flex-direction: column; justify-content: flex-end; padding: 0 150px 170px; }
+      .s0-kicker { font-family: "JetBrains Mono", monospace; font-size: 24px; font-weight: 500; letter-spacing: 0.32em; color: #9a93ad; text-transform: uppercase; margin-bottom: 30px; }
+      .s0-head { font-weight: 900; font-size: 128px; line-height: 0.98; letter-spacing: -0.03em; max-width: 1400px; }
+      .s0-head em { font-style: italic; color: #a786ff; }
+      .s0-sub { font-family: "JetBrains Mono", monospace; font-size: 30px; font-weight: 400; color: #9a93ad; margin-top: 40px; }
+      .s0-frag { position: absolute; font-family: "JetBrains Mono", monospace; font-size: 27px; color: #6b6480; white-space: nowrap; z-index: 3; }
+
+      /* ---------- Scene 1 — Turn ---------- */
+      #scene1 .content { flex-direction: column; justify-content: center; align-items: center; padding: 120px; text-align: center; }
+      .s1-q { font-weight: 300; font-style: italic; font-size: 72px; line-height: 1.12; letter-spacing: -0.02em; color: #ece8f4; max-width: 1300px; }
+      .s1-mark { margin-top: 70px; display: flex; align-items: baseline; gap: 4px; }
+      .s1-sigil { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 132px; letter-spacing: -0.04em; color: #ece8f4; }
+      .s1-sigil .slash { color: #a786ff; }
+      .s1-tag { font-family: "JetBrains Mono", monospace; font-size: 28px; letter-spacing: 0.12em; color: #9a93ad; margin-top: 30px; text-transform: lowercase; }
+
+      /* ======== Shared capability-scene layout (scenes 2–5) ======== */
+      .cap .content { flex-direction: column; justify-content: center; padding: 70px 120px; gap: 30px; }
+      .cap-head { display: flex; align-items: baseline; gap: 26px; flex-wrap: wrap; }
+      .cap-kick { font-family: "JetBrains Mono", monospace; font-size: 25px; font-weight: 600; letter-spacing: 0.04em; color: #a786ff; }
+      .cap-kick .slash { color: #a786ff; }
+      .cap-title { font-weight: 900; font-size: 50px; letter-spacing: -0.02em; color: #ece8f4; }
+      .cap-title em { font-style: italic; font-weight: 300; color: #c9b6ff; }
+
+      /* Obsidian vault window */
+      .ow { width: 100%; height: 752px; background: #14111d; border: 1.5px solid #2a2438; border-radius: 16px; overflow: hidden; box-shadow: 0 60px 130px rgba(0,0,0,0.6); display: flex; flex-direction: column; position: relative; z-index: 5; }
+      .ow-bar { height: 50px; flex-shrink: 0; background: #100d17; border-bottom: 1.5px solid #221d30; display: flex; align-items: center; padding: 0 20px; gap: 11px; }
+      .ow-dot { width: 13px; height: 13px; border-radius: 50%; background: #2f2940; }
+      .ow-bar .ow-name { font-family: "JetBrains Mono", monospace; font-size: 19px; color: #9a93ad; margin-left: 16px; letter-spacing: 0.02em; }
+      .ow-body { flex: 1; display: flex; min-height: 0; }
+      .ow-side { width: 360px; flex-shrink: 0; background: #100d17; border-right: 1.5px solid #221d30; padding: 22px 0; overflow: hidden; }
+      .ow-side-h { font-family: "JetBrains Mono", monospace; font-size: 17px; letter-spacing: 0.22em; color: #9a93ad; text-transform: uppercase; padding: 0 24px 16px; }
+      .tr { font-family: "JetBrains Mono", monospace; font-size: 21px; line-height: 1.9; color: #9a93ad; padding: 2px 24px; white-space: nowrap; display: flex; align-items: center; gap: 9px; }
+      .tr .ic { color: #9a93ad; width: 16px; display: inline-block; }
+      .tr.fold { color: #b0a9c4; }
+      .tr.file { color: #aaa3bf; }
+      .tr.pl1 { padding-left: 44px; }
+      .tr.pl2 { padding-left: 66px; }
+      .tr.pl3 { padding-left: 88px; }
+      .tr.on { background: rgba(167,134,255,0.16); color: #d6c6ff; box-shadow: inset 3px 0 0 #a786ff; }
+      .tr.on .ic { color: #a786ff; }
+      .ow-main { flex: 1; padding: 40px 56px; overflow: hidden; min-width: 0; }
+
+      /* markdown-ish content */
+      .md-t { font-family: "JetBrains Mono", monospace; font-size: 34px; font-weight: 700; color: #ece8f4; letter-spacing: -0.01em; }
+      .md-t .h { color: #6d4dd6; }
+      .md-m { font-family: "JetBrains Mono", monospace; font-size: 21px; color: #9a93ad; margin-top: 12px; }
+      .md-h { font-family: "JetBrains Mono", monospace; font-size: 23px; font-weight: 600; color: #a786ff; margin-top: 30px; }
+      .md-h .h { opacity: 0.55; }
+      .md-p { font-size: 30px; font-weight: 300; line-height: 1.4; color: #d8d3e2; margin-top: 12px; max-width: 760px; }
+      .md-task { font-family: "JetBrains Mono", monospace; font-size: 25px; color: #c4bdd4; margin-top: 12px; display: flex; align-items: center; gap: 14px; }
+      .md-task .box { color: #6b6480; }
+      .md-task.on { color: #8f88a3; }
+      .md-task.on .box { color: #7fd4a8; }
+
+      /* fitness table */
+      .ftab { width: 100%; margin-top: 26px; border-collapse: collapse; font-family: "JetBrains Mono", monospace; }
+      .ftab th { text-align: left; font-size: 18px; font-weight: 600; letter-spacing: 0.16em; color: #9a93ad; text-transform: uppercase; padding: 0 0 16px; border-bottom: 1.5px solid #2a2438; }
+      .ftab td { font-size: 26px; color: #ece8f4; padding: 16px 0; border-bottom: 1px solid #1d1828; font-variant-numeric: tabular-nums; }
+      .ftab td.dim { color: #9a93ad; }
+      .ftab td.ex { color: #ece8f4; }
+      .ftab .up { color: #7fd4a8; }
+
+      /* diet macros */
+      .mac-wrap { display: flex; align-items: center; gap: 64px; margin-top: 34px; }
+      .ring-box { position: relative; width: 240px; height: 240px; flex-shrink: 0; }
+      .ring-ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+      .ring-kcal { font-family: "JetBrains Mono", monospace; font-size: 48px; font-weight: 700; color: #ece8f4; font-variant-numeric: tabular-nums; line-height: 1; }
+      .ring-sub { font-family: "JetBrains Mono", monospace; font-size: 19px; color: #9a93ad; margin-top: 8px; }
+      .bars { flex: 1; }
+      .bar-row { margin-bottom: 26px; }
+      .bar-row:last-child { margin-bottom: 0; }
+      .bar-top { display: flex; justify-content: space-between; font-family: "JetBrains Mono", monospace; font-size: 23px; margin-bottom: 11px; }
+      .bar-name { color: #d8d3e2; }
+      .bar-val { color: #9a93ad; font-variant-numeric: tabular-nums; }
+      .bar-track { height: 14px; border-radius: 8px; background: #221d30; overflow: hidden; }
+      .bar-fill { height: 100%; border-radius: 8px; }
+      .meals { font-family: "JetBrains Mono", monospace; font-size: 21px; color: #9a93ad; margin-top: 36px; }
+      .meals .x { color: #9a93ad; }
+
+      /* habits table */
+      .htab { width: 100%; margin-top: 22px; border-collapse: collapse; font-family: "JetBrains Mono", monospace; }
+      .htab th { text-align: left; font-size: 18px; font-weight: 600; letter-spacing: 0.14em; color: #9a93ad; text-transform: uppercase; padding: 0 0 14px; border-bottom: 1.5px solid #2a2438; }
+      .htab th.c, .htab td.c { text-align: center; }
+      .htab td { font-size: 25px; color: #ece8f4; padding: 14px 0; border-bottom: 1px solid #1d1828; font-variant-numeric: tabular-nums; }
+      .htab td.cad { color: #9a93ad; font-size: 21px; }
+      .htab td.streak { color: #a786ff; font-weight: 700; }
+      .htab .met { color: #7fd4a8; }
+      .htab .wait { color: #e8a06a; }
+      .htab .dots { letter-spacing: 3px; }
+      .htab .dots .f { color: #a786ff; }
+      .htab .dots .e { color: #6a6384; }
+
+      /* macOS reminder notification */
+      .notif { position: absolute; top: 70px; right: 70px; width: 520px; background: rgba(30,26,42,0.92); backdrop-filter: blur(14px); border: 1px solid #3a3450; border-radius: 20px; padding: 22px 24px; display: flex; gap: 18px; align-items: flex-start; box-shadow: 0 40px 90px rgba(0,0,0,0.6); z-index: 20; }
+      .notif-ic { width: 56px; height: 56px; flex-shrink: 0; border-radius: 13px; background-color: #a786ff; background-image: linear-gradient(150deg, #b89bff, #7a5be0); display: flex; align-items: center; justify-content: center; font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 32px; color: #14111d; }
+      .notif-tx { flex: 1; padding-top: 2px; }
+      .notif-app { display: flex; justify-content: space-between; font-family: "JetBrains Mono", monospace; font-size: 19px; color: #9a93ad; margin-bottom: 7px; letter-spacing: 0.04em; }
+      .notif-app b { color: #ece8f4; font-weight: 700; }
+      .notif-msg { font-size: 26px; font-weight: 300; color: #ece8f4; line-height: 1.25; }
+
+      /* ---------- Scene 6 — Compounding (peak) ---------- */
+      #scene6 .content { flex-direction: row; align-items: center; padding: 0 130px; gap: 90px; }
+      .s6-left { width: 880px; z-index: 5; }
+      .s6-kicker { font-family: "JetBrains Mono", monospace; font-size: 23px; letter-spacing: 0.3em; color: #a786ff; text-transform: uppercase; margin-bottom: 34px; }
+      .s6-head { font-weight: 900; font-size: 92px; line-height: 1.02; letter-spacing: -0.03em; }
+      .s6-head .b { color: #a786ff; }
+      .s6-stats { display: flex; gap: 56px; margin-top: 60px; }
+      .s6-stat .num { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 76px; letter-spacing: -0.03em; color: #ece8f4; line-height: 1; }
+      .s6-stat .lbl { font-family: "JetBrains Mono", monospace; font-size: 21px; letter-spacing: 0.14em; color: #9a93ad; text-transform: uppercase; margin-top: 14px; }
+      .s6-sub2 { font-family: "JetBrains Mono", monospace; font-size: 22px; color: #9a93ad; margin-top: 44px; letter-spacing: 0.02em; }
+      .s6-sub2 .a { color: #c9b6ff; }
+      .s6-right { flex: 1; display: flex; flex-direction: column; align-items: flex-end; z-index: 5; }
+      .s6-grid { display: grid; grid-template-columns: repeat(22, 1fr); grid-auto-rows: 1fr; gap: 9px; width: 620px; }
+      .s6-cell { width: 100%; aspect-ratio: 1; border-radius: 5px; background: #a786ff; opacity: 0.05; }
+      .s6-gridcap { font-family: "JetBrains Mono", monospace; font-size: 21px; color: #6b6480; margin-top: 26px; letter-spacing: 0.05em; }
+
+      /* ---------- Scene 7 — Ownership ---------- */
+      #scene7 .content { flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 120px; }
+      .s7-head { font-weight: 300; font-style: italic; font-size: 96px; line-height: 1.05; letter-spacing: -0.025em; max-width: 1500px; }
+      .s7-head b { font-weight: 900; font-style: normal; color: #a786ff; }
+      .s7-sub { font-family: "JetBrains Mono", monospace; font-size: 30px; letter-spacing: 0.05em; color: #9a93ad; margin-top: 52px; line-height: 1.7; }
+      .s7-sub .x { color: #9a93ad; }
+      .s7-lock { position: absolute; z-index: 1; width: 760px; height: 760px; border: 1.5px solid #2a2438; border-radius: 50%; }
+
+      /* ---------- Scene 8 — CTA ---------- */
+      #scene8 .content { flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 120px; }
+      .s8-mark { display: flex; align-items: baseline; }
+      .s8-sigil { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 160px; letter-spacing: -0.04em; }
+      .s8-sigil .slash { color: #a786ff; }
+      .s8-tag { font-weight: 300; font-style: italic; font-size: 60px; letter-spacing: -0.02em; margin-top: 48px; }
+      .s8-tag b { font-weight: 900; font-style: normal; color: #a786ff; }
+      .s8-foot { font-family: "JetBrains Mono", monospace; font-size: 25px; letter-spacing: 0.16em; color: #9a93ad; margin-top: 50px; text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-width="1920" data-height="1080" data-start="0" data-duration="44">
+
+      <!-- ============ SCENE 0 — HOOK ============ -->
+      <div id="scene0" class="scene">
+        <div class="glow" data-layout-allow-overflow id="s0-glow" style="width:1100px;height:1100px;background:#6d4dd6;opacity:0.16;left:680px;top:-260px;"></div>
+        <div class="ghost" id="s0-ghost" style="font-size:520px;left:-80px;top:80px;">notes</div>
+        <div class="s0-frag" id="s0-f1" style="left:200px;top:170px;">that idea from tuesday…</div>
+        <div class="s0-frag" id="s0-f2" style="left:1160px;top:260px;">what was I grateful for?</div>
+        <div class="s0-frag" id="s0-f3" style="left:560px;top:400px;">the plan I never wrote down</div>
+        <div class="s0-frag" id="s0-f4" style="left:1280px;top:520px;">— remind me later</div>
+        <div class="content">
+          <div class="s0-kicker" id="s0-kick">a small problem you live with</div>
+          <div class="s0-head" id="s0-head">Your best thinking<br />has a <em>half-life.</em></div>
+          <div class="s0-sub" id="s0-sub">by tomorrow, most of it is gone.</div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 1 — TURN ============ -->
+      <div id="scene1" class="scene">
+        <div class="glow" data-layout-allow-overflow id="s1-glow" style="width:900px;height:900px;background:#6d4dd6;opacity:0.18;left:510px;top:90px;"></div>
+        <div class="content">
+          <div class="s1-q" id="s1-q">What if every day<br />left something behind?</div>
+          <div class="s1-mark" id="s1-mark"><span class="s1-sigil"><span class="slash">/</span>pbrain</span></div>
+          <div class="s1-tag" id="s1-tag">a daily ritual that compounds</div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 2 — MORNING / THE VAULT ============ -->
+      <div id="scene2" class="scene cap">
+        <div class="glow" data-layout-allow-overflow id="s2-glow" style="width:900px;height:900px;background:#6d4dd6;opacity:0.12;left:-160px;top:300px;"></div>
+        <div class="content">
+          <div class="cap-head" id="s2-head">
+            <span class="cap-kick"><span class="slash">/</span>journal · <span class="slash">/</span>gratitude · <span class="slash">/</span>plan-my-day</span>
+            <span class="cap-title">Your whole morning, <em>one file.</em></span>
+          </div>
+          <div class="ow" id="s2-ow">
+            <div class="ow-bar"><div class="ow-dot"></div><div class="ow-dot"></div><div class="ow-dot"></div><span class="ow-name">vault — Obsidian</span></div>
+            <div class="ow-body">
+              <div class="ow-side" data-layout-allow-overflow id="s2-side">
+                <div class="ow-side-h">vault</div>
+                <div class="tr fold"><span class="ic">▾</span>life</div>
+                <div class="tr fold pl1"><span class="ic">▾</span>daily-tracking</div>
+                <div class="tr file pl2"><span class="ic">•</span>2026-06-02.md</div>
+                <div class="tr file pl2"><span class="ic">•</span>2026-06-03.md</div>
+                <div class="tr file pl2 on"><span class="ic">•</span>2026-06-04.md</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>gratitude-journal</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>daily-planning</div>
+                <div class="tr fold"><span class="ic">▸</span>fitness</div>
+                <div class="tr fold"><span class="ic">▸</span>agent-work</div>
+              </div>
+              <div class="ow-main" id="s2-main">
+                <div class="md-t s2-m"><span class="h">#</span> 2026-06-04 · daily</div>
+                <div class="md-m s2-m">mood: focused, a little restless</div>
+                <div class="md-h s2-m"><span class="h">##</span> brain dump</div>
+                <div class="md-p s2-m">Shipping the promo today. Sleep was short — the investor reply is still sitting on my mind.</div>
+                <div class="md-h s2-m"><span class="h">##</span> plan &nbsp;·&nbsp; from /plan-my-day</div>
+                <div class="md-task on s2-m"><span class="box">▣</span> Block 1 — ship the promo video</div>
+                <div class="md-task s2-m"><span class="box">▢</span> Block 2 — investor reply</div>
+                <div class="md-task s2-m"><span class="box">▢</span> Block 3 — gym, then an early night</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 3 — FITNESS ============ -->
+      <div id="scene3" class="scene cap">
+        <div class="glow" data-layout-allow-overflow id="s3-glow" style="width:900px;height:900px;background:#6d4dd6;opacity:0.12;left:1200px;top:280px;"></div>
+        <div class="content">
+          <div class="cap-head" id="s3-head">
+            <span class="cap-kick"><span class="slash">/</span>fitness-journal</span>
+            <span class="cap-title">Today's session, <em>already planned.</em></span>
+          </div>
+          <div class="ow" id="s3-ow">
+            <div class="ow-bar"><div class="ow-dot"></div><div class="ow-dot"></div><div class="ow-dot"></div><span class="ow-name">vault — Obsidian</span></div>
+            <div class="ow-body">
+              <div class="ow-side" data-layout-allow-overflow id="s3-side">
+                <div class="ow-side-h">vault</div>
+                <div class="tr fold"><span class="ic">▾</span>fitness</div>
+                <div class="tr fold pl1"><span class="ic">▾</span>daily-tracking</div>
+                <div class="tr file pl2"><span class="ic">•</span>2026-06-02.md</div>
+                <div class="tr file pl2 on"><span class="ic">•</span>2026-06-04.md</div>
+                <div class="tr file pl1"><span class="ic">•</span>Gym Plan.md</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>plans</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>diet-tracking</div>
+                <div class="tr fold"><span class="ic">▸</span>life</div>
+              </div>
+              <div class="ow-main" id="s3-main">
+                <div class="md-t s3-m"><span class="h">#</span> push day · 2026-06-04</div>
+                <div class="md-m s3-m">rotation: push → pull → legs → rest</div>
+                <table class="ftab">
+                  <thead><tr class="s3-m"><th style="width:46%">Exercise</th><th>Sets × Reps</th><th>Load</th></tr></thead>
+                  <tbody>
+                    <tr class="s3-m"><td class="ex">Bench press</td><td class="dim">4 × 6–8</td><td>80 kg</td></tr>
+                    <tr class="s3-m"><td class="ex">Overhead press</td><td class="dim">3 × 8–10</td><td>45 kg</td></tr>
+                    <tr class="s3-m"><td class="ex">Incline DB press</td><td class="dim">3 × 10</td><td>28 kg</td></tr>
+                    <tr class="s3-m"><td class="ex">Cable fly</td><td class="dim">3 × 12–15</td><td class="dim">—</td></tr>
+                    <tr class="s3-m"><td class="ex">Triceps rope</td><td class="dim">3 × 15</td><td class="up">▲ +1</td></tr>
+                  </tbody>
+                </table>
+                <div class="md-m s3-m" style="margin-top:24px;">↳ picks the day from your rotation, then adapts next time from what you logged</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 4 — DIET / MACROS ============ -->
+      <div id="scene4" class="scene cap">
+        <div class="glow" data-layout-allow-overflow id="s4-glow" style="width:900px;height:900px;background:#6d4dd6;opacity:0.12;left:-120px;top:-160px;"></div>
+        <div class="content">
+          <div class="cap-head" id="s4-head">
+            <span class="cap-kick"><span class="slash">/</span>diet-journal</span>
+            <span class="cap-title">Every meal, <em>macro'd.</em></span>
+          </div>
+          <div class="ow" id="s4-ow">
+            <div class="ow-bar"><div class="ow-dot"></div><div class="ow-dot"></div><div class="ow-dot"></div><span class="ow-name">vault — Obsidian</span></div>
+            <div class="ow-body">
+              <div class="ow-side" data-layout-allow-overflow id="s4-side">
+                <div class="ow-side-h">vault</div>
+                <div class="tr fold"><span class="ic">▾</span>fitness</div>
+                <div class="tr fold pl1"><span class="ic">▾</span>diet-tracking</div>
+                <div class="tr file pl2"><span class="ic">•</span>2026-06-03.md</div>
+                <div class="tr file pl2 on"><span class="ic">•</span>2026-06-04.md</div>
+                <div class="tr file pl1"><span class="ic">•</span>Diet Plan.md</div>
+                <div class="tr file pl1"><span class="ic">•</span>Food Library.md</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>daily-tracking</div>
+                <div class="tr fold"><span class="ic">▸</span>life</div>
+              </div>
+              <div class="ow-main" id="s4-main">
+                <div class="md-t s4-m"><span class="h">#</span> 2026-06-04 · diet &nbsp;<span style="color:#9a93ad;font-size:22px;font-weight:400;">actual vs target</span></div>
+                <div class="mac-wrap">
+                  <div class="ring-box">
+                    <svg width="240" height="240" viewBox="0 0 240 240">
+                      <circle cx="120" cy="120" r="92" fill="none" stroke="#221d30" stroke-width="20" />
+                      <circle id="s4-ring" cx="120" cy="120" r="92" fill="none" stroke="#a786ff" stroke-width="20" stroke-linecap="round"
+                              stroke-dasharray="578" stroke-dashoffset="578" transform="rotate(-90 120 120)" />
+                    </svg>
+                    <div class="ring-ctr"><div class="ring-kcal tnum" id="s4-kcal">0</div><div class="ring-sub">/ 2,100 kcal</div></div>
+                  </div>
+                  <div class="bars">
+                    <div class="bar-row s4-m"><div class="bar-top"><span class="bar-name">Protein</span><span class="bar-val">165 / 180 g</span></div><div class="bar-track"><div class="bar-fill s4-bar" data-w="92%" style="background:#a786ff;"></div></div></div>
+                    <div class="bar-row s4-m"><div class="bar-top"><span class="bar-name">Carbs</span><span class="bar-val">190 / 230 g</span></div><div class="bar-track"><div class="bar-fill s4-bar" data-w="83%" style="background:#e8a06a;"></div></div></div>
+                    <div class="bar-row s4-m"><div class="bar-top"><span class="bar-name">Fat</span><span class="bar-val">52 / 65 g</span></div><div class="bar-track"><div class="bar-fill s4-bar" data-w="80%" style="background:#7fd4a8;"></div></div></div>
+                  </div>
+                </div>
+                <div class="meals s4-m">breakfast <b style="color:#ece8f4;font-weight:400;">520</b> <span class="x">·</span> lunch <b style="color:#ece8f4;font-weight:400;">740</b> <span class="x">·</span> snack <b style="color:#ece8f4;font-weight:400;">580</b> &nbsp;<span class="x">—</span> logged by name from your Food Library</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 5 — HABITS + REMIND ============ -->
+      <div id="scene5" class="scene cap">
+        <div class="glow" data-layout-allow-overflow id="s5-glow" style="width:900px;height:900px;background:#6d4dd6;opacity:0.12;left:1150px;top:-120px;"></div>
+        <div class="content">
+          <div class="cap-head" id="s5-head">
+            <span class="cap-kick"><span class="slash">/</span>habits · <span class="slash">/</span>remind</span>
+            <span class="cap-title">Tracked, scored, <em>and nudged.</em></span>
+          </div>
+          <div class="ow" id="s5-ow">
+            <div class="ow-bar"><div class="ow-dot"></div><div class="ow-dot"></div><div class="ow-dot"></div><span class="ow-name">vault — Obsidian</span></div>
+            <div class="ow-body">
+              <div class="ow-side" data-layout-allow-overflow id="s5-side">
+                <div class="ow-side-h">vault</div>
+                <div class="tr fold"><span class="ic">▾</span>life</div>
+                <div class="tr file pl1 on"><span class="ic">•</span>Habits Profile.md</div>
+                <div class="tr fold pl1"><span class="ic">▾</span>habit-tracking</div>
+                <div class="tr file pl2"><span class="ic">•</span>2026-06-04.md</div>
+                <div class="tr fold pl1"><span class="ic">▸</span>daily-tracking</div>
+                <div class="tr fold"><span class="ic">▸</span>fitness</div>
+                <div class="tr fold"><span class="ic">▸</span>agent-work</div>
+              </div>
+              <div class="ow-main" id="s5-main">
+                <div class="md-t s5-m"><span class="h">#</span> habits · this week</div>
+                <table class="htab">
+                  <thead><tr class="s5-m"><th style="width:34%">Habit</th><th>Cadence</th><th class="c">Streak</th><th class="c">Week</th><th>Status</th></tr></thead>
+                  <tbody>
+                    <tr class="s5-m"><td>Meditate</td><td class="cad">daily</td><td class="c streak">12</td><td class="c">6/7</td><td class="dots"><span class="f">●●●●●●</span><span class="e">○</span></td></tr>
+                    <tr class="s5-m"><td>Read 20 min</td><td class="cad">daily</td><td class="c streak">5</td><td class="c">5/7</td><td class="dots"><span class="f">●●●●●</span><span class="e">○○</span></td></tr>
+                    <tr class="s5-m"><td>Gym</td><td class="cad">4× / week</td><td class="c streak">—</td><td class="c">3/4</td><td class="wait">⏳ on track</td></tr>
+                    <tr class="s5-m"><td>No phone in bed</td><td class="cad">daily · cap</td><td class="c streak">9</td><td class="c">7/7</td><td class="met">✅ met</td></tr>
+                    <tr class="s5-m"><td>Water 4L</td><td class="cad">daily · 4L</td><td class="c streak">4</td><td class="c">88%</td><td class="dots"><span class="f">●●●●●●</span><span class="e">○</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="notif" id="s5-notif">
+            <div class="notif-ic">p</div>
+            <div class="notif-tx">
+              <div class="notif-app"><b>pbrain</b><span>now</span></div>
+              <div class="notif-msg">Time to meditate — 5 min before Block 2</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 6 — COMPOUNDING (PEAK) ============ -->
+      <div id="scene6" class="scene">
+        <div class="glow" data-layout-allow-overflow id="s6-glow" style="width:1000px;height:1000px;background:#6d4dd6;opacity:0.15;left:1050px;top:120px;"></div>
+        <div class="content">
+          <div class="s6-left">
+            <div class="s6-kicker" id="s6-kick">what it gives back, over time</div>
+            <div class="s6-head" id="s6-head">One entry is a note.<br /><span class="b">Three hundred</span> is a<br />second brain.</div>
+            <div class="s6-stats">
+              <div class="s6-stat"><div class="num tnum" id="s6-days">0</div><div class="lbl">days kept</div></div>
+              <div class="s6-stat"><div class="num tnum" id="s6-entries">0</div><div class="lbl">entries</div></div>
+              <div class="s6-stat"><div class="num tnum" id="s6-words">0</div><div class="lbl">words you own</div></div>
+            </div>
+            <div class="s6-sub2" id="s6-sub2"><span class="a">/recall</span> · <span class="a">/loose-ends</span> · <span class="a">/weekly-review</span> — read it back, any time</div>
+          </div>
+          <div class="s6-right">
+            <div class="s6-grid" id="s6-grid"></div>
+            <div class="s6-gridcap" id="s6-gcap">your vault · one cell per day</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 7 — OWNERSHIP ============ -->
+      <div id="scene7" class="scene">
+        <div class="glow" data-layout-allow-overflow id="s7-glow" style="width:680px;height:680px;background:#6d4dd6;opacity:0.16;left:620px;top:200px;"></div>
+        <div class="s7-lock" id="s7-lock" style="left:580px;top:160px;"></div>
+        <div class="content">
+          <div class="s7-head" id="s7-head">And it never leaves<br />your <b>machine.</b></div>
+          <div class="s7-sub" id="s7-sub">no accounts <span class="x">·</span> no servers <span class="x">·</span> no telemetry<br />just markdown you own, on your disk</div>
+        </div>
+      </div>
+
+      <!-- ============ SCENE 8 — CTA ============ -->
+      <div id="scene8" class="scene">
+        <div class="glow" data-layout-allow-overflow id="s8-glow" style="width:1000px;height:1000px;background:#6d4dd6;opacity:0.18;left:460px;top:40px;"></div>
+        <div class="content">
+          <div class="s8-mark" id="s8-mark"><span class="s8-sigil"><span class="slash">/</span>pbrain</span></div>
+          <div class="s8-tag" id="s8-tag">Start today. <b>Thank yourself in a year.</b></div>
+          <div class="s8-foot" id="s8-foot">Obsidian + Claude Code · local-first · macOS</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function mulberry32(a){return function(){a|=0;a=(a+0x6d2b79f5)|0;var t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+      var rnd = mulberry32(73);
+      var ROWS = 7, COLS = 22;
+      var grid = document.getElementById("s6-grid");
+      for (var i = 0; i < ROWS * COLS; i++) {
+        var cell = document.createElement("div");
+        cell.className = "s6-cell";
+        var r = rnd();
+        var lit = r < 0.16 ? 0.18 + rnd() * 0.12 : 0.5 + rnd() * 0.5;
+        cell.dataset.lit = lit.toFixed(3);
+        grid.appendChild(cell);
+      }
+      function commas(n){return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");}
+
+      window.__timelines = window.__timelines || {};
+      var tl = gsap.timeline({ paused: true });
+
+      // reusable calm blur-crossfade
+      function blurCross(o, n, T) {
+        tl.to(o, { filter: "blur(24px)", scale: 1.04, duration: 0.55, ease: "power1.in" }, T);
+        tl.to(o, { opacity: 0, duration: 0.4, ease: "power1.in" }, T + 0.3);
+        tl.fromTo(n, { opacity: 0, filter: "blur(24px)", scale: 0.965 }, { opacity: 1, duration: 0.35, ease: "power1.inOut" }, T + 0.4);
+        tl.to(n, { filter: "blur(0px)", scale: 1, duration: 0.55, ease: "power1.out" }, T + 0.7);
+        tl.set(o, { visibility: "hidden" }, T + 1.0);
+      }
+      // entrance for a capability scene's window + caption
+      function capIntro(start, headSel, owSel, sideSel, mainSel, opt) {
+        opt = opt || {};
+        tl.fromTo(headSel + " .cap-kick", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, start);
+        tl.fromTo(headSel + " .cap-title", { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, start + 0.12);
+        tl.fromTo(owSel, { opacity: 0, y: 46, scale: 0.985 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: (opt.owEase || "power3.out") }, start + 0.2);
+        tl.fromTo(sideSel + " .tr", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out", stagger: 0.045 }, start + 0.5);
+        tl.fromTo(mainSel, { opacity: 0, y: (opt.mainY || 18) }, { opacity: 1, y: 0, duration: 0.5, ease: (opt.mainEase || "power2.out"), stagger: 0.07 }, start + 0.6);
+      }
+
+      /* ===== SCENE 0 — HOOK (0–4) ===== */
+      tl.to("#s0-glow", { scale: 1.12, opacity: 0.22, duration: 4.0, ease: "sine.inOut" }, 0);
+      tl.fromTo("#s0-kick", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.7, ease: "power2.out" }, 0.25);
+      tl.fromTo("#s0-head", { opacity: 0, y: 60 }, { opacity: 1, y: 0, duration: 1.0, ease: "power3.out" }, 0.45);
+      tl.fromTo("#s0-sub", { opacity: 0, y: 28 }, { opacity: 1, y: 0, duration: 0.8, ease: "power2.out" }, 1.1);
+      var frags = ["#s0-f1", "#s0-f2", "#s0-f3", "#s0-f4"];
+      frags.forEach(function (f, i) {
+        tl.fromTo(f, { opacity: 0 }, { opacity: 0.75, duration: 0.6, ease: "power1.out" }, 0.2 + i * 0.18);
+        tl.to(f, { y: "-=34", x: (i % 2 ? 22 : -22), opacity: 0.12, duration: 3.2, ease: "sine.inOut" }, 1.0 + i * 0.12);
+      });
+      tl.to("#s0-ghost", { x: 40, duration: 4.2, ease: "sine.inOut" }, 0);
+      blurCross("#scene0", "#scene1", 4.0);
+
+      /* ===== SCENE 1 — TURN (4.5–8) ===== */
+      tl.to("#s1-glow", { scale: 1.15, opacity: 0.24, duration: 3.4, ease: "sine.inOut" }, 4.4);
+      tl.fromTo("#s1-q", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.9, ease: "power3.out" }, 4.7);
+      tl.fromTo("#s1-mark", { opacity: 0, scale: 0.86, y: 30 }, { opacity: 1, scale: 1, y: 0, duration: 0.9, ease: "expo.out" }, 5.5);
+      tl.fromTo("#s1-tag", { opacity: 0, letterSpacing: "0.4em" }, { opacity: 1, letterSpacing: "0.12em", duration: 0.8, ease: "power2.out" }, 6.1);
+      blurCross("#scene1", "#scene2", 8.0);
+
+      /* ===== SCENE 2 — MORNING (8.5–12.6) ===== */
+      tl.to("#s2-glow", { x: 70, opacity: 0.16, duration: 4.0, ease: "sine.inOut" }, 8.5);
+      capIntro(8.6, "#s2-head", "#s2-ow", "#s2-side", ".s2-m", { owEase: "power3.out", mainY: 18 });
+      blurCross("#scene2", "#scene3", 12.6);
+
+      /* ===== SCENE 3 — FITNESS (13.1–16.8) ===== */
+      tl.to("#s3-glow", { x: -60, opacity: 0.15, duration: 3.6, ease: "sine.inOut" }, 13.1);
+      capIntro(13.2, "#s3-head", "#s3-ow", "#s3-side", ".s3-m", { owEase: "expo.out", mainY: 22, mainEase: "power3.out" });
+      blurCross("#scene3", "#scene4", 16.8);
+
+      /* ===== SCENE 4 — DIET / MACROS (17.3–21.0) ===== */
+      tl.to("#s4-glow", { y: 60, opacity: 0.15, duration: 3.6, ease: "sine.inOut" }, 17.3);
+      capIntro(17.4, "#s4-head", "#s4-ow", "#s4-side", ".s4-m", { owEase: "power3.out", mainY: 16 });
+      // ring fill + kcal count + macro bars
+      tl.fromTo("#s4-ring", { strokeDashoffset: 578 }, { strokeDashoffset: 72, duration: 1.3, ease: "power2.out" }, 18.1);
+      var kcal = { v: 0 };
+      tl.to(kcal, { v: 1840, duration: 1.3, ease: "power2.out", onUpdate: function () { document.getElementById("s4-kcal").textContent = commas(kcal.v); } }, 18.1);
+      tl.fromTo(".s4-bar", { width: 0 }, { width: function (i, el) { return el.dataset.w; }, duration: 0.9, ease: "power2.out", stagger: 0.12 }, 18.3);
+      blurCross("#scene4", "#scene5", 21.0);
+
+      /* ===== SCENE 5 — HABITS + REMIND (21.5–25.8) ===== */
+      tl.to("#s5-glow", { x: -50, opacity: 0.15, duration: 4.0, ease: "sine.inOut" }, 21.5);
+      capIntro(21.6, "#s5-head", "#s5-ow", "#s5-side", ".s5-m", { owEase: "power3.out", mainY: 16 });
+      // reminder notification slides in, settles
+      tl.fromTo("#s5-notif", { opacity: 0, x: 80, y: -10 }, { opacity: 1, x: 0, y: 0, duration: 0.7, ease: "back.out(1.7)" }, 23.4);
+      tl.to("#s5-notif", { y: 6, duration: 1.4, ease: "sine.inOut", yoyo: true, repeat: 1 }, 24.2);
+      blurCross("#scene5", "#scene6", 25.8);
+
+      /* ===== SCENE 6 — COMPOUNDING (26.3–33.5) ===== */
+      tl.to("#s6-glow", { scale: 1.18, opacity: 0.2, duration: 6.2, ease: "sine.inOut" }, 26.3);
+      tl.fromTo("#s6-kick", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 26.5);
+      tl.fromTo("#s6-head", { opacity: 0, y: 44 }, { opacity: 1, y: 0, duration: 0.9, ease: "power3.out" }, 26.7);
+      tl.fromTo(".s6-cell", { opacity: 0.05, scale: 0.5 },
+        { opacity: function (i, el) { return parseFloat(el.dataset.lit); }, scale: 1, ease: "power2.out", duration: 0.5,
+          stagger: { grid: [ROWS, COLS], axis: "x", from: "start", amount: 2.6 } }, 27.0);
+      tl.fromTo("#s6-gcap", { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power1.out" }, 30.0);
+      var cDays = { v: 1 }, cEnt = { v: 4 }, cWords = { v: 320 };
+      tl.to(cDays, { v: 365, duration: 3.3, ease: "power1.out", onUpdate: function () { document.getElementById("s6-days").textContent = commas(cDays.v); } }, 27.1);
+      tl.to(cEnt, { v: 340, duration: 3.3, ease: "power1.out", onUpdate: function () { document.getElementById("s6-entries").textContent = commas(cEnt.v); } }, 27.1);
+      tl.to(cWords, { v: 128000, duration: 3.5, ease: "power1.out", onUpdate: function () { document.getElementById("s6-words").textContent = commas(cWords.v); } }, 27.1);
+      tl.fromTo("#s6-sub2", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.7, ease: "power2.out" }, 30.4);
+      tl.to("#s6-grid", { scale: 1.015, duration: 1.6, ease: "sine.inOut", yoyo: true, repeat: 1 }, 30.8);
+      blurCross("#scene6", "#scene7", 33.5);
+
+      /* ===== SCENE 7 — OWNERSHIP (34.0–37.8) ===== */
+      tl.to("#s7-glow", { scale: 1.1, opacity: 0.2, duration: 3.6, ease: "sine.inOut" }, 34.0);
+      tl.fromTo("#s7-lock", { opacity: 0, scale: 0.82 }, { opacity: 1, scale: 1, duration: 1.1, ease: "power2.out" }, 34.1);
+      tl.to("#s7-lock", { rotation: 8, duration: 3.2, ease: "sine.inOut" }, 34.3);
+      tl.fromTo("#s7-head", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.9, ease: "power3.out" }, 34.4);
+      tl.fromTo("#s7-sub", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.8, ease: "power2.out" }, 35.1);
+      // color dip → CTA
+      tl.to("#scene7", { opacity: 0, duration: 0.4, ease: "power2.in" }, 37.8);
+      tl.set("#scene7", { visibility: "hidden" }, 38.25);
+      tl.fromTo("#scene8", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.out" }, 38.25);
+
+      /* ===== SCENE 8 — CTA (38.7–44) ===== */
+      tl.to("#s8-glow", { scale: 1.16, opacity: 0.24, duration: 3.6, ease: "sine.inOut" }, 38.7);
+      tl.fromTo("#s8-mark", { opacity: 0, scale: 0.88, y: 30 }, { opacity: 1, scale: 1, y: 0, duration: 1.0, ease: "expo.out" }, 38.9);
+      tl.fromTo("#s8-tag", { opacity: 0, y: 28 }, { opacity: 1, y: 0, duration: 0.8, ease: "power2.out" }, 39.6);
+      tl.fromTo("#s8-foot", { opacity: 0, letterSpacing: "0.4em" }, { opacity: 1, letterSpacing: "0.16em", duration: 0.9, ease: "power2.out" }, 40.1);
+      tl.to("#s8-mark", { opacity: 0, y: -20, duration: 0.7, ease: "power2.in" }, 42.9);
+      tl.to("#s8-tag", { opacity: 0, y: -16, duration: 0.7, ease: "power2.in" }, 42.95);
+      tl.to("#s8-foot", { opacity: 0, duration: 0.7, ease: "power2.in" }, 43.0);
+      tl.to("#s8-glow", { opacity: 0.05, duration: 0.8, ease: "power1.in", overwrite: "auto" }, 42.9);
+      tl.set("#scene8", { visibility: "hidden" }, 43.9);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -10,3 +10,5 @@
 # Compiled notifier app — a per-machine build artifact (normally built to
 # ~/.config/pbrain); never commit it if PBRAIN_NOTIFY_APP points in-tree.
 pbrain-notify.app/
+# Promo video raw renders — build artifacts; compressed copy lives in docs/media/
+promo-video/renders/
