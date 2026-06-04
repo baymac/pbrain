@@ -175,9 +175,11 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path |
 | `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
-| `PBRAIN_PREFS_DIR` | all commands (per-command preferences) | `~/.config/pbrain/prefs` |
+| `PBRAIN_PREFS_DIR` | all commands (`_global.md` + per-command `<cmd>.md` preferences) | `~/.config/pbrain/prefs` |
 | `PBRAIN_FEEDBACK_DIR` | all commands (quality-fix capture) | `~/.config/pbrain/feedback` |
 | `PBRAIN_DB_FILE` | `/habits`, `/remind` (shared SQLite store: habit events + reminders) | `~/.config/pbrain/pbrain.db` |
+| `PBRAIN_NOTIFY_APP` | `/remind` (cached build of pbrain's own macOS notifier app) | `~/.config/pbrain/pbrain-notify.app` |
+| `PBRAIN_NOTIFY_IDENTITY` | `/remind` (bundle id the notifier delivers under; `""` = no impersonation) | unset → `com.apple.Terminal` |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_DIET_DIR` | `/diet-journal` | `$VAULT/fitness/diet-tracking` |
