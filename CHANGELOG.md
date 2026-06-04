@@ -2,6 +2,12 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.8.1] — 2026-06-04
+
+### Added
+
+- **Promo demo video.** README now leads with a 44-second screen recording showing `/journal`, `/fitness-journal`, `/diet-journal`, `/habits`, and `/remind` writing live into an Obsidian vault, plus a one-year compounding view. Poster image links to the video in GitHub's media viewer. Source composition (HyperFrames) committed under `promo-video/`.
+
 ## [0.8.0] — 2026-06-04
 
 ### Changed

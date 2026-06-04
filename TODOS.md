@@ -21,7 +21,7 @@ Sources studied:
 
 - [ ] **Comparison table in README** — single table near the top: pbrain vs claude-obsidian vs obsidian-claude-pkm vs llm-knowledge-bases. Columns: philosophy, primary workflow, autonomy level, structure assumption. Helps visitors pick the right tool fast. *(AgriciDaniel does this well — it's the second thing you see on their README.)*
 
-- [ ] **Demo video or animated GIF** — currently `docs/images/` has only a capture guide. A 30-second screen recording of `/plan-my-day` → `/end-of-day` → next-day `/recall` is the single biggest conversion driver. *(AgriciDaniel leads with a demo video; pbrain has none.)*
+- [x] **Demo video or animated GIF** — currently `docs/images/` has only a capture guide. A 30-second screen recording of `/plan-my-day` → `/end-of-day` → next-day `/recall` is the single biggest conversion driver. *(AgriciDaniel leads with a demo video; pbrain has none.)* **Completed: v0.8.1 (2026-06-04)** — 44s promo in `docs/media/pbrain-promo.mp4`; source composition in `promo-video/` (HyperFrames).
 
 ---
 
