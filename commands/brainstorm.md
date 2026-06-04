@@ -1,5 +1,5 @@
 ---
-description: Start a brainstorming session
+description: Brainstorm a topic — surface hidden tensions, take a position, name opportunities, list open questions with → consequences. Verdict required. No code or implementation plans. Under 2500 chars.
 argument-hint: <topic>
 ---
 Run this with the Bash tool first (substituting the user's topic for `$ARGUMENTS`), then follow the INSTRUCTIONS block in its output:
@@ -30,10 +30,11 @@ This is a **fast idea dump**, not a working session. The user is pitching; you a
 6. **Land on a verdict:** validate or invalidate. Be honest.
 
 **Hard rules:**
+- **A verdict is mandatory.** Every brainstorm ends with an explicit verdict line: validate or invalidate. No hedging, no "it depends" without a lean. This is step 6, but it's a hard rule — not optional.
 - Do NOT solve the problem. No code, no architecture, no implementation plans.
-- Do NOT pepper the user with 10 clarifying questions before reacting. Take the pitch as given.
-- Keep responses tight. The user has limited time.
-- If the idea clearly needs deeper exploration, point at `/office-hours`. If it needs scope/strategy work, point at `/plan-ceo-review`. Don't try to be those skills.
+- Do NOT ask about budget, timeline, team size, or existing users before reacting. Take the pitch as given. React first, ask later if it matters.
+- Keep total response under **2500 characters**. The user has limited time.
+- If the idea needs deeper exploration, point at `/office-hours`. If it needs scope/strategy work, point at `/plan-ceo-review`. Don't try to be those skills.
 
 **Capture:**
-After the exchange, offer to append the punchlines (verdict, top opportunities, key open questions) into the brainstorm file the shell script just created. Use the user's note-taking voice: flat list, telegraphic one-liners, `→` arrows. No wiki headers.
+After the exchange, offer to append the punchlines (verdict, top opportunities, key open questions) into the brainstorm file the shell script just created. Use the user's note-taking voice: **flat numbered or bulleted list, telegraphic one-liners, `→` for consequences**. No nested bullets, no bold section headers, no wiki-style `## Headings`.

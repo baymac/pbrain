@@ -246,7 +246,18 @@ pbrain/
 │   └── plugin.json                     ← Claude plugin manifest
 ├── commands/                           ← .md + .sh pairs for each slash command
 ├── lib/
-│   └── vault.sh                        ← shared VAULT_DIR resolver, sourced by each command
+│   ├── vault.sh                        ← shared VAULT_DIR resolver + entry point for helpers
+│   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
+│   ├── prefs.sh                        ← per-command preference injection
+│   ├── self-improve.sh                 ← end-of-session feedback capture
+│   ├── profile.sh                      ← goals-profile JSON extractor
+│   ├── db.sh                           ← shared SQLite store (habit events + reminders)
+│   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
+│   └── reminders.sh                    ← reminder notify/tick/surfacing
+├── scripts/
+│   ├── install-commands.sh             ← symlink commands into ~/.claude/commands/
+│   └── uninstall-commands.sh           ← reverse of install
+├── tests/                              ← bats test suite for lib/ helpers
 ├── docs/                               ← one short doc per command (user-facing)
 ├── gbrain/                             ← gbrain ops (sync, launchd, docs)
 │   ├── scripts/
