@@ -115,7 +115,7 @@ Then it offers to open today's tracker, mark a habit, add/edit/archive one, or s
 
 Script-level API (used by the auto-marking, surfacing, and the dashboard's offers):
 `mark --name "X" --date YYYY-MM-DD [--count N] [--amount X] [--note "…"]` (the primary write path → ticks the md; `--amount` for measured habits),
-`track [--date …]`, `sync [--days N]` (mirror md → DB), `consolidate [--date …]` (sync + prune, run by `/end-of-day`),
+`track [--date …]`, `sync [--days N] [--date YYYY-MM-DD]` (mirror md → DB; `--date` targets a specific end date for the sync window), `consolidate [--date …]` (sync + prune, run by `/end-of-day`),
 `add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority …] [--notes "…"]`,
 `edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--unit …] [--measure-target N] [--priority …] [--notes …]` (pass `--measure-target ""` to clear a measure),
 `archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive; takes `--amount` too).

@@ -377,7 +377,7 @@ assert "long-run" not in ids, ids
   _write_profile
   HABITS mark --name "Brush at night" --date 2026-06-03
   HABITS mark --name "Alcohol" --date 2026-06-03
-  HABITS sync --days 0
+  HABITS sync --days 0 --date 2026-06-03
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sorted(r[0] for r in c.execute(\"select habit_id from habit_events where occurred_on='2026-06-03'\")))" "$PBRAIN_DB_FILE"
   [ "$output" = "['alcohol', 'brush-at-night']" ]
 }
@@ -385,7 +385,7 @@ assert "long-run" not in ids, ids
 @test "sync mirror removes an event when the md is unchecked" {
   _write_profile
   HABITS mark --name "Alcohol" --date 2026-06-03
-  HABITS sync --days 0
+  HABITS sync --days 0 --date 2026-06-03
   # uncheck Alcohol in the md by rewriting its Done cell to empty
   python3 - "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'PY'
 import sys, re
@@ -394,7 +394,7 @@ t = open(p).read()
 t = re.sub(r"(\| Alcohol \|[^\n]*?\|) x (\|)", r"\1   \2", t)
 open(p, "w").write(t)
 PY
-  HABITS sync --days 0
+  HABITS sync --days 0 --date 2026-06-03
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select count(*) from habit_events where occurred_on='2026-06-03'\").fetchone()[0])" "$PBRAIN_DB_FILE"
   [ "$output" = "0" ]
 }
@@ -450,7 +450,7 @@ assert h["measure_target"] == 2.5, h
 @test "status evaluates a measured daily habit by amount, not occurrences" {
   HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
   HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
-  HABITS sync --days 0 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
   run pbrain_habits_status 2026-06-03
   echo "$output" | python3 -c '
 import json, sys
@@ -460,7 +460,7 @@ assert h["period_used"] == 2.5 and h["period_target"] == 4
 assert h["fulfilled"] is False        # 2.5 < 4
 '
   HABITS mark --name "Water" --date 2026-06-03 --amount 4 >/dev/null
-  HABITS sync --days 0 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
   run pbrain_habits_status 2026-06-03
   echo "$output" | python3 -c '
 import json, sys
@@ -485,7 +485,7 @@ assert h["period_used"] == 20 and h["fulfilled"] is True, h
 @test "rollup renders measured progress with the unit" {
   HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 --priority high >/dev/null
   HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
-  HABITS sync --days 0 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
   run pbrain_habits_rollup 2026-06-03
   [[ "$output" == *"2.5/4 L today ⏳"* ]]
 }
@@ -493,7 +493,7 @@ assert h["period_used"] == 20 and h["fulfilled"] is True, h
 @test "rollup flags a measured limit habit over its target" {
   HABITS add --name "Sugar" --type daily --direction at_most --unit g --measure-target 30 >/dev/null
   HABITS mark --name "Sugar" --date 2026-06-03 --amount 45 >/dev/null
-  HABITS sync --days 0 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
   run pbrain_habits_rollup 2026-06-03
   [[ "$output" == *"45/30 g today"* ]]
   [[ "$output" == *"OVER"* ]]
@@ -510,9 +510,27 @@ assert h["period_used"] == 20 and h["fulfilled"] is True, h
 @test "sync stores a measured amount in the amount column (count stays 1)" {
   HABITS add --name "Water" --type daily --direction at_least --unit L --measure-target 4 >/dev/null
   HABITS mark --name "Water" --date 2026-06-03 --amount 2.5 >/dev/null
-  HABITS sync --days 0 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select count,amount from habit_events where habit_id='water' and occurred_on='2026-06-03'\").fetchone())" "$PBRAIN_DB_FILE"
   [ "$output" = "(1, 2.5)" ]
+}
+
+@test "sync without --date defaults to today (empty-string fallback)" {
+  _write_profile
+  TODAY="$(date +%Y-%m-%d)"
+  HABITS mark --name "Brush at night" --date "$TODAY"
+  HABITS sync --days 0
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute(\"select count(*) from habit_events where occurred_on=?\", [sys.argv[2]]).fetchone()[0])" "$PBRAIN_DB_FILE" "$TODAY"
+  [ "$output" = "1" ]
+}
+
+@test "sync --days N --date covers the full N-day window" {
+  _write_profile
+  HABITS mark --name "Brush at night" --date 2026-06-01
+  HABITS mark --name "Alcohol" --date 2026-06-03
+  HABITS sync --days 2 --date 2026-06-03
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sorted(r[0] for r in c.execute(\"select habit_id from habit_events where occurred_on>='2026-06-01'\")))" "$PBRAIN_DB_FILE"
+  [ "$output" = "['alcohol', 'brush-at-night']" ]
 }
 
 @test "log records an amount on a measured habit" {
