@@ -2,6 +2,17 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.8.0] — 2026-06-04
+
+### Changed
+
+- **`/plan-my-day` anchor-first scheduling.** The planner now learns your typical workout, lunch, dinner, walk, and bed times from the last 21 plans (TIMING_SIGNAL) and uses them as the fixed schedule skeleton. Maximum 15–30 min deviation from any confirmed anchor.
+- **Step 1.5 — Anchor confirmation.** Before asking for your day's blocks, `/plan-my-day` now shows a pre-filled list of your anchor times (from `daily_anchors` in your profile, or inferred from past plans) and asks you to confirm or adjust. One message, all anchors at once.
+- **Block 1/2/3 model replaces Now/Next/Later.** The three main intentional blocks of the day are now chronological (wake→sleep), not relative to current time. Running `/plan-my-day` at 10pm still produces a full-day plan. Each block can be any type — work, creative, social, outdoor — and must be at least `deep_work_block_min` minutes wide.
+- **Table confirmation before write.** The generated schedule table is shown to the user for review before the plan is saved to disk. Times, rows, and labels can be adjusted; the file is only written on confirmation.
+- **Step 5b — Anchor profile update.** After planning, if today's anchor times differ from the profile's `daily_anchors` (or the profile has none yet), Claude offers to save them as new defaults.
+- **`daily_anchors` field added to profile schema.** The Goals Profile JSON now includes `wake_time`, `workout_time`, `lunch_time`, `dinner_time`, `walk_time`, `bed_target`, and `focused_hours_per_day`. The profile setup interview now asks for these during first-time setup.
+
 ## [0.7.0] — 2026-06-04
 
 Combines the markdown-first habits line (0.4.0/0.4.1) with the Codex interop line (0.5.0/0.6.0) — both shipped here together. Detailed notes for each are in their version sections below.
