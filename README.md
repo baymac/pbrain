@@ -201,7 +201,8 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_LOOSE_ENDS_LOOKBACK` | `/loose-ends` | `30` (days of journals/plans to scan) |
 | `PBRAIN_CLIPPINGS_DIR` | `/organize-clippings` | `$VAULT/Clippings` |
 | `PBRAIN_CLIPPINGS_TARGETS` | `/organize-clippings` | (interactive prompt — set to `all` or a comma-separated subset to skip it) |
-| `CODEX_HOME` | `/pbrain-codex-install` | Codex home dir to install prompts + AGENTS.md into (default `~/.codex`) |
+| `CODEX_HOME` | `/codex-install` | Codex home dir to install skills + AGENTS.md into (default `~/.codex`) |
+
 
 The vault root is resolved via `PBRAIN_VAULT` → `~/.config/pbrain/vault` → default iCloud path, in that order.
 
@@ -209,27 +210,29 @@ The vault root is resolved via `PBRAIN_VAULT` → `~/.config/pbrain/vault` → d
 
 ## Codex interoperability
 
-pbrain is primarily a Claude Code plugin, but the same commands can run from the **OpenAI Codex CLI** — useful if you (or someone you share with) live in Codex. Run `/pbrain-codex-install` **from Claude Code, once, after `/init-obsidian`**:
+pbrain is primarily a Claude Code plugin, but the same commands can run from the **OpenAI Codex CLI** — useful if you (or someone you share with) live in Codex. Run `/codex-install` **from Claude Code, once, after `/init-obsidian`**:
 
 ```bash
 /init-obsidian            # set up the vault (Claude Code)
-/pbrain-codex-install     # wire pbrain into Codex   (Claude Code)
+/codex-install            # wire pbrain into Codex   (Claude Code)
 ```
 
 It generates, under `$CODEX_HOME` (default `~/.codex`):
 
-- `prompts/pbrain-<command>.md` — one Codex **custom prompt** per pbrain command, each a thin wrapper that runs the *same* `commands/<command>.sh`. Invoke them in Codex as `/prompts:pbrain-journal`, `/prompts:pbrain-plan-my-day`, `/prompts:pbrain-brainstorm "idea"`, etc. (`init-obsidian` and the installer itself stay Claude-only.)
-- a managed, clearly-delimited **pbrain block** in `AGENTS.md` with the cross-command behaviour Codex needs (morning sequence, ride-along blocks, vault write rules, launch command) — scoped so it won't affect unrelated Codex sessions.
+- `skills/pbrain-<command>/SKILL.md` — one Codex **agent skill** per pbrain command, each a thin wrapper that runs the *same* `commands/<command>.sh`. Codex discovers them automatically; invoke by plain name (`journal`, `plan my day`, `brainstorm should I build X`), explicitly as `$pbrain-journal`, or just describe the task and let Codex auto-select. (`init-obsidian` and the installer itself stay Claude-only.)
+- a managed, clearly-delimited **pbrain block** in `AGENTS.md` with the cross-command behaviour Codex needs (how to invoke, morning sequence, ride-along blocks, vault write rules, launch command) — scoped so it won't affect unrelated Codex sessions.
 
-**One source of truth, no conflicts.** The prompts reimplement nothing — they run the same shell scripts and resolve the same vault + `~/.config/pbrain` config + SQLite DB at runtime. Alternating between Codex and Claude Code on the same machine can't get out of sync. Re-run `/pbrain-codex-install` after moving/reinstalling pbrain or when new commands ship (idempotent; prunes only its own stale prompts, never yours).
+> Don't type `/journal` in Codex — its CLI rejects unknown `/slash` commands before the model sees them. Invoke pbrain by plain name.
 
-**Launching Codex** so pbrain can write to the vault and config without per-write approval (the installer prints this with your real vault path):
+**One source of truth, no conflicts.** The skills reimplement nothing — they run the same shell scripts and resolve the same vault + `~/.config/pbrain` config + SQLite DB at runtime. Alternating between Codex and Claude Code on the same machine can't get out of sync. Re-run `/codex-install` after moving/reinstalling pbrain or when new commands ship (idempotent; prunes only its own stale skills, never yours).
+
+**Launching Codex** so pbrain can write to the vault and config without per-write approval: the installer writes a `codex-pbrain` shell function to your RC file — `source ~/.zshrc`, then just run `codex-pbrain`. Equivalent manual launch (the installer prints it with your real vault path):
 
 ```bash
 codex --sandbox workspace-write --add-dir "/path/to/your/vault" --add-dir "$HOME/.config/pbrain"
 ```
 
-Full details: [`docs/pbrain-codex-install.md`](docs/pbrain-codex-install.md). (Codex *skills* are gated behind `--enable skills`, so this uses custom prompts — the mechanism that works on any Codex CLI today.)
+Full details: [`docs/codex-install.md`](docs/codex-install.md). (pbrain originally used Codex *custom prompts*; those are now deprecated and were undiscoverable on recent Codex builds, so it moved to **agent skills** — the supported, default-on mechanism. Re-running `/codex-install` migrates you automatically.)
 
 ---
 
