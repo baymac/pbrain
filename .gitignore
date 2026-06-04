@@ -7,3 +7,6 @@
 .fastembed_cache/
 .logs/
 .gstack/
+# Compiled notifier app — a per-machine build artifact (normally built to
+# ~/.config/pbrain); never commit it if PBRAIN_NOTIFY_APP points in-tree.
+pbrain-notify.app/

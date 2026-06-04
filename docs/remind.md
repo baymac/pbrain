@@ -33,7 +33,15 @@ A reminder fires (a macOS notification) when it becomes due. There are two firin
 1. **Opportunistic (default, zero setup).** Whenever you run `/remind`, `/plan-my-day`, or `/end-of-day`, any due-and-unfired reminders fire. Each fires once (tracked by `fired_at`), so it never double-pings.
 2. **Background poller (opt-in).** Run `/remind install` to register a launchd agent that ticks every ~5 minutes, so reminders fire even when no pbrain command is running. `/remind uninstall` removes it.
 
-Repeating reminders roll forward to their next occurrence after each fire; one-shot reminders fire once and wait for you to mark them done.
+Repeating reminders roll forward to their next occurrence after each fire; one-shot reminders fire once and then read as **fired** in the list (still there so you can mark them done) rather than lingering as overdue.
+
+### The notifier
+
+Notifications are delivered by **pbrain's own tiny notifier app** (`pbrain-notify.app`), not by `osascript`. The reason: `osascript display notification` is *silently dropped* when fired from the background launchd poller — from that context there's no trusted app for macOS's notification-permission check, so nothing ever appears. The bundled app carries a real app-bundle identity, so it fires reliably even from the background.
+
+You don't install it separately. It's compiled on demand from a ~60-line Swift source the first time a reminder fires (or at `/remind install`) using `swiftc` (Apple Command Line Tools — already on any dev Mac), and cached at `~/.config/pbrain/pbrain-notify.app`. If `swiftc` isn't available, firing falls back to `osascript` (which still works from interactive `/remind`, `/plan-my-day`, `/end-of-day` runs — just not from the background poller).
+
+Notifications appear under the **"Terminal"** identity and clicking one opens Terminal. That's deliberate: on macOS 14/15 (Sequoia) notifications from an unrecognized app are dropped, so the notifier borrows Terminal's already-trusted notification permission (the same technique the `alerter` tool uses). To use a different identity, set `PBRAIN_NOTIFY_IDENTITY` to a bundle id (e.g. your own), or to an empty string to deliver under pbrain's own `com.pbrain.notify` identity — at the risk of macOS not showing it until you enable it in System Settings → Notifications.
 
 ## Where reminders show up
 
@@ -45,7 +53,9 @@ Repeating reminders roll forward to their next occurrence after each fire; one-s
 | Env var | Effect | Default |
 |---|---|---|
 | `PBRAIN_DB_FILE` | SQLite DB path (shared with `/habits`) | `~/.config/pbrain/pbrain.db` |
+| `PBRAIN_NOTIFY_APP` | Where the compiled notifier app is cached/built | `~/.config/pbrain/pbrain-notify.app` |
+| `PBRAIN_NOTIFY_IDENTITY` | Bundle id the notifier delivers under (`""` = pbrain's own, no impersonation) | unset → `com.apple.Terminal` |
 
 **Subcommands (the script's API — you normally just type natural language):** `add --text … [--due …] [--repeat …]`, `list`, `done <id>`, `cancel <id>`, `clear --yes`, `tick`, `install`, `uninstall`.
 
-**Note:** macOS only (uses `osascript`/launchd). If notification permissions are off for your terminal/Claude Code, enable them in System Settings → Notifications.
+**Note:** macOS only (uses the bundled notifier / launchd). Notifications fire under the "Terminal" identity by default (see *The notifier* above), so they ride Terminal's notification permission. If notifications don't appear at all, check System Settings → Notifications and make sure Terminal (or whichever identity you set) is allowed.

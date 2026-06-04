@@ -2,6 +2,19 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.7.0] — 2026-06-04
+
+Combines the markdown-first habits line (0.4.0/0.4.1) with the Codex interop line (0.5.0/0.6.0) — both shipped here together. Detailed notes for each are in their version sections below.
+
+### Added
+
+- **Markdown-first habit tracking.** The day-to-day habit log is now a dated checklist markdown file (`life/habit-tracking/<date>.md`, generated from the profile like `/fitness-journal`); the SQLite DB is a *derived* analysis store synced from those files. `mark` ticks the md, `track`/`sync`/`consolidate` own the md→DB flow, and the criteria model moved into the profile (per-habit `schedule_type`/`direction`/`target_count`). See 0.4.0/0.4.1 below.
+- **Measured (quantity) habits.** A habit can carry a `unit` + `measure_target` (e.g. 4 L water, 20 km/week); `mark`/`log` take `--amount` and fulfillment sums the amount over the period. See 0.4.0 below.
+
+### Fixed
+
+- **Reliable background reminder notifications** via the bundled `pbrain-notify.app` (compiled on demand from `lib/pbrain-notify.swift`), plus `/remind list` fired-one-shot relabeling and `remind add` non-zero exit on DB write failure. See 0.4.1 below.
+
 ## [0.6.0] — 2026-06-04
 
 ### Changed
@@ -18,6 +31,19 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 - **`/habits sync` now accepts `--date YYYY-MM-DD`** to target a specific end date for the sync window. Previously, `sync --days 0` always used today's date, so marks written for a past date (e.g. in tests or after a missed day) were silently skipped. Now `habits sync --days 0 --date 2026-06-03` syncs exactly that date; `--date` defaults to today when omitted.
 - **`/codex-install` installer hardening:** the `AGENTS.md` update step now skips the write (rather than overwriting with empty content) if the file exists but cannot be read due to permissions; `os.makedirs` is now guarded against an empty dirname when `CODEX_HOME` resolves to a bare filename.
+
+## [0.4.1] — 2026-06-04
+
+### Fixed
+
+- **`/remind` notifications now fire reliably from the background poller.** Notifications delivered via `osascript display notification` were *silently dropped* when fired from the launchd poller — from that context there's no trusted app for macOS's notification-permission check, so reminders never appeared even though `tick` ran and stamped `fired_at`. pbrain now ships its own tiny notifier, **`pbrain-notify.app`**, compiled on demand from a new ~60-line Swift source (`lib/pbrain-notify.swift`) via `swiftc` (Apple Command Line Tools — no Xcode, no brew, no external deps) and cached at `~/.config/pbrain/pbrain-notify.app`. Because it runs inside a real app bundle it has a stable identity, and it borrows the always-trusted **`com.apple.Terminal`** notification permission (the technique the `alerter` tool uses — `UNUserNotificationCenter` was evaluated and rejected: it requires code signing plus a first-run authorization grant that an unattended poller can't satisfy). `pbrain_notify` (`lib/reminders.sh`) prefers the bundled app, builds it lazily on first fire and eagerly at `/remind install`, and falls back to `osascript` only when `swiftc` is unavailable. Notifications appear under the "Terminal" identity (clicking opens Terminal); override with `PBRAIN_NOTIFY_IDENTITY` (or `""` to use pbrain's own `com.pbrain.notify` identity), and relocate the build with `PBRAIN_NOTIFY_APP`. New tests in `tests/reminders.bats` cover the build, the osascript fallback, and a real `swiftc` compile.
+- **`/remind list` no longer shows a fired one-shot as OVERDUE forever.** A one-shot reminder that had already fired (so `fired_at` is set) but wasn't yet marked done kept reading as `OVERDUE` in the pending list. It now reads as **`fired — mark done`**, so the list reflects that it already notified you (repeats are unaffected — they clear `fired_at` as they roll forward).
+- **`habits sync --date` param added for pinning the end date.** `habits sync --days N` now accepts an optional `--date YYYY-MM-DD` to fix the end date of the sync window. Previously the end date was always today, so syncing habits marked on a past date required passing a large `--days` value. The default remains today.
+- **`remind add` now exits non-zero when the DB write fails.** A failed SQLite insert left `NEW_ID` empty but the command printed `REMIND_ADDED` and fired a confirmation notification anyway. The reminder was never stored. `remind add` now detects an empty `NEW_ID` and exits 1 with an error message before notifying.
+
+### Also in this release
+
+- Measured habit tracking (`--unit`, `--measure-target`, `--amount`) shipped in v0.4.0 but was missing two test-harness fixes: `habits sync` date-pinning (above) + the `tests/habits.bats` calls that now pass `--date` when marking habits in the past. All 114 tests pass.
 
 ## [0.4.0] — 2026-06-03
 

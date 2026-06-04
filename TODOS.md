@@ -51,7 +51,9 @@ Sources studied:
 
 ## Habits follow-ups
 
-Deferred from the `/habits` criteria-model redesign (eng review 2026-06-03). The redesign deliberately kept a markdown-only data model (stable `habit_id` slugs in the profile JSON, events keyed by id) and per-period yes/no fulfillment, to stay simple and avoid premature infra.
+Deferred from the `/habits` criteria-model redesign (eng review 2026-06-03).
+
+- [ ] **`habits log` count is overwritten by `sync_one`** — `habits log --count 3` writes `count=3` to the DB with `MAX` semantics. `sync_one` (called by every read command via `pbrain_habits_sync_range`) does `count=excluded.count` (last-write-wins), so the next `/plan-my-day` or `/end-of-day` run overwrites the manually logged count with the md cell value (blank → defaults to 1). Fix: either (a) change `sync_one` to use `MAX(habit_events.count, excluded.count)` or (b) have `habits log` also write the count into the md Count cell so sync mirrors the right value. **Priority: P2** — affects `habits log` users; the main `habits mark` → `habits sync` flow is unaffected since mark writes to the md and sync just mirrors it. *(Surfaced in adversarial review of v0.4.1, 2026-06-04.)* The redesign deliberately kept a markdown-only data model (stable `habit_id` slugs in the profile JSON, events keyed by id) and per-period yes/no fulfillment, to stay simple and avoid premature infra.
 
 - [ ] **Habits dimension table (star schema)** — when a real analysis dashboard exists, mirror habit definitions from `life/Habits Profile.md`'s JSON into a synced SQLite `habits` table (upserted each run, keyed by `habit_id`) so the dashboard runs pure SQL (`habits ⨝ habit_events`) without parsing markdown. **Why deferred:** the markdown-only model is already dashboard-capable by parsing one JSON block; a second source of truth isn't justified until a dashboard consumer actually exists and query volume demands it. **Depends on:** a real dashboard being built. *(scope option B, declined in favor of stable-ids-in-markdown during the redesign.)*
 

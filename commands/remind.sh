@@ -4,9 +4,13 @@ set -euo pipefail
 # remind.sh — lightweight reminders that fire as macOS notifications.
 #
 # Reminders are stored in the shared pbrain SQLite DB (lib/db.sh). They fire as
-# macOS notifications via osascript, either opportunistically when /plan-my-day,
-# /end-of-day, or /remind run, or — if you opt in with `/remind install` — from a
-# launchd poller that ticks every 5 minutes in the background.
+# macOS notifications via a small bundled notifier app — pbrain-notify.app, our
+# own terminal-notifier, built on demand from lib/pbrain-notify.swift (osascript
+# is the fallback when swiftc isn't available). They fire either opportunistically
+# when /plan-my-day, /end-of-day, or /remind run, or — if you opt in with
+# `/remind install` — from a launchd poller that ticks every 5 minutes in the
+# background. The bundled app is what makes background firing reliable: osascript
+# is silently dropped from launchd (no trusted calling app).
 #
 # Subcommands (the Claude-facing API; humans just type natural language and the
 # /remind command translates):
@@ -14,6 +18,7 @@ set -euo pipefail
 #   remind.sh list
 #   remind.sh done <id> [<id> ...]
 #   remind.sh cancel <id> [<id> ...]
+#   remind.sh snooze <id> [<id> ...] [--hours N]  # advance due_at by N hours (default 1)
 #   remind.sh clear --yes
 #   remind.sh tick                 # fire anything due now (used by launchd + plan/eod)
 #   remind.sh install | uninstall  # background launchd poller
@@ -21,8 +26,10 @@ set -euo pipefail
 #   remind.sh <natural language>   # entry path → emits intent block for Claude
 #
 # Overrides:
-#   PBRAIN_VAULT     — vault root (only needed for prefs/self-improve)
-#   PBRAIN_DB_FILE   — SQLite DB path (default ~/.config/pbrain/pbrain.db)
+#   PBRAIN_VAULT           — vault root (only needed for prefs/self-improve)
+#   PBRAIN_DB_FILE         — SQLite DB path (default ~/.config/pbrain/pbrain.db)
+#   PBRAIN_NOTIFY_APP      — compiled notifier app (default ~/.config/pbrain/pbrain-notify.app)
+#   PBRAIN_NOTIFY_IDENTITY — bundle id to notify under ("" = pbrain's own, no impersonation)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -128,6 +135,10 @@ except Exception as e:
     sys.exit(1)
 PYEOF
 )"
+    if [[ -z "$NEW_ID" ]]; then
+      echo "Error: failed to store reminder (DB write failed)" >&2
+      exit 1
+    fi
     DUE_TXT="${R_DUE:-someday}"
     REPEAT_TXT=""
     [[ -n "$R_REPEAT" ]] && REPEAT_TXT=" (repeats $R_REPEAT)"
@@ -192,6 +203,56 @@ PYEOF
     ;;
 
   # -------------------------------------------------------------------------
+  snooze)
+    shift || true
+    SNOOZE_HOURS=1
+    IDS=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --hours) SNOOZE_HOURS="${2:-1}"; shift 2 2>/dev/null || shift ;;
+        *) IDS+=("$1"); shift ;;
+      esac
+    done
+    if [[ ${#IDS[@]} -eq 0 ]]; then
+      echo "remind: snooze requires at least one reminder id" >&2
+      exit 1
+    fi
+    python3 - "$PBRAIN_DB_FILE" "$SNOOZE_HOURS" "$NOW_DT" "${IDS[@]}" <<'PYEOF'
+import sqlite3, sys, datetime
+db, hours_s, now_s = sys.argv[1], sys.argv[2], sys.argv[3]
+ids = sys.argv[4:]
+hours = float(hours_s)
+now = datetime.datetime.strptime(now_s, "%Y-%m-%d %H:%M")
+new_due = now + datetime.timedelta(hours=hours)
+new_due_s = new_due.strftime("%Y-%m-%d %H:%M")
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("PRAGMA busy_timeout=5000")
+    changed = []
+    for raw in ids:
+        try:
+            rid = int(raw)
+        except ValueError:
+            continue
+        cur = con.execute(
+            "UPDATE reminders SET due_at=?, fired_at=NULL WHERE id=? AND status='pending'",
+            (new_due_s, rid),
+        )
+        if cur.rowcount:
+            changed.append(rid)
+    con.commit()
+    con.close()
+    if changed:
+        print("Snoozed: " + ", ".join(f"#{i}" for i in changed))
+    else:
+        print("No matching pending reminders for those ids.")
+except Exception as e:
+    print(f"remind: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    ;;
+
+  # -------------------------------------------------------------------------
   clear)
     shift || true
     YES="no"
@@ -221,6 +282,10 @@ PYEOF
 
   # -------------------------------------------------------------------------
   install)
+    # Pre-build the bundled notifier so the poller's first background tick can
+    # fire reliably (osascript would be dropped from launchd). Best-effort: if
+    # swiftc is missing, firing falls back to osascript.
+    pbrain_notify_build || true
     mkdir -p "$HOME/Library/LaunchAgents"
     LOG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/.logs"
     mkdir -p "$LOG_DIR"
@@ -266,6 +331,11 @@ PLISTEOF
       launchctl load "$PLIST" 2>/dev/null || true
       echo "Installed background reminders poller (via load)."
     fi
+    if [[ -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]]; then
+      echo "Notifier: pbrain-notify.app built — reliable background notifications."
+    else
+      echo "Notifier: osascript fallback (swiftc not found; background notifications may be dropped)."
+    fi
     echo "Plist: $PLIST"
     echo "Log:   $LOG_FILE"
     ;;
@@ -285,7 +355,7 @@ PLISTEOF
 
   # -------------------------------------------------------------------------
   help|-h|--help)
-    sed -n '3,30p' "$SELF"
+    sed -n '4,31p' "$SELF"
     ;;
 
   # -------------------------------------------------------------------------
