@@ -21,7 +21,9 @@ bats tests/
 ## Scope
 
 - `prefs.bats` — `pbrain_emit_prefs`: silent on missing/empty/whitespace files,
-  emits a labelled block when content exists, honours `PBRAIN_PREFS_DIR`.
+  emits a labelled block when content exists, honours `PBRAIN_PREFS_DIR`, and
+  injects the global `_global.md` block (before the per-command block) so
+  cross-command "skip this nudge" preferences apply everywhere.
 - `self-improve.bats` — `pbrain_emit_self_improve`: `off`/`prefs`/`dev` mode
   resolution, the `dev`-without-`PBRAIN_DEV_DIR` fallback, dev-repo git-state
   warnings (dirty tree / `main` branch), unknown-value fail-safe, and the

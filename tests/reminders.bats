@@ -10,6 +10,8 @@ setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
   export PBRAIN_DB_FILE="$TMP/pbrain.db"
+  # Isolate the notifier-app build location away from the real ~/.config.
+  export PBRAIN_NOTIFY_APP="$TMP/pbrain-notify.app"
   NOTIFS="$TMP/notifs.log"
   mkdir -p "$TMP/bin"
   # Fake osascript: record one line per fire, never display anything.
@@ -19,6 +21,15 @@ echo fired >> "$NOTIFS"
 exit 0
 EOF
   chmod +x "$TMP/bin/osascript"
+  # Stub swiftc to a no-op so pbrain_notify never compiles/runs the real bundled
+  # notifier in tests (which would fire actual notifications and bypass the fake
+  # osascript these tests count). Producing no -o output leaves the app unbuilt,
+  # so pbrain_notify falls back to osascript. The real-build test removes this.
+  cat > "$TMP/bin/swiftc" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$TMP/bin/swiftc"
   export PATH="$TMP/bin:$PATH"
   source "$REPO_ROOT/lib/db.sh"
   source "$REPO_ROOT/lib/reminders.sh"
@@ -173,4 +184,40 @@ PY
   [[ "$output" == *"(repeats weekly)"* ]]
   [[ "$output" == *"far future"* ]]
   [[ "$output" == *"days)"* ]]
+}
+
+@test "pending_text relabels a fired one-shot as 'fired', not OVERDUE" {
+  # Regression: a one-shot that already fired (fired_at set) but isn't marked
+  # done used to keep reading as OVERDUE forever. It should now read as 'fired'.
+  _add "submit the form" "2000-01-01 09:00" ""
+  pbrain_reminders_tick           # fires it once, stamps fired_at
+  run _col 1 fired_at
+  [ "$output" != "NULL" ]
+  run pbrain_reminders_pending_text
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"submit the form"* ]]
+  [[ "$output" == *"fired"* ]]
+  [[ "$output" != *"OVERDUE"* ]]
+}
+
+@test "pbrain_notify falls back to osascript when the bundled app isn't built" {
+  # With swiftc stubbed to a no-op, no binary is produced, so pbrain_notify must
+  # fall back to osascript (the fake records one fire).
+  run pbrain_notify "Title" "body text"
+  [ "$status" -eq 0 ]
+  [ -f "$NOTIFS" ]
+  [ "$(wc -l < "$NOTIFS" | tr -d ' ')" = "1" ]
+  # No binary should have been built by the no-op swiftc stub.
+  [ ! -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
+}
+
+@test "pbrain_notify_build compiles pbrain-notify.app when swiftc is available" {
+  rm -f "$TMP/bin/swiftc"        # drop the stub → use the real swiftc, if present
+  command -v swiftc >/dev/null 2>&1 || skip "swiftc not installed"
+  pbrain_notify_build
+  [ -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
+  [ -f "$PBRAIN_NOTIFY_APP/Contents/Info.plist" ]
+  # Re-running is a no-op (binary now at least as new as the source); still there.
+  pbrain_notify_build
+  [ -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
 }
