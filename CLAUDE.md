@@ -82,6 +82,7 @@ pbrain/
 │   ├── launchd/com.pbrain.sync.plist.template
 │   ├── docs/                           ← setup (gbrain-only), gbrain-sync, gbrain-beyond-notes, gbrain-bug-report
 │   └── .logs/                          ← gitignored: sync-runs.jsonl, upgrade-status.json
+├── promo-video/                        ← HyperFrames source composition for the promo video (renders excluded via .gitignore)
 ├── CLAUDE.md
 └── README.md
 ```

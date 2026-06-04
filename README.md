@@ -311,6 +311,7 @@ pbrain/
 │   │   ├── gbrain-beyond-notes.md      ← capabilities beyond search
 │   │   └── gbrain-bug-report.md        ← upstream bug repro
 │   └── .logs/                          ← gitignored: sync-runs.jsonl, upgrade-status.json
+├── promo-video/                        ← HyperFrames source composition for the promo video (renders excluded via .gitignore)
 ├── CLAUDE.md
 └── README.md
 ```
