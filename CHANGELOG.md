@@ -4,6 +4,25 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-04
+
+### Fixed
+
+- **`/remind` notifications now fire reliably from the background poller.** Notifications delivered via `osascript display notification` were *silently dropped* when fired from the launchd poller — from that context there's no trusted app for macOS's notification-permission check, so reminders never appeared even though `tick` ran and stamped `fired_at`. pbrain now ships its own tiny notifier, **`pbrain-notify.app`**, compiled on demand from a new ~60-line Swift source (`lib/pbrain-notify.swift`) via `swiftc` (Apple Command Line Tools — no Xcode, no brew, no external deps) and cached at `~/.config/pbrain/pbrain-notify.app`. Because it runs inside a real app bundle it has a stable identity, and it borrows the always-trusted **`com.apple.Terminal`** notification permission (the technique the `alerter` tool uses — `UNUserNotificationCenter` was evaluated and rejected: it requires code signing plus a first-run authorization grant that an unattended poller can't satisfy). `pbrain_notify` (`lib/reminders.sh`) prefers the bundled app, builds it lazily on first fire and eagerly at `/remind install`, and falls back to `osascript` only when `swiftc` is unavailable. Notifications appear under the "Terminal" identity (clicking opens Terminal); override with `PBRAIN_NOTIFY_IDENTITY` (or `""` to use pbrain's own `com.pbrain.notify` identity), and relocate the build with `PBRAIN_NOTIFY_APP`. New tests in `tests/reminders.bats` cover the build, the osascript fallback, and a real `swiftc` compile.
+- **`/remind list` no longer shows a fired one-shot as OVERDUE forever.** A one-shot reminder that had already fired (so `fired_at` is set) but wasn't yet marked done kept reading as `OVERDUE` in the pending list. It now reads as **`fired — mark done`**, so the list reflects that it already notified you (repeats are unaffected — they clear `fired_at` as they roll forward).
+- **`habits sync --date` param added for pinning the end date.** `habits sync --days N` now accepts an optional `--date YYYY-MM-DD` to fix the end date of the sync window. Previously the end date was always today, so syncing habits marked on a past date required passing a large `--days` value. The default remains today.
+- **`remind add` now exits non-zero when the DB write fails.** A failed SQLite insert left `NEW_ID` empty but the command printed `REMIND_ADDED` and fired a confirmation notification anyway. The reminder was never stored. `remind add` now detects an empty `NEW_ID` and exits 1 with an error message before notifying.
+
+### Also in this release
+
+- Measured habit tracking (`--unit`, `--measure-target`, `--amount`) shipped in v0.4.0 but was missing two test-harness fixes: `habits sync` date-pinning (above) + the `tests/habits.bats` calls that now pass `--date` when marking habits in the past. All 114 tests pass.
+
+## [0.4.0] — 2026-06-03
+
+### Added
+
+- **`/habits` first-class quantity tracking.** A habit can now carry an optional *measure* — a `unit` and a `measure_target` (e.g. `L`/4 for "drink 4L water", `km`/20 for "run 20 km a week", `g`/30 for "keep sugar under 30g/day") — set via `add`/`edit --unit "L" --measure-target 4` (pass `--measure-target ""` to clear it back to a plain yes/no habit). For a measured habit, `mark`/`log` take `--amount` (fractional OK, e.g. `--amount 2.5`); the value lands in the **Count** cell of the dated tracking markdown and in a new nullable `amount REAL` column on `habit_events`. Fulfillment then sums the amount over the habit's schedule period and checks it against the target — `2.5/4 L today ⏳`, `12/20 km this week`, `45/30 g today — OVER ⚠️` — instead of done/not-done, so `target_count` is irrelevant for measured habits. The status evaluator, text rollup, dashboard, `list`, and the ride-along extraction emitter (which tags measured habits and prompts the agent to pass `--amount`) all understand the measure; the surfacing commands (`/plan-my-day`, `/end-of-day`, `/weekly-review`) inherit it for free through the shared rollup. Existing DBs gain the `amount` column via a guarded, idempotent migration in `lib/db.sh`; unmeasured habits keep working unchanged (`amount` stays NULL, occurrence `count` still drives fulfillment). New tests cover measured add/edit/status/rollup/mark/sync/log in `tests/habits.bats`. *(Closes the "first-class quantity tracking" habits follow-up in `TODOS.md`.)*
+
 ## [0.3.0] — 2026-06-03
 
 ### Added

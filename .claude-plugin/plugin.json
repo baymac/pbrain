@@ -1,6 +1,6 @@
 {
   "name": "pbrain",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "description": "Daily-ritual scaffolding for Obsidian — journal, gratitude, fitness, diet, plan-my-day, brainstorm, habits, reminders, organize clippings. All commands read/write into an Obsidian-synced vault.",
   "author": {
     "name": "baymac",
