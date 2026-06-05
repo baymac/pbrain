@@ -438,6 +438,8 @@ HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
+HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || echo "$VAULT_DIR/life/habit-tracking/$TODAY.md")"
+HABITS_TODAY_MD="$(cat "$HABITS_TRACK_FILE" 2>/dev/null || echo "MISSING")"
 REMIND_CMD="$(pbrain_reminders_cmd)"
 
 cat <<PROMPT
@@ -449,6 +451,7 @@ output_file: $OUT_FILE
 profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 habits_setup_needed: $HABITS_SETUP_NEEDED
+habits_track_file: $HABITS_TRACK_FILE
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -473,6 +476,9 @@ $REMINDERS_PENDING
 
 === HABITS (this week / month vs each habit's criteria) ===
 $HABITS_ROLLUP
+
+=== TODAY'S HABIT TRACKER ===
+$HABITS_TODAY_MD
 
 ---
 INSTRUCTIONS — follow these steps in order. Keep the tone warm and concise.
@@ -701,13 +707,21 @@ Step 6 — Reminders (only if relevant — don't force it):
   Resolve the due time relative to today ($TODAY) + the current time. Set it
   only on a yes. Don't pester — at most one short offer covering all of them.
 
-Step 7 — Habit tracker (only if \`habits_setup_needed\` == no). At the very end,
-  offer ONCE to start today's habit tracker: "Want me to set up today's habit
-  tracker?" On a yes, run:
-    bash "$HABITS_CMD" track --date $TODAY
-  That creates today's habit-tracking checklist (a markdown table generated from
-  your habits). The user ticks habits there through the day — or I mark them as
-  you mention them — and /end-of-day consolidates it. Don't force it; one offer.
+Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very end:
+  a) Ensure today's tracker exists. If TODAY'S HABIT TRACKER == "MISSING", offer
+     ONCE: "Want me to set up today's habit tracker?" On yes:
+       bash "$HABITS_CMD" track --date $TODAY
+     On no: skip this step entirely.
+  b) Once the tracker is in place (or was already there), show the user today's
+     habit checklist from TODAY'S HABIT TRACKER — just the table rows, concise.
+     Then ask ONCE:
+       "Any you've already done today? Name them and I'll mark them now (e.g.
+        'meditation, walked'). Or skip — run /habits anytime through the day to
+        check and mark more, or just leave it and /end-of-day consolidates."
+  c) On any named habits, mark each one:
+       bash "$HABITS_CMD" mark --habit "<name>" --date $TODAY
+     Confirm what was marked. One round only — don't loop asking for more.
+  Don't force tracker creation or marking — one offer each.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the
