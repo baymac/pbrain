@@ -137,3 +137,26 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [[ "$output" == *"REMIND_BLOCKING_ENTRY"* ]]
   [[ "$output" == *"INSTRUCTIONS"* ]]
 }
+
+@test "cancel marks a blocking reminder cancelled" {
+  bash "$CMD" add --text "Cancel me" --due "2099-01-01 09:00" >/dev/null 2>&1
+  ID="$(python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select id from reminders').fetchone()[0])" "$PBRAIN_DB_FILE")"
+  _run_cmd cancel "$ID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Marked cancelled"* ]]
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select status from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
+  [ "$output" = "cancelled" ]
+}
+
+@test "cancel requires at least one id" {
+  _run_cmd cancel
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires at least one"* ]]
+}
+
+@test "test subcommand falls back to notification message when app not built" {
+  # swiftc is stubbed as no-op, so the app binary is never created.
+  _run_cmd test
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"swiftc not available"* ]] || [[ "$output" == *"fallback notification"* ]]
+}
