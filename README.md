@@ -163,7 +163,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Morning, before anything else | `/journal` | Raw dump first: today's mood, yesterday's residue, random thoughts, whatever's loud. Then answer the open questions it asks. Clears the head. |
 | Right after journaling | `/gratitude-journal` | Just run it — answers the prompts. With the head cleared, gratitude anchors the day to *enough* before agent work starts. |
 | Pre/post workout | `/fitness-journal` | Just run it — it picks today's session based on your activity rotation and asks you to log sets/reps. |
-| With meals (or end of day) | `/diet-journal` | Just run it — log what you ate, get a nutrition + plan-adherence read. |
+| With meals (or end of day) | `/diet-journal` | Just run it — log what you ate, get a nutrition + plan-adherence read. Say "nothing yet" and it plans the full day from your food library. |
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
