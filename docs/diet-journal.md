@@ -22,11 +22,15 @@ After step 2, the daily flow takes over.
 
 ## Daily flow
 
-Three modes depending on state:
+Just describe what you ate. No upfront mode selection — the command opens with "What have you eaten today so far?" and infers what to do next.
 
-- **No entry today + you've eaten** → "log mode": describe naturally, coach estimates per-meal macros, tots them up, compares to plan, analyses nutrition + condition adherence.
-- **No entry today + want suggestions** → "plan mode": tell the coach what's eaten so far (if anything), it computes remaining macros and suggests 1–2 meals per remaining slot that fit your macros, restrictions, conditions, and cuisine. Asks "either of these work, or want something different?" and iterates.
-- **Entry already exists** → "update mode": adds new meals, swaps items, or suggests the next meal against remaining macros. Recomputes totals and "remaining" row in place.
+**Logging meals:** describe naturally. Named items in your food library resolve to saved macros without re-describing. The command logs each item, estimates macros, and recomputes totals.
+
+**Plan the rest of today:** after logging (or on a blank day), the command offers to plan remaining meal slots. It filters your food library by `Meal type`, avoids repeats from the past 2 days, respects standing preferences and conditions, cross-references today's fitness session, and builds a timed slot-by-slot plan with projected end-of-day totals. Iterate up to 2 swaps before locking it in. Confirmed slots are written as "planned" rows so you can mark them eaten when the time comes.
+
+**Blank day:** say "nothing yet" and it plans the full day from scratch.
+
+**Existing entry:** add new meals, swap items, or plan remaining slots. Recomputes totals and the "remaining" row in place.
 
 Every entry includes:
 
@@ -44,10 +48,12 @@ A growing reference of the named items you eat — so you can log "protein shake
 - **Home / regular foods** — staples you make or eat normally.
 - **Junk / outside food** — takeout, treats, restaurant items (kept separate so the pattern is visible).
 
+Each entry carries a **Meal type** column (`breakfast`, `lunch`, `dinner`, `snack`, `post-workout`, `any`, or comma-separated combinations like `"breakfast, snack"`). The day-planner uses this to filter appropriate items for each slot. Entries without a Meal type column (older entries) are treated as `any` for full backward compatibility.
+
 Lives in your vault at `$VAULT_DIR/fitness/Food Library.md` (created empty on first run). When you log a meal:
 
 - If you name an item that's in the library, the coach reuses its saved macros instead of re-asking.
-- If you describe a new item that looks like a recurring staple, it offers once to save it to the right section — written only on a yes.
+- If you describe a new item that looks like a recurring staple, it offers once to save it to the right section (with a Meal type) — written only on a yes.
 
 Edit the file directly any time; it's a normal Obsidian note.
 

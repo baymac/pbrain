@@ -2,6 +2,17 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.8.3] — 2026-06-05
+
+### Added
+
+- **`/diet-journal` — plan the rest of today.** Ask "What have you eaten today?" (no more a/b/c choice upfront). After logging, the command offers to plan remaining meal slots using your food library and recent history — rotating variety, respecting conditions, and cross-referencing today's fitness session. Works on blank days too: say "nothing yet" and it plans the full day from scratch.
+- **Meal type column in food library.** Library entries now carry a `Meal type` tag (`breakfast`, `lunch`, `dinner`, `snack`, `post-workout`, `any`, or comma-separated combinations). Meal-slot filtering in the planner uses this column; older entries without the column are treated as `any` for full backward compatibility.
+
+### Changed
+
+- **Simplified `/diet-journal` opening.** The old `(a) log / (b) suggest / (c) both` prompt is gone. Just describe what you ate; the command infers intent from context and offers planning if there are open slots remaining.
+
 ## [0.8.2] — 2026-06-05
 
 ### Added
