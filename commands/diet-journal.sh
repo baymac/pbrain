@@ -360,13 +360,13 @@ description just needs enough detail to estimate macros.
 
 ## Home / regular foods
 
-| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) |
-|---|---|---|---|---|---|---|---|
+| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
+|---|---|---|---|---|---|---|---|---|
 
 ## Junk / outside food
 
-| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) |
-|---|---|---|---|---|---|---|---|
+| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
+|---|---|---|---|---|---|---|---|---|
 LIBEOF
 fi
 FOOD_LIBRARY_CONTENT="$(cat "$FOOD_LIBRARY_FILE" 2>/dev/null || echo "(no food library yet)")"
@@ -424,8 +424,8 @@ add more food, swap something, or refine.
 Step 1 — Show a one-line summary of what's already logged (the meal names +
 the running macro totals from the existing table), then ask:
   "What's the update — did you eat something new, want to log a meal you're
-  about to have, swap something, or want me to suggest the next meal to fit
-  your remaining macros?"
+  about to have, swap something, want me to suggest the next meal, or plan
+  the rest of today's meals?"
 
 Step 2 — Based on intent:
 
@@ -450,8 +450,30 @@ Step 2 — Based on intent:
        shows its macro line.
      - Ask: "Either of these work, or want me to adjust?" Iterate up to 2
        refinements before locking in.
-     - Once chosen, add it as a planned meal (mark with "(planned)") so the
+     - Once chosen, add it as a planned meal (status: planned) so the
        user can confirm later when they actually eat it.
+
+  D) PLAN REST OF DAY
+     - Identify which meal slots are still unlogged (absent from the table, or
+       only marked "planned"). Infer standard slots from the diet plan meal
+       structure and what is already eaten (e.g. if breakfast is eaten and it
+       is mid-afternoon, remaining slots might be: dinner, evening snack).
+     - For each empty slot, filter food library items by "Meal type" column —
+       pick items tagged for that slot OR tagged "any". Library entries without
+       a Meal type column (older entries) are treated as "any" for all slots.
+       If no library items fit a slot, fall back to the Diet Plan meal structure.
+     - Avoid repeating items the user ate in the last 2 days (check RECENT DIET
+       HISTORY for variety — rotate across eligible options).
+     - Respect all standing preferences (e.g. no roti at lunch, shake only on
+       gym/football days). Cross-reference today's fitness entry: post-workout
+       protein timing, training type, day load.
+     - Build a full plan for remaining slots with estimated timings:
+         | Slot | Time | Items | Cals | P (g) | C (g) | F (g) | Fiber (g) | Status |
+       End with projected end-of-day totals vs plan targets.
+     - Present it: "Here is a plan for the rest of today — does this work, or
+       want to swap anything?" Iterate up to 2 swaps before locking in.
+     - Once confirmed, write all planned slots into the entry as new rows with
+       status "planned". Recompute totals.
 
 Step 3 — Rewrite the entry file in place at $OUT_FILE, preserving the same
 format as the existing entry. Always recompute the totals row and the
@@ -470,8 +492,10 @@ Step 6 — FOOD LIBRARY upkeep (only if a new staple came up this session):
   to $FOOD_LIBRARY_FILE under the right section — **Home / regular foods** for
   things they make/eat normally, **Junk / outside food** for takeout / treats /
   restaurant items — with a brief description (enough to estimate macros), a
-  serving, and Cals/P/C/F/Fiber. Keep the table columns aligned. Don't add
-  one-off meals; only genuine repeat items. Never write without a yes.
+  serving, Cals/P/C/F/Fiber, and a **Meal type** value. Meal type values:
+  breakfast, lunch, dinner, snack, post-workout, any — use comma-separated for
+  items that fit multiple slots (e.g. "breakfast, snack"). Keep columns aligned.
+  Don't add one-off meals; only genuine repeat items. Never write without a yes.
 UPDATE
   pbrain_emit_habits_extract "diet-journal" || true
   exit 0
@@ -506,32 +530,50 @@ ${FITNESS_TODAY:-(no fitness entry for today yet)}
 INSTRUCTIONS — daily diet flow. The user has a plan; this session either logs
 what they ate, or coaches them through eating to the plan.
 
-Step 1 — Open with the choice:
-  "How do you want to do today's diet log?
-   (a) Log what you've eaten so far — I'll tot up macros and compare to plan.
-   (b) Plan / suggest meals against your remaining macros — tell me what
-       you've eaten so far (if anything) and I'll suggest the rest.
-   (c) Both — log what's done and plan what's left."
+Step 1 — Open with:
+  "What have you eaten today so far? List anything — or say 'nothing yet'
+  if the day is blank and you want me to plan from scratch."
 
-Step 2 — Always have them describe naturally what they've eaten so far.
-Don't force structure. Ask any missing essentials (hydration so far,
-supplements taken, any late-night eating last night that should carry over).
-  - If they name an item that's in the FOOD LIBRARY above, reuse its macros
-    directly instead of re-asking for detail (that's the whole point of the
-    library — "protein shake" should just resolve to its saved macros).
+  Do NOT force an a/b/c choice upfront. Let the user describe naturally.
+  If they mention items in the FOOD LIBRARY above, resolve macros from there
+  without re-asking. Ask at most one follow-up for any missing essential
+  (e.g. hydration, supplements, late-night eating from last night).
 
-Step 3 — If intent includes SUGGESTING MEALS (b or c):
-  - Pull remaining macros = plan targets − what's logged.
-  - Cross-reference today's fitness entry: post-workout protein within ~90
-    min? pre-football fuel needed? long endurance session = more carbs?
-  - Propose 1–2 meal options per remaining meal slot that hit the macros
-    AND respect the user's restrictions, conditions, cuisine context.
-  - Each option shows its macro line: "~620 kcal · P 40 / C 70 / F 18".
-  - Ask: "Either of these work, or do you want something different —
-    quicker / lighter / a different cuisine / something you already have at
-    home?"
-  - Iterate up to 2 refinements before locking in. Mark unconfirmed meals
-    as "(planned)" in the table so the user can mark them eaten later.
+Step 2 — Log whatever the user described. Add each item as an "eaten" row,
+estimate macros (reuse FOOD LIBRARY values for named items). Recompute totals.
+
+Step 3 — After logging (or if the user said "nothing yet"):
+
+  A) IF MEALS WERE LOGGED and there are still unlogged slots remaining today:
+     After writing what they ate, offer: "Want me to plan the rest of today's
+     meals around your remaining macros?"
+     - On yes → run PLAN REST OF DAY (see below).
+     - On no → just show the totals and analysis.
+
+  B) IF NOTHING WAS LOGGED (blank day):
+     Say: "Nothing logged yet — want me to plan all your meals for today?
+     I will pull from your food library and rotate variety so it is not the
+     same as recent days." Then run PLAN REST OF DAY.
+
+  PLAN REST OF DAY:
+  - Identify standard meal slots from the diet plan structure (Breakfast,
+    Snack 1, Lunch, Snack 2 / Post-workout, Dinner). Skip slots already eaten.
+  - For each empty slot, filter FOOD LIBRARY items by "Meal type" column —
+    items tagged for that slot OR tagged "any". Library entries without a
+    Meal type column (older entries) are treated as "any". If the library has
+    no entries for a slot, use the Diet Plan meal structure options for that slot.
+  - Vary selection: avoid items the user ate in the last 2 days (check RECENT
+    DIET HISTORY). Rotate across eligible library items for variety.
+  - Respect all standing preferences (e.g. no roti at lunch, shake only on
+    gym/football days) and conditions (gut-friendly on antibiotic days, etc.).
+  - Cross-reference today's fitness entry: is there a post-workout slot that
+    needs protein within 90 min? Is it a football day needing carb loading?
+  - Build a full plan with estimated timings based on the user's eating window:
+      | Slot | Time | Items | Cals | P (g) | C (g) | F (g) | Fiber (g) | Status |
+    End with projected end-of-day totals vs plan targets.
+  - Present it: "Here is a plan for today — does this work, or want to swap
+    anything?" Iterate up to 2 swaps before locking in.
+  - Once confirmed, write all planned slots as "planned" rows in the entry.
 
 Step 4 — Cross-reference for analysis (do this regardless of mode):
   - Today's fitness load vs today's intake (fuelled enough? protein post?)
@@ -612,8 +654,10 @@ Step 6 — FOOD LIBRARY upkeep (only if a recurring item came up this session):
   food library so you can just say the name next time?" On a yes, append a row
   to $FOOD_LIBRARY_FILE under **Home / regular foods** (things they make/eat
   normally) or **Junk / outside food** (takeout / treats / restaurant), with a
-  brief description, serving, and Cals/P/C/F/Fiber. Only genuine repeat items,
-  never one-offs. Never write without a yes.
+  brief description, serving, Cals/P/C/F/Fiber, and a **Meal type** value.
+  Meal type values: breakfast, lunch, dinner, snack, post-workout, any — use
+  comma-separated for items that fit multiple slots (e.g. "breakfast, snack").
+  Only genuine repeat items, never one-offs. Never write without a yes.
 
 Step 7 — End with: "Saved → $OUT_FILE. Re-run /diet-journal later to add
 meals or have me suggest the next one against remaining macros."
