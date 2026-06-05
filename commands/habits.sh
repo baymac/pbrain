@@ -39,6 +39,7 @@ set -euo pipefail
 #   habits.sh mark --name "X" [--date YYYY-MM-DD] [--count N] [--amount N] [--note "..."]
 #   habits.sh sync [--days N] [--date YYYY-MM-DD]  mirror md → DB (default 7 days)
 #   habits.sh consolidate [--date YYYY-MM-DD]  sync md → DB then prune unchecked rows
+#   habits.sh refresh [--date YYYY-MM-DD] [--days N]  recompute Progress column from DB
 #
 # Default profile:  $VAULT_DIR/life/Habits Profile.md
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
@@ -578,6 +579,34 @@ if [[ "$SUB" == "consolidate" ]]; then
     exit 0
   fi
   pbrain_habit_consolidate "$C_DATE"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# refresh — recompute the Progress column in the tracking md from the DB without
+# touching any Done marks. One date, or --days N back (oldest→newest). Used to
+# backfill historical trackers after a formula/data change.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "refresh" ]]; then
+  shift || true
+  RF_DATE="$TODAY"; RF_DAYS=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) RF_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --days) RF_DAYS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "(no habits profile — nothing to refresh)"
+    exit 0
+  fi
+  if [[ -n "${RF_DAYS//[[:space:]]/}" ]]; then
+    pbrain_habit_refresh_range "$RF_DAYS" "$RF_DATE"
+    echo "refreshed Progress across the last $RF_DAYS day(s) of trackers (through $RF_DATE)"
+  else
+    pbrain_habit_refresh "$RF_DATE"
+  fi
   exit 0
 fi
 

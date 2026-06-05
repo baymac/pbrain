@@ -453,6 +453,12 @@ def db_progress(con, h, date):
         return f"{agg(week_start)}/{tc if tc is not None else '?'} wk"
     if st == "monthly":
         return f"{agg(month_start)}/{tc if tc is not None else '?'} mo"
+    # daily: a limit reads today's count against the per-day cap ("2/1 day" =
+    # over); a build reads how many days done so far this week (count is 1/day
+    # for these, so the sum is a day-count).
+    if h["direction"] == "at_most":
+        cap = tc if tc is not None else 0
+        return f"{agg(today)}/{cap} day"
     return f"{agg(week_start)}/7 wk"
 
 def front(date):
@@ -499,10 +505,9 @@ def new_rows(habits, con, date):
     return [{"name": h["name"], "criteria": criteria_str(h), "progress": db_progress(con, h, date),
              "done": "", "count": "", "note": ""} for h in habits]
 
-def sync_one(con, f, date, by_name, now):
-    if not os.path.exists(f):
-        return 0
-    _, rows, _ = parse_table(open(f).read())
+def mirror_rows(con, rows, date, by_name, now):
+    # Mirror a parsed table's done rows into the DB for <date>: the DB must end
+    # up matching exactly the md's done rows (so un-checking removes the event).
     done = []
     for r in rows:
         if not is_done(r["done"]):
@@ -528,7 +533,6 @@ def sync_one(con, f, date, by_name, now):
                 c = 1
         done.append((hid, nm, c, amount, (r["note"].strip() or None)))
     ids = [d[0] for d in done]
-    # mirror: the DB for this date must match the md's done rows
     if ids:
         con.execute("DELETE FROM habit_events WHERE occurred_on=? AND habit_id NOT IN (%s)"
                     % ",".join("?" * len(ids)), [date] + ids)
@@ -542,6 +546,21 @@ def sync_one(con, f, date, by_name, now):
             "source=excluded.source, note=excluded.note",
             (hid, nm, date, c, amount, "habit-tracking", note, now))
     return len(done)
+
+def refresh_progress(con, rows, by_name, date):
+    # Recompute every row's Criteria + Progress from the profile/DB (call AFTER
+    # mirror_rows so the day's own marks are reflected). Mutates rows in place.
+    for r in rows:
+        h = by_name.get(r["name"].strip().lower())
+        if h:
+            r["criteria"] = criteria_str(h)
+            r["progress"] = db_progress(con, h, date)
+
+def sync_one(con, f, date, by_name, now):
+    if not os.path.exists(f):
+        return 0
+    _, rows, _ = parse_table(open(f).read())
+    return mirror_rows(con, rows, date, by_name, now)
 
 op = sys.argv[1]
 
@@ -571,7 +590,7 @@ if op == "init":
     print(f)
 
 elif op == "mark":
-    profile, db, f, date, name, count, note, amount = sys.argv[2:10]
+    profile, db, f, date, name, count, note, amount, now = sys.argv[2:11]
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -615,7 +634,13 @@ elif op == "mark":
         rows.append({"name": h["name"], "criteria": criteria_str(h),
                      "progress": db_progress(con, h, date), "done": "x",
                      "count": cval, "note": note.strip()})
-    if con:
+    # Mirror today's marks into the DB and recompute every row's Progress so the
+    # file shows live numbers the instant a habit is marked (not a stale snapshot
+    # from when the tracker was created).
+    if con is not None:
+        mirror_rows(con, rows, date, active, now)
+        refresh_progress(con, rows, active, date)
+        con.commit()
         con.close()
     open(f, "w").write(render(pre, rows, post))
     print(f"marked: {h['name']} on {date}")
@@ -642,18 +667,43 @@ elif op == "consolidate":
     profile, db, f, date, now = sys.argv[2:7]
     habits = load_habits(profile)
     by_name = {h["name"].strip().lower(): h for h in habits}
+    if not os.path.exists(f):
+        print("consolidated")
+        sys.exit(0)
+    pre, rows, post = parse_table(open(f).read())
     if os.path.exists(db):
         con = sqlite3.connect(db)
         con.execute("PRAGMA busy_timeout=5000")
-        sync_one(con, f, date, by_name, now)
+        mirror_rows(con, rows, date, by_name, now)
+        refresh_progress(con, rows, by_name, date)
         con.commit()
         con.close()
     # prune the day's file to only the habits actually done
-    if os.path.exists(f):
-        pre, rows, post = parse_table(open(f).read())
-        kept = [r for r in rows if is_done(r["done"])]
-        open(f, "w").write(render(pre, kept, post))
+    kept = [r for r in rows if is_done(r["done"])]
+    open(f, "w").write(render(pre, kept, post))
     print("consolidated")
+
+elif op == "refresh":
+    # Recompute a date's Progress column from the (already-synced) DB without
+    # changing any Done marks. Mirrors the file's done rows first so the day's
+    # own marks are reflected, then rewrites the file. Used to backfill / keep
+    # historical trackers accurate after the DB or the formula changes.
+    profile, db, f, date, now = sys.argv[2:7]
+    if not os.path.exists(f):
+        print("refresh skip (no file)")
+        sys.exit(0)
+    habits = load_habits(profile)
+    by_name = {h["name"].strip().lower(): h for h in habits}
+    pre, rows, post = parse_table(open(f).read())
+    if os.path.exists(db):
+        con = sqlite3.connect(db)
+        con.execute("PRAGMA busy_timeout=5000")
+        mirror_rows(con, rows, date, by_name, now)
+        refresh_progress(con, rows, by_name, date)
+        con.commit()
+        con.close()
+    open(f, "w").write(render(pre, rows, post))
+    print(f"refreshed {f}")
 PYEOF
 }
 
@@ -678,7 +728,7 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount]
   file="$(pbrain_habit_track_file "$date")"
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
-    "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}"
+    "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by
@@ -700,6 +750,39 @@ pbrain_habit_consolidate() {  # <date>
   file="$(pbrain_habit_track_file "$date")"
   _pbrain_habit_track_py consolidate "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" \
     "$file" "$date" "$(date '+%Y-%m-%d %H:%M')"
+}
+
+# Recompute one date's Progress column from the DB (no Done changes). Mirrors the
+# file's marks first so the day's own marks count.
+pbrain_habit_refresh() {  # <date>
+  local date file
+  date="${1:-$(date +%Y-%m-%d)}"
+  [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
+  file="$(pbrain_habit_track_file "$date")"
+  _pbrain_habit_track_py refresh "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" \
+    "$file" "$date" "$(date '+%Y-%m-%d %H:%M')"
+}
+
+# Refresh the Progress column across the last <days> trackers (oldest→newest so
+# each day's week-to-date totals see the earlier days already mirrored). Missing
+# days are skipped. Used to backfill historical files after a formula/data change.
+pbrain_habit_refresh_range() {  # [days] [end_date]
+  command -v python3 >/dev/null 2>&1 || return 0
+  [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
+  local days end n d
+  days="${1:-30}"
+  end="${2:-$(date +%Y-%m-%d)}"
+  for ((n=days; n>=0; n--)); do
+    d="$(python3 - "$end" "$n" <<'PYEOF' 2>/dev/null || true
+import sys, datetime
+end, n = sys.argv[1], int(sys.argv[2])
+print((datetime.date.fromisoformat(end) - datetime.timedelta(days=n)).isoformat())
+PYEOF
+)"
+    [[ -n "$d" ]] || continue
+    [[ -f "$(pbrain_habit_track_file "$d")" ]] || continue
+    pbrain_habit_refresh "$d" >/dev/null 2>&1 || true
+  done
 }
 
 # ── new-habit suggestion suppression ────────────────────────────────────────
@@ -802,9 +885,12 @@ except Exception:
 out = []
 for h in data.get("habits") or []:
     n = str(h.get("name", "")).strip()
-    if not n:
+    if not n or h.get("archived"):
         continue
-    kind = str(h.get("kind", "build")).strip().lower()
+    direction = str(h.get("direction", "")).strip().lower()
+    if direction not in ("at_least", "at_most"):
+        direction = "at_most" if str(h.get("kind", "")).strip().lower() == "limit" else "at_least"
+    kind = "limit" if direction == "at_most" else "build"
     mt = h.get("measure_target")
     if mt not in (None, ""):
         unit = str(h.get("unit", "")).strip()
@@ -830,6 +916,14 @@ print(" | ".join(out))
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact habit name>\" --date $today [--count N] [--amount X] [--note \"...\"]"
   printf '%s\n' "For a habit tagged [measured: …] above, pass the quantity with --amount (e.g."
   printf '%s\n' "--amount 2.5 for 2.5 L of water); plain habits need no count/amount at all."
+  printf '%s\n' ""
+  printf '%s\n' "[limit] habits work INVERSELY — they are caps on something to avoid (e.g. No"
+  printf '%s\n' "smoking, No drinking, No masturbation, TV under 1hr). MARK a [limit] habit"
+  printf '%s\n' "ONLY when the user LAPSED — actually did the capped thing — putting the"
+  printf '%s\n' "amount in --count and the detail in --note (e.g. mark \"No smoking\" --count 3"
+  printf '%s\n' "--note \"3 cigarettes\"). A clean / abstinent day is NOT a mark: leave it"
+  printf '%s\n' "blank — for a limit, no mark IS the success. NEVER mark a [limit] habit"
+  printf '%s\n' "because the user avoided it; that would count the success against them."
   printf '%s\n' "This ticks the habit in today's habit-tracking/<date>.md (the human-facing"
   printf '%s\n' "log); /end-of-day consolidates that file into the analysis DB. Match the"
   printf '%s\n' "user's words to a habit name above; don't invent or infer habits they didn't"

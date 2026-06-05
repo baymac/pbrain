@@ -79,7 +79,9 @@ You can open it in Obsidian and tick the **Done** column by hand, or let the age
 
 ## How habits get marked
 
-You rarely mark by hand. Once the profile exists, every daily journaling and planning command (`/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/end-of-day`) watches for habits you actually mention and **ticks them in today's tracking file** automatically (`/habits mark`). Marking a name that isn't a tracked habit is **rejected** (you add it first).
+You rarely mark by hand. Once the profile exists, every daily journaling and planning command (`/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/end-of-day`) watches for habits you actually mention and **ticks them in today's tracking file** automatically (`/habits mark`). Marking a name that isn't a tracked habit is **rejected** (you add it first). Marking is **live**: the moment a habit is ticked, that day's `Progress` column is recomputed from the DB, so the number you see is current — not a stale snapshot from when the file was created.
+
+**Limit habits work inversely.** For an `at_most` habit (a cap — `No smoking`, `No drinking`, `No masturbation`, `TV under 1hr`), a mark means you **lapsed** (did the capped thing), with the amount in `--count` and the detail in a `--note`. A clean / abstinent day is simply **not marked** — for a cap, no mark *is* the success, and an unmarked day keeps you under the limit. Never mark a limit habit because you avoided it; that would count the win against you.
 
 Those commands also nudge: if you show a standing intention to build a new habit that isn't tracked yet, they'll offer to add it — at most once, and they won't re-nag the same idea for ~2 weeks.
 
@@ -115,7 +117,7 @@ Then it offers to open today's tracker, mark a habit, add/edit/archive one, or s
 
 Script-level API (used by the auto-marking, surfacing, and the dashboard's offers):
 `mark --name "X" --date YYYY-MM-DD [--count N] [--amount X] [--note "…"]` (the primary write path → ticks the md; `--amount` for measured habits),
-`track [--date …]`, `sync [--days N] [--date YYYY-MM-DD]` (mirror md → DB; `--date` targets a specific end date for the sync window), `consolidate [--date …]` (sync + prune, run by `/end-of-day`),
+`track [--date …]`, `sync [--days N] [--date YYYY-MM-DD]` (mirror md → DB; `--date` targets a specific end date for the sync window), `consolidate [--date …]` (sync + prune, run by `/end-of-day`), `refresh [--date …] [--days N]` (recompute the `Progress` column from the DB without touching marks — one day or the last N, oldest→newest; for backfilling history after a formula or data change),
 `add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority …] [--notes "…"]`,
 `edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--unit …] [--measure-target N] [--priority …] [--notes …]` (pass `--measure-target ""` to clear a measure),
 `archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive; takes `--amount` too).
