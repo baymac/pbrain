@@ -155,3 +155,52 @@ PY
   run pbrain_db_init "$TMP/afile/cannot/make.db"
   [ "$status" -eq 0 ]
 }
+
+# --- reminders blocking-overlay columns -------------------------------------
+@test "fresh DB has block_seconds and hold_seconds on reminders" {
+  pbrain_db_init
+  run python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+cols = {r[1] for r in c.execute("PRAGMA table_info(reminders)")}
+assert {"block_seconds", "hold_seconds"} <= cols, cols
+print("OK")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+}
+
+@test "fresh DB has a cron column on reminders" {
+  pbrain_db_init
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols={r[1] for r in c.execute('PRAGMA table_info(reminders)')}; assert 'cron' in cols, cols; print('OK')" "$PBRAIN_DB_FILE"
+  [ "$output" = "OK" ]
+}
+
+@test "migration adds block_seconds/hold_seconds to a pre-existing reminders table" {
+  # Build a reminders table WITHOUT the blocking columns, with a row, then migrate.
+  python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executescript("""
+CREATE TABLE reminders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, due_at TEXT, repeat TEXT,
+  status TEXT NOT NULL DEFAULT 'pending', source TEXT, created_at TEXT NOT NULL,
+  fired_at TEXT, done_at TEXT);
+""")
+c.execute("insert into reminders(text,status,created_at) values('old one','pending','t')")
+c.commit()
+PY
+  run pbrain_db_init
+  [ "$status" -eq 0 ]
+  run python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+cols = {r[1] for r in c.execute("PRAGMA table_info(reminders)")}
+assert {"block_seconds", "hold_seconds"} <= cols, cols
+# pre-existing row preserved and defaults to NULL (a normal, non-blocking reminder)
+row = c.execute("select block_seconds, hold_seconds from reminders where text='old one'").fetchone()
+assert row == (None, None), row
+print("OK")
+PY
+  [ "$output" = "OK" ]
+}

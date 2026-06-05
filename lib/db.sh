@@ -68,12 +68,15 @@ try:
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         text       TEXT NOT NULL,
         due_at     TEXT,                            -- 'YYYY-MM-DD HH:MM' or 'YYYY-MM-DD' (local); NULL = someday
-        repeat     TEXT,                            -- daily|weekdays|weekly|monthly|NULL
+        repeat     TEXT,                            -- daily|weekdays|weekly|monthly|NULL (legacy token; cron supersedes it)
         status     TEXT NOT NULL DEFAULT 'pending', -- pending|done|cancelled
         source     TEXT,
         created_at TEXT NOT NULL,
         fired_at   TEXT,                            -- last time a notification fired (NULL = not yet)
-        done_at    TEXT
+        done_at    TEXT,
+        block_seconds INTEGER,                      -- NULL = normal notification reminder; set = full-screen blocking overlay that stays/counts down this many seconds (0 = until dismissed)
+        hold_seconds  INTEGER,                      -- seconds the user must hold space to skip a blocking overlay (NULL = default 5)
+        cron       TEXT                             -- 5-field cron expr (min hour dom month dow); recurrence source of truth when set. due_at holds the NEXT computed fire time.
     );
     CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
     CREATE INDEX IF NOT EXISTS idx_reminders_due    ON reminders(due_at);
@@ -126,6 +129,25 @@ try:
     # check so it's a no-op on fresh and already-migrated DBs.
     if cols and "amount" not in cols:
         con.execute("ALTER TABLE habit_events ADD COLUMN amount REAL")
+
+    # --- reminders migration: add the blocking-overlay columns -------------
+    # /remind-blocking stores full-screen "take a break" reminders in this same
+    # table: block_seconds turns a row into a blocking overlay (how long it
+    # stays / counts down; 0 = until dismissed) and hold_seconds sets the
+    # hold-space-to-skip duration. Older DBs predate both; add them once,
+    # nullable, so existing notification reminders stay NULL (= non-blocking).
+    # Guarded by table_info so it's a no-op on fresh and already-migrated DBs.
+    rcols = [r[1] for r in con.execute("PRAGMA table_info(reminders)").fetchall()]
+    if rcols and "block_seconds" not in rcols:
+        con.execute("ALTER TABLE reminders ADD COLUMN block_seconds INTEGER")
+    if rcols and "hold_seconds" not in rcols:
+        con.execute("ALTER TABLE reminders ADD COLUMN hold_seconds INTEGER")
+    # cron: a 5-field cron expression driving flexible recurrence (multi-time,
+    # multi-day, step ranges) for /remind-blocking. due_at carries the next
+    # computed fire; the tick recomputes it from cron after each fire. Older DBs
+    # predate the column; add it once, nullable. No-op on fresh/migrated DBs.
+    if rcols and "cron" not in rcols:
+        con.execute("ALTER TABLE reminders ADD COLUMN cron TEXT")
 
     # habit_id indexes — created after the column is guaranteed to exist on
     # every code path (fresh CREATE TABLE above, or the ALTER just now).
