@@ -2,6 +2,22 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.8.2] — 2026-06-05
+
+### Added
+
+- **`/habits refresh` command.** Recompute the Progress column in any historical tracking file from the DB without touching Done marks — useful after a formula change or data correction. Supports `--date YYYY-MM-DD` for a single day and `--days N` to backfill the last N trackers oldest-to-newest (so weekly totals build correctly across the window).
+
+### Changed
+
+- **Live progress on `mark`.** Marking a habit now rewrites the Progress cell in the same commit — no more stale "0/2 wk" the instant you tick something done. The cell reflects the day's actual count immediately.
+- **Accurate daily-limit progress format.** A `daily (limit)` habit (at_most direction) now shows `N/cap day` (today's count vs the cap) instead of a weekly sum, matching the semantics of "how many times today vs the per-day limit."
+
+### Fixed
+
+- **Consolidate respects absent tracking files.** `/end-of-day` no longer errors when today's tracking file doesn't exist (e.g. if habits were skipped for the day); it exits cleanly with "consolidated."
+- **Archived habits excluded from habit extraction.** `pbrain_emit_habits_extract` no longer surfaces archived habits in the mark-command list, preventing stale habit names from appearing in ride-along HABIT EXTRACTION blocks.
+
 ## [0.8.1] — 2026-06-04
 
 ### Added

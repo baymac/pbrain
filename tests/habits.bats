@@ -588,3 +588,139 @@ assert h["measure_target"] is None, h
   run pbrain_habit_suggest_recent 2026-06-30   # 29 days → expired
   [[ "$output" != *"cold-shower"* ]]
 }
+
+# ── post-fix regression: live progress, daily-limit format, refresh, lapse-only ──
+
+@test "mark recomputes the Progress cell live (the day's own mark counts)" {
+  _write_profile
+  HABITS mark --name "Nail cut" --date 2026-06-03 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  # was the kickboxing bug: progress must read 1/2 the instant it's marked, not 0/2
+  [[ "$body" == *"| Nail cut | weekly ≥2 | 1/2 wk | x |"* ]]
+}
+
+@test "daily limit Progress reads today-vs-cap, not a weekly sum" {
+  HABITS add --name "Smokes" --type daily --direction at_most --target 0 --priority high >/dev/null
+  HABITS mark --name "Smokes" --date 2026-06-03 --count 3 --note "3 cigs" >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"| Smokes | daily (limit) | 3/0 day | x | 3 | 3 cigs |"* ]]
+}
+
+@test "refresh recomputes a stale Progress cell from the DB without touching marks" {
+  _write_profile
+  mkdir -p "$PBRAIN_HABIT_TRACK_DIR"
+  cat > "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'EOF'
+---
+type: habit-tracking
+date: 2026-06-03
+tags: []
+---
+
+# Habits — 2026-06-03
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Nail cut | weekly ≥2 | 9/9 stale | x |  |  |
+EOF
+  run HABITS refresh --date 2026-06-03
+  [ "$status" -eq 0 ]
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"| Nail cut | weekly ≥2 | 1/2 wk | x |"* ]]
+  [[ "$body" != *"9/9 stale"* ]]
+}
+
+@test "emit_habits_extract tags limit vs build correctly and instructs lapse-only" {
+  _write_profile
+  run pbrain_emit_habits_extract journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Alcohol [limit]"* ]]
+  [[ "$output" == *"Brush at night [build]"* ]]
+  [[ "$output" == *"work INVERSELY"* ]]
+  [[ "$output" == *"LAPSED"* ]]
+}
+
+# ── coverage gap tests: mark-no-db, refresh-no-db, refresh_range, refresh --days ──
+
+@test "mark writes the file correctly when the DB is absent (con is None path)" {
+  _write_profile
+  HABITS track --date 2026-06-03 >/dev/null
+  export PBRAIN_DB_FILE="$TMP/nonexistent.db"
+  run HABITS mark --name "Nail cut" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"marked: Nail cut on 2026-06-03"* ]]
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"| Nail cut |"* ]]
+  [[ "$body" == *"| x |"* ]]
+}
+
+@test "refresh rewrites the file even when DB is absent (no mirror, no progress recompute)" {
+  _write_profile
+  mkdir -p "$PBRAIN_HABIT_TRACK_DIR"
+  cat > "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'EOF'
+---
+type: habit-tracking
+date: 2026-06-03
+tags: []
+---
+
+# Habits — 2026-06-03
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Nail cut | weekly ≥2 | 9/9 stale | x |  |  |
+EOF
+  export PBRAIN_DB_FILE="$TMP/nonexistent.db"
+  run HABITS refresh --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [ -f "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" ]
+  [[ "$output" == *"refresh"* ]]
+}
+
+@test "refresh_range processes multiple days oldest-to-newest, skipping missing files" {
+  _write_profile
+  mkdir -p "$PBRAIN_HABIT_TRACK_DIR"
+  for d in 2026-06-01 2026-06-03; do
+    cat > "$PBRAIN_HABIT_TRACK_DIR/$d.md" <<EOF
+---
+type: habit-tracking
+date: $d
+tags: []
+---
+
+# Habits — $d
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Nail cut | weekly ≥2 | 9/9 stale | x |  |  |
+EOF
+  done
+  run pbrain_habit_refresh_range 5 2026-06-03
+  [ "$status" -eq 0 ]
+  body01="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-01.md")"
+  body03="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body01" != *"9/9 stale"* ]]
+  [[ "$body03" != *"9/9 stale"* ]]
+}
+
+@test "refresh --days N calls refresh_range and reports the range" {
+  _write_profile
+  mkdir -p "$PBRAIN_HABIT_TRACK_DIR"
+  cat > "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'EOF'
+---
+type: habit-tracking
+date: 2026-06-03
+tags: []
+---
+
+# Habits — 2026-06-03
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Nail cut | weekly ≥2 | 9/9 stale | x |  |  |
+EOF
+  run HABITS refresh --days 3 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"refreshed Progress across the last 3 day(s)"* ]]
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" != *"9/9 stale"* ]]
+}
