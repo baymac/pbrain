@@ -10,8 +10,9 @@ setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
   export PBRAIN_DB_FILE="$TMP/pbrain.db"
-  # Isolate the notifier-app build location away from the real ~/.config.
+  # Isolate the notifier- and overlay-app build locations away from the real ~/.config.
   export PBRAIN_NOTIFY_APP="$TMP/pbrain-notify.app"
+  export PBRAIN_OVERLAY_APP="$TMP/pbrain-overlay.app"
   NOTIFS="$TMP/notifs.log"
   mkdir -p "$TMP/bin"
   # Fake osascript: record one line per fire, never display anything.
@@ -50,6 +51,32 @@ repeat = repeat or None
 c = sqlite3.connect(db)
 c.execute("insert into reminders(text,due_at,repeat,status,created_at) values(?,?,?, 'pending','2026-01-01 00:00')",
           (text, due, repeat))
+c.commit()
+PY
+}
+
+# Insert a BLOCKING reminder. Args: text due block_seconds hold_seconds
+_add_block() {
+  python3 - "$PBRAIN_DB_FILE" "$1" "$2" "$3" "$4" <<'PY'
+import sqlite3, sys
+db, text, due, block, hold = sys.argv[1:6]
+c = sqlite3.connect(db)
+c.execute("insert into reminders(text,due_at,status,created_at,block_seconds,hold_seconds) "
+          "values(?,?, 'pending','2026-01-01 00:00', ?, ?)",
+          (text, due or None, int(block), int(hold)))
+c.commit()
+PY
+}
+
+# Insert a BLOCKING reminder driven by a cron expr. Args: text due block cron
+_add_block_cron() {
+  python3 - "$PBRAIN_DB_FILE" "$1" "$2" "$3" "$4" <<'PY'
+import sqlite3, sys
+db, text, due, block, cron = sys.argv[1:6]
+c = sqlite3.connect(db)
+c.execute("insert into reminders(text,due_at,status,created_at,block_seconds,hold_seconds,cron) "
+          "values(?,?, 'pending','2026-01-01 00:00', ?, 5, ?)",
+          (text, due or None, int(block), cron))
 c.commit()
 PY
 }
@@ -209,6 +236,134 @@ PY
   [ "$(wc -l < "$NOTIFS" | tr -d ' ')" = "1" ]
   # No binary should have been built by the no-op swiftc stub.
   [ ! -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
+}
+
+@test "tick fires a due blocking reminder via the overlay, not a notification" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  # Shadow the overlay launcher so we observe dispatch without drawing anything.
+  pbrain_overlay_show() { echo "msg=$1 secs=$2 hold=$3" >> "$OVERLAY_LOG"; }
+  _add_block "stretch" "2000-01-01 09:00" 120 5
+  pbrain_reminders_tick
+  [ -f "$OVERLAY_LOG" ]
+  [ "$(cat "$OVERLAY_LOG")" = "msg=stretch secs=120 hold=5" ]
+  # No notification should have fired for a blocking reminder.
+  [ ! -f "$NOTIFS" ]
+  # Fires once: a one-shot blocking reminder stamps fired_at and won't re-fire.
+  pbrain_reminders_tick
+  [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "1" ]
+}
+
+@test "tick routes blocking->overlay and normal->notification in one pass" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  pbrain_overlay_show() { echo "overlay:$1" >> "$OVERLAY_LOG"; }
+  _add "drink water" "2000-01-01 09:00" ""
+  _add_block "Take a break" "2000-01-01 09:00" 300 5
+  pbrain_reminders_tick
+  [ "$(cat "$OVERLAY_LOG")" = "overlay:Take a break" ]   # only the blocking one
+  [ "$(wc -l < "$NOTIFS" | tr -d ' ')" = "1" ]           # only the normal one
+}
+
+@test "tick passes id/db/repeat to the overlay so it can resolve the reminder" {
+  ARGS_LOG="$TMP/args.log"
+  pbrain_overlay_show() { echo "id=$5 db=$6 repeat=$7" >> "$ARGS_LOG"; }
+  _add_block "stretch" "2000-01-01 09:00" 120 5
+  pbrain_reminders_tick
+  [ "$(cat "$ARGS_LOG")" = "id=1 db=$PBRAIN_DB_FILE repeat=" ]
+}
+
+@test "notify-only mode fires notifications but skips (and preserves) blocking reminders" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  pbrain_overlay_show() { echo "overlay:$1" >> "$OVERLAY_LOG"; }
+  _add "drink water" "2000-01-01 09:00" ""
+  _add_block "Take a break" "2000-01-01 09:00" 300 5
+  pbrain_reminders_tick notify-only
+  # Notification fired...
+  [ "$(wc -l < "$NOTIFS" | tr -d ' ')" = "1" ]
+  # ...but the blocking overlay did NOT.
+  [ ! -f "$OVERLAY_LOG" ]
+  # The blocking row is left pending + unfired so the poller can fire it later.
+  run _col 2 fired_at
+  [ "$output" = "NULL" ]
+  run _col 2 status
+  [ "$output" = "pending" ]
+  # A subsequent full tick (poller semantics) DOES fire the blocking one.
+  pbrain_reminders_tick
+  [ "$(cat "$OVERLAY_LOG")" = "overlay:Take a break" ]
+}
+
+@test "tick fires at most ONE overlay per tick and defers the rest" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  pbrain_overlay_show() { echo "$1" >> "$OVERLAY_LOG"; }
+  _add_block "break A" "2000-01-01 09:00" 120 5
+  _add_block "break B" "2000-01-01 09:05" 120 5
+  pbrain_reminders_tick
+  # Only one overlay launched this tick (the earlier due_at wins).
+  [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "1" ]
+  [ "$(cat "$OVERLAY_LOG")" = "break A" ]
+  # The deferred one is left pending + unfired so it fires next tick.
+  run _col 2 fired_at
+  [ "$output" = "NULL" ]
+  pbrain_reminders_tick
+  [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "2" ]
+}
+
+@test "tick defers ALL overlays while one is already on screen (pgrep busy)" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  pbrain_overlay_show() { echo "$1" >> "$OVERLAY_LOG"; }
+  # Stub pgrep so it reports a running overlay → overlay_busy=1.
+  cat > "$TMP/bin/pgrep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$TMP/bin/pgrep"
+  _add_block "break" "2000-01-01 09:00" 120 5
+  pbrain_reminders_tick
+  [ ! -f "$OVERLAY_LOG" ]                # nothing fired
+  run _col 1 fired_at
+  [ "$output" = "NULL" ]                 # left due for later
+  # Drop the busy stub → next tick fires it.
+  rm -f "$TMP/bin/pgrep"
+  pbrain_reminders_tick
+  [ -f "$OVERLAY_LOG" ]
+  [ "$(cat "$OVERLAY_LOG")" = "break" ]
+}
+
+@test "tick fires a cron blocking reminder and recomputes due_at from the cron" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  ARGS_LOG="$TMP/args.log"
+  pbrain_overlay_show() { echo "$1" >> "$OVERLAY_LOG"; echo "repeat=$7" >> "$ARGS_LOG"; }
+  # due in the past so it fires now; cron every 5 min → next due is future.
+  _add_block_cron "stand up" "2000-01-01 09:00" 120 "*/5 * * * *"
+  pbrain_reminders_tick
+  [ "$(cat "$OVERLAY_LOG")" = "stand up" ]
+  # overlay told it's recurring (rep non-empty) so it won't mutate the row.
+  [ "$(cat "$ARGS_LOG")" = "repeat=cron" ]
+  # due_at advanced to a strictly-future minute; still pending + unfired.
+  run _col 1 fired_at
+  [ "$output" = "NULL" ]
+  run _is_future 1
+  [ "$output" = "FUTURE" ]
+  # second tick does NOT re-fire (now future)
+  pbrain_reminders_tick
+  [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "1" ]
+}
+
+@test "pending_text tags a blocking reminder [blocking]" {
+  _add_block "Stand up" "2099-01-01 09:00" 0 5
+  run pbrain_reminders_pending_text
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Stand up"* ]]
+  [[ "$output" == *"[blocking]"* ]]
+}
+
+@test "pbrain_overlay_show falls back to a notification when the app isn't built" {
+  # swiftc is stubbed to a no-op in setup, so no overlay binary is produced and
+  # pbrain_overlay_show must degrade to pbrain_notify (the fake osascript records one fire).
+  run pbrain_overlay_show "Take a break" 60 5
+  [ "$status" -eq 0 ]
+  [ -f "$NOTIFS" ]
+  [ "$(wc -l < "$NOTIFS" | tr -d ' ')" = "1" ]
+  [ ! -x "$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay" ]
 }
 
 @test "pbrain_notify_build compiles pbrain-notify.app when swiftc is available" {
