@@ -2,6 +2,25 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.9.0] — 2026-06-06
+
+### Added
+
+- **`/remind-blocking` — full-screen "take a break" overlays.** Set time-sensitive interruption reminders that are hard to ignore. Fires as a full-screen overlay (compiled from `lib/pbrain-overlay.swift` on demand — no install needed; degrades to a notification if Swift isn't available). Hold **Control** for 5 seconds to skip, **Return** to mark done, or let the countdown expire. Supports cron-based recurrence (`*/30 9-17 * * 1-5` = every 30 min on weekdays 9–5) in addition to simple `daily`/`weekly` tokens. A background launchd poller fires overlays on schedule; first `add` auto-installs it. Subcommands: `add`, `list`, `done`, `cancel`, `test`, `tick`, `install`, `uninstall`.
+- **`/thoughts [<text>]` — timestamped thought capture.** Explode a single thought into a structured entry in `vault/life/thought-tracking/<date>.md`. Run with no args and Claude asks you for one. Exempt from the morning-sequence check — fire it any time.
+- **`/discuss <topic>` — Socratic thinking partner.** Work through a personal dilemma one question at a time. Reads your journal, gratitude note, and goals profile silently for context before engaging. Saves a structured insight note (`## The dilemma / What surfaced / Resolution`) to `vault/agent-work/notes/`. Resumes if you run it again on the same topic today. Exempt from the morning-sequence check.
+
+### Changed
+
+- **`/remind` is now Apple Calendar-only.** Reminders are stored as real Calendar events (via `pbrain-calendar.app` compiled from `lib/pbrain-calendar.swift`) instead of the SQLite DB. Existing reminder subcommands (`add`, `list`, `done`, `cancel`) work the same way; notifications fire through the OS. Use `/remind-blocking` for the time-sensitive overlay reminders that previously required DB-backed polling.
+- **`/plan-my-day` no longer fires pending reminders opportunistically.** Blocking reminders must arrive via the dedicated poller so they're never shown late as catch-up. Regular reminder notifications continue to fire through the OS on schedule.
+- **Habit extraction wired into `/habits` dashboard.** The auto-mark ride-along (`pbrain_emit_habits_extract`) now runs inside the `/habits` dashboard session, so you can mark a habit mid-session (e.g. "just had an unclean meal") without having to be in a journaling or planning session.
+- **`/plan-my-day` habit check-in shows today's tracker inline.** After planning blocks, Claude shows the current day's habit checklist and offers to mark anything you've already done — one round, no loop.
+
+### Fixed
+
+- `lib/db.sh` migration safely adds `block_seconds`, `hold_seconds`, and `cron` columns to existing reminder databases via `PRAGMA table_info` guards (no data loss, idempotent).
+
 ## [0.8.3] — 2026-06-05
 
 ### Added
