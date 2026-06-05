@@ -734,8 +734,11 @@ fi
 # ---------------------------------------------------------------------------
 # Default — dashboard (structured status → tight read + offer to update).
 # Sync recent tracking md into the DB first so today's marks are reflected.
+# The Done column (x) is the source of truth — refresh today's Progress column
+# from the DB after sync so manual marks land in the file too.
 # ---------------------------------------------------------------------------
 pbrain_habits_sync_range 35 || true
+pbrain_habit_refresh "$TODAY" >/dev/null 2>&1 || true
 TRACK_FILE="$(pbrain_habit_track_file "$TODAY")"
 STATUS_JSON="$(pbrain_habits_status "$TODAY" || true)"
 ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
