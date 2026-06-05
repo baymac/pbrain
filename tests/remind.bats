@@ -1,10 +1,19 @@
 #!/usr/bin/env bats
-# Tests for commands/remind.sh — the command-level SQL mutations (add / list /
-# done / cancel / clear). These are the only reminder write paths not covered by
-# reminders.bats (which exercises the lib-level notify / pending-text / tick).
+# Tests for commands/remind.sh — the Apple Calendar-only reminder command.
 #
-# osascript is stubbed so `add`'s confirmation notification never fires for real.
-# A temp vault + PBRAIN_SELF_IMPROVE=off keep the command harness self-contained.
+# /remind no longer touches the shared SQLite reminders table: it creates real
+# Calendar events via osascript (create) + a bundled EventKit helper (delete).
+# So these tests cover the command-owned logic that needs NO real Calendar:
+#   - argument validation / guards (they exit before any Calendar call)
+#   - the add success path, with a fake `osascript` standing in for Calendar
+#   - the natural-language entry block + help
+#   - a regression guard that the removed `clear`/`snooze` DB paths are gone
+#     (they must never mutate the DB — there are no /remind DB rows anymore;
+#     the only rows belong to /remind-blocking).
+#
+# swiftc/open/launchctl are stubbed so no real helper app is built or launched,
+# and a fake `osascript` emits a uid only for event-creation scripts (so `list`
+# stays empty). A throwaway vault + PBRAIN_SELF_IMPROVE=off keep it hermetic.
 #
 # Run with:  bats tests/
 
@@ -13,149 +22,164 @@ setup() {
   TMP="$(mktemp -d)"
   export PBRAIN_DB_FILE="$TMP/pbrain.db"
   export PBRAIN_VAULT="$TMP/vault"; mkdir -p "$PBRAIN_VAULT"
+  export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"
+  printf '%s\n' "$PBRAIN_VAULT" > "$XDG_CONFIG_HOME/pbrain/vault"
   export PBRAIN_SELF_IMPROVE=off
-  NOTIFS="$TMP/notifs.log"
+  export PBRAIN_CALENDAR_APP="$TMP/pbrain-calendar.app"
   mkdir -p "$TMP/bin"
-  cat > "$TMP/bin/osascript" <<EOF
+  # No-op swiftc/open/launchctl so no real app is compiled or launched.
+  printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/swiftc";    chmod +x "$TMP/bin/swiftc"
+  printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/open";      chmod +x "$TMP/bin/open"
+  printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/launchctl"; chmod +x "$TMP/bin/launchctl"
+  # Fake osascript: emit a fake uid ONLY for event creation; everything else
+  # (the list query) returns nothing, so `list` reports empty.
+  cat > "$TMP/bin/osascript" <<'EOF'
 #!/bin/sh
-echo fired >> "$NOTIFS"
+script="$(cat)"
+case "$script" in
+  *"make new event"*) echo "FAKE-EVENT-UID" ;;
+  *) : ;;
+esac
 exit 0
 EOF
   chmod +x "$TMP/bin/osascript"
   export PATH="$TMP/bin:$PATH"
+  export HOME="$TMP/home"; mkdir -p "$HOME/Library/LaunchAgents"
 }
 
 teardown() {
   rm -rf "$TMP"
 }
 
-_remind() { bash "$REPO_ROOT/commands/remind.sh" "$@"; }
+_remind() { run bash "$REPO_ROOT/commands/remind.sh" "$@"; }
 
-_col() {  # _col <id> <column> -> prints value (or 'NULL')
-  python3 - "$PBRAIN_DB_FILE" "$1" "$2" <<'PY'
-import sqlite3, sys
-db, rid, col = sys.argv[1], sys.argv[2], sys.argv[3]
-assert col in {"status", "due_at", "repeat", "text", "fired_at"}, col
-c = sqlite3.connect(db)
-row = c.execute("select " + col + " from reminders where id=?", (rid,)).fetchone()
-print(row[0] if row and row[0] is not None else "NULL")
-PY
-}
+# --- argument validation (exits before any Calendar call) -------------------
 
-@test "add inserts a pending reminder and echoes its id" {
-  run _remind add --text "call dentist" --due "2030-01-01 09:00"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"REMIND_ADDED id=1"* ]]
-  run _col 1 status
-  [ "$output" = "pending" ]
-  run _col 1 text
-  [ "$output" = "call dentist" ]
-  run _col 1 due_at
-  [ "$output" = "2030-01-01 09:00" ]
-}
-
-@test "add without --text exits non-zero and writes nothing" {
-  run _remind add --due "2030-01-01 09:00"
+@test "add requires --text" {
+  _remind add --due "2030-01-01 09:00"
   [ "$status" -ne 0 ]
-  run python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
-  [ "$output" = "0" ]
+  [[ "$output" == *"requires --text"* ]]
 }
 
-@test "add normalises an unknown --repeat to NULL but keeps a valid one" {
-  _remind add --text "garbage repeat" --repeat hourly
-  _remind add --text "good repeat" --repeat weekly
-  run _col 1 repeat
-  [ "$output" = "NULL" ]
-  run _col 2 repeat
-  [ "$output" = "weekly" ]
+@test "add requires --due (a calendar event needs a time)" {
+  _remind add --text "call dentist"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires --due"* ]]
 }
 
-@test "add rejects an unparseable --due and writes nothing" {
-  run _remind add --text "bad date" --due "next friday"
+@test "add rejects an unparseable --due" {
+  _remind add --text "bad date" --due "next friday"
   [ "$status" -ne 0 ]
   [[ "$output" == *"--due must be"* ]]
-  run python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
-  [ "$output" = "0" ]
 }
 
 @test "add rejects an out-of-range time in --due" {
-  run _remind add --text "impossible time" --due "2030-01-01 25:99"
+  _remind add --text "impossible time" --due "2030-01-01 25:99"
   [ "$status" -ne 0 ]
-  run python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select count(*) from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
-  [ "$output" = "0" ]
+  [[ "$output" == *"--due must be"* ]]
+}
+
+@test "add rejects an unknown --repeat token" {
+  _remind add --text x --due "2030-01-01 09:00" --repeat hourly
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unrecognized --repeat"* ]]
+}
+
+@test "--until without --repeat is rejected" {
+  _remind add --text x --due "2030-01-01 09:00" --until "2030-02-01"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only apply to a recurring reminder"* ]]
+}
+
+@test "--until and --count together are rejected" {
+  _remind add --text x --due "2030-01-01 09:00" --repeat weekly --until "2030-02-01" --count 3
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"either --until or --count"* ]]
+}
+
+@test "--count must be a positive integer" {
+  _remind add --text x --due "2030-01-01 09:00" --repeat weekly --count 0
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--count must be a positive integer"* ]]
+}
+
+@test "done requires at least one uid" {
+  _remind done
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires at least one"* ]]
+}
+
+@test "cancel requires at least one uid" {
+  _remind cancel
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"requires at least one"* ]]
+}
+
+# --- add success path (fake osascript stands in for Calendar) ---------------
+
+@test "add creates a calendar event and echoes its uid" {
+  _remind add --text "call dentist" --due "2030-01-01 09:00"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REMIND_ADDED uid="* ]]
+  [[ "$output" == *"Added to"* ]]
+  [[ "$output" == *"call dentist"* ]]
+}
+
+@test "add reports the recurrence when --repeat is given" {
+  _remind add --text "standup" --due "2030-01-01 09:00" --repeat weekly
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"repeats weekly"* ]]
+}
+
+@test "add reports a bounded recurrence with --count" {
+  _remind add --text "standup" --due "2030-01-01 09:00" --repeat weekly --count 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"repeats weekly"* ]]
+  [[ "$output" == *"3×"* ]]
 }
 
 @test "add accepts a date-only --due" {
-  run _remind add --text "date only" --due "2030-09-09"
+  _remind add --text "date only" --due "2030-09-09"
   [ "$status" -eq 0 ]
-  run _col 1 due_at
-  [ "$output" = "2030-09-09" ]
+  [[ "$output" == *"REMIND_ADDED uid="* ]]
 }
 
-@test "add with no --due stores someday (NULL due)" {
-  _remind add --text "someday thing"
-  run _col 1 due_at
-  [ "$output" = "NULL" ]
-}
+# --- list / entry / help ----------------------------------------------------
 
-@test "list shows a pending reminder and reports empty otherwise" {
-  run _remind list
+@test "list reports empty when there are no events" {
+  _remind list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no pending reminders"* ]]
-  _remind add --text "buy milk" --due "2030-02-02 10:00"
-  run _remind list
-  [[ "$output" == *"buy milk"* ]]
+  [[ "$output" == *"no upcoming pbrain reminders"* ]]
 }
 
-@test "done marks a pending reminder done; second time is a no-op" {
-  _remind add --text "ship it" --due "2030-03-03 12:00"
-  run _remind done 1
+@test "natural-language entry emits a REMIND_ENTRY block with instructions" {
+  _remind "remind me to call mom tomorrow at 6pm"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Marked done: #1"* ]]
-  run _col 1 status
-  [ "$output" = "done" ]
-  # Already done — no longer pending, so a repeat done reports no match.
-  run _remind done 1
-  [[ "$output" == *"No matching pending reminders"* ]]
+  [[ "$output" == *"REMIND_ENTRY"* ]]
+  [[ "$output" == *"INSTRUCTIONS"* ]]
 }
 
-@test "cancel marks a pending reminder cancelled" {
-  _remind add --text "skip this" --due "2030-04-04 12:00"
-  run _remind cancel 1
+@test "help prints the header describing the Calendar-only model" {
+  _remind help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Marked cancelled: #1"* ]]
-  run _col 1 status
-  [ "$output" = "cancelled" ]
+  [[ "$output" == *"Apple Calendar"* ]]
 }
 
-@test "done requires at least one id" {
-  run _remind done
-  [ "$status" -ne 0 ]
+# --- regression: the removed DB-mutating subcommands are gone ----------------
+
+@test "clear no longer mutates the DB (falls through to the entry path)" {
+  # Old behaviour cancelled all pending DB rows; the DB path is removed, so
+  # `clear --yes` must NOT report a cancellation — it's just entry-path input.
+  _remind clear --yes
+  [[ "$output" != *"Cancelled"* ]]
+  [[ "$output" == *"REMIND_ENTRY"* ]]
+  # And it must not have created a reminders DB at all.
+  [ ! -f "$PBRAIN_DB_FILE" ]
 }
 
-@test "done skips non-integer ids without erroring" {
-  _remind add --text "real one" --due "2030-05-05 12:00"
-  run _remind done abc 1
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Marked done: #1"* ]]
-}
-
-@test "clear without --yes refuses and leaves reminders pending" {
-  _remind add --text "keep me" --due "2030-06-06 12:00"
-  run _remind clear
-  [ "$status" -ne 0 ]
-  run _col 1 status
-  [ "$output" = "pending" ]
-}
-
-@test "clear --yes cancels all pending reminders" {
-  _remind add --text "one" --due "2030-07-07 12:00"
-  _remind add --text "two" --due "2030-08-08 12:00"
-  run _remind clear --yes
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Cancelled 2 pending reminder(s)"* ]]
-  run _col 1 status
-  [ "$output" = "cancelled" ]
-  run _col 2 status
-  [ "$output" = "cancelled" ]
+@test "snooze no longer mutates the DB (falls through to the entry path)" {
+  _remind snooze 1
+  [[ "$output" != *"Snoozed"* ]]
+  [[ "$output" == *"REMIND_ENTRY"* ]]
+  [ ! -f "$PBRAIN_DB_FILE" ]
 }
