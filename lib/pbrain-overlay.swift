@@ -316,6 +316,13 @@ final class Controller: NSObject {
             self?.handle(ev)
             return nil
         }
+        // Dismiss and exit when the machine sleeps or the screen locks so the
+        // process doesn't accumulate invisibly in memory overnight.
+        let wsnc = NSWorkspace.shared.notificationCenter
+        wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
+                         object: nil, queue: .main) { [weak self] _ in self?.dismiss() }
+        wsnc.addObserver(forName: NSWorkspace.screensDidLockNotification,
+                         object: nil, queue: .main) { [weak self] _ in self?.dismiss() }
     }
 
     private func handle(_ ev: NSEvent) {

@@ -940,15 +940,22 @@ pbrain_reminders_tick() {
   local mode="${1:-all}"
   command -v python3 >/dev/null 2>&1 || return 0
   [[ -f "$PBRAIN_DB_FILE" ]] || return 0
-  local now due overlay_busy=0
+  local now due overlay_busy=0 is_screen_locked=0
   now="$(date '+%Y-%m-%d %H:%M')"
   # Serialize overlays: if one is already on screen, defer firing more this tick.
   if command -v pgrep >/dev/null 2>&1 && pgrep -x pbrain-overlay >/dev/null 2>&1; then
     overlay_busy=1
   fi
-  due="$(python3 - "$PBRAIN_DB_FILE" "$now" "$mode" "$overlay_busy" <<'PYEOF' 2>/dev/null || true
+  # Skip blocking overlays when the screen is locked — they'd fire invisibly and
+  # be consumed without the user ever seeing them. Best-effort; if ioreg is
+  # unavailable or the key is absent, we assume unlocked (safe to fire).
+  if command -v ioreg >/dev/null 2>&1; then
+    ioreg -n IOPMrootDomain -r 2>/dev/null | grep -q '"CGSSessionScreenIsLocked" = Yes' \
+      && is_screen_locked=1 || true
+  fi
+  due="$(python3 - "$PBRAIN_DB_FILE" "$now" "$mode" "$overlay_busy" "$is_screen_locked" <<'PYEOF' 2>/dev/null || true
 import sqlite3, sys, datetime
-db, now_s, mode, overlay_busy = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
+db, now_s, mode, overlay_busy, is_screen_locked = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5] == "1"
 now = datetime.datetime.strptime(now_s, "%Y-%m-%d %H:%M")
 # In notify-only mode, exclude blocking-overlay rows from selection entirely, so
 # they are neither fired nor advanced — they stay due for the next poller tick.
@@ -1102,7 +1109,9 @@ try:
         # Serialize blocking overlays: only one on screen at a time. If one is
         # already up (overlay_busy) or we already launched one this tick, SKIP
         # this row WITHOUT stamping/advancing — it stays due for the next tick.
-        if is_block and (overlay_busy or overlay_fired):
+        # Also skip when the screen is locked — the overlay would launch invisibly
+        # and be consumed without the user ever seeing it.
+        if is_block and (overlay_busy or overlay_fired or is_screen_locked):
             continue
         if is_block:
             overlay_fired = True
