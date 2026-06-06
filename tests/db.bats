@@ -28,13 +28,13 @@ teardown() {
   run pbrain_db_init
   [ "$status" -eq 0 ]
   [ -f "$PBRAIN_DB_FILE" ]
-  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); t={r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")}; assert {'habit_events','reminders'} <= t, t" "$PBRAIN_DB_FILE"
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); t={r[0] for r in c.execute(\"select name from sqlite_master where type='table'\")}; assert {'habit_events','reminders','reminder_schedules'} <= t, t" "$PBRAIN_DB_FILE"
   [ "$status" -eq 0 ]
 }
 
 @test "db_init is idempotent and preserves data" {
   pbrain_db_init
-  python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"insert into reminders(text,status,created_at) values('x','pending','2026-01-01 00:00')\"); c.commit()" "$PBRAIN_DB_FILE"
+  python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"insert into reminders(text,due_at,status,created_at) values('x','2026-01-01 09:00','pending','2026-01-01 00:00')\"); c.commit()" "$PBRAIN_DB_FILE"
   run pbrain_db_init
   [ "$status" -eq 0 ]
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select count(*) from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
@@ -170,14 +170,25 @@ PY
   [ "$output" = "OK" ]
 }
 
-@test "fresh DB has a cron column on reminders" {
+@test "fresh DB has instance columns on reminders and cron on reminder_schedules" {
   pbrain_db_init
-  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols={r[1] for r in c.execute('PRAGMA table_info(reminders)')}; assert 'cron' in cols, cols; print('OK')" "$PBRAIN_DB_FILE"
+  run python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+rcols = {r[1] for r in c.execute("PRAGMA table_info(reminders)")}
+assert {"schedule_id", "resolved_at", "block_seconds", "hold_seconds"} <= rcols, rcols
+assert "repeat" not in rcols and "done_at" not in rcols and "cron" not in rcols, rcols
+scols = {r[1] for r in c.execute("PRAGMA table_info(reminder_schedules)")}
+assert {"cron", "next_due_at", "status", "block_seconds", "hold_seconds"} <= scols, scols
+print("OK")
+PY
   [ "$output" = "OK" ]
 }
 
-@test "migration adds block_seconds/hold_seconds to a pre-existing reminders table" {
-  # Build a reminders table WITHOUT the blocking columns, with a row, then migrate.
+@test "migration rebuilds an old conflated reminders table into schedules + instances" {
+  # Build the OLD shape (one row per recurring reminder, rewritten in place) and
+  # seed: a cron blocking reminder, a one-shot blocking reminder, and a dead
+  # non-blocking row. Migration should split the first two and drop the third.
   python3 - "$PBRAIN_DB_FILE" <<'PY'
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
@@ -185,9 +196,13 @@ c.executescript("""
 CREATE TABLE reminders (
   id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, due_at TEXT, repeat TEXT,
   status TEXT NOT NULL DEFAULT 'pending', source TEXT, created_at TEXT NOT NULL,
-  fired_at TEXT, done_at TEXT);
+  fired_at TEXT, done_at TEXT, block_seconds INTEGER, hold_seconds INTEGER, cron TEXT);
 """)
-c.execute("insert into reminders(text,status,created_at) values('old one','pending','t')")
+c.execute("insert into reminders(text,due_at,status,created_at,block_seconds,hold_seconds,cron) "
+          "values('stretch','2026-06-06 14:00','pending','t',120,5,'*/30 * * * *')")
+c.execute("insert into reminders(text,due_at,status,created_at,block_seconds,hold_seconds) "
+          "values('call mom','2026-06-07 18:00','pending','t',0,5)")
+c.execute("insert into reminders(text,due_at,status,created_at) values('dead notif','2026-06-06 09:00','pending','t')")
 c.commit()
 PY
   run pbrain_db_init
@@ -195,11 +210,13 @@ PY
   run python3 - "$PBRAIN_DB_FILE" <<'PY'
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
-cols = {r[1] for r in c.execute("PRAGMA table_info(reminders)")}
-assert {"block_seconds", "hold_seconds"} <= cols, cols
-# pre-existing row preserved and defaults to NULL (a normal, non-blocking reminder)
-row = c.execute("select block_seconds, hold_seconds from reminders where text='old one'").fetchone()
-assert row == (None, None), row
+# cron reminder → one active schedule + its first pending instance
+sch = c.execute("select text, cron, block_seconds, hold_seconds, status, next_due_at from reminder_schedules").fetchall()
+assert sch == [("stretch", "*/30 * * * *", 120, 5, "active", "2026-06-06 14:00")], sch
+inst = c.execute("select text, schedule_id, due_at, status from reminders order by id").fetchall()
+# stretch instance (schedule_id set) + call mom one-shot (schedule_id NULL); dead notif dropped
+assert inst == [("stretch", 1, "2026-06-06 14:00", "pending"),
+                ("call mom", None, "2026-06-07 18:00", "pending")], inst
 print("OK")
 PY
   [ "$output" = "OK" ]

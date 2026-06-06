@@ -8,20 +8,19 @@
 // display, above the menu bar and Dock, with a big message and an optional
 // MM:SS countdown — the "Take a break" pattern.
 //
-// RESOLVING THE REMINDER
-// ----------------------
-// The overlay can also resolve the reminder it represents, so the user doesn't
-// have to go mark it off afterwards. Two deliberate hold gestures (held, so they
-// can't be hit by accident):
-//   • Hold CONTROL  → SKIP  → marks the reminder `cancelled`
-//   • Hold RETURN   → DONE  → marks the reminder `done`
-//   • Countdown ends → DONE (you waited out the break)
-// The status write happens here via the SQLite3 C API (same approach as
-// pbrain-notify), enabled by passing --id and --db. It only writes for ONE-SHOT
-// reminders: a repeating reminder has already rolled forward to its next
-// occurrence by the time the overlay shows, so skipping/finishing one occurrence
-// must NOT change the row (that would cancel the whole series) — for repeats the
-// gestures simply dismiss.
+// RESOLVING THE OCCURRENCE
+// ------------------------
+// The overlay resolves the OCCURRENCE (instance row) it represents, so the user
+// doesn't have to mark it off afterwards. The outcome is whichever of three
+// things ends the overlay:
+//   • Hold CONTROL   → SKIPPED (a deliberate hold, so it can't be hit by accident)
+//   • Countdown ends → DONE    (you waited out the full break)
+//   • Sleep / lock   → MISSED  (you never engaged with it; it self-dismisses)
+// There is deliberately NO "mark done" gesture: `done` means only that the
+// allotted time elapsed. The status write happens here via the SQLite3 C API,
+// enabled by passing --id and --db. Every occurrence is its OWN row (the recurring
+// series lives in reminder_schedules), so writing this row's outcome never
+// touches the series — the tick has already scheduled the next occurrence.
 //
 // It is compiled by `pbrain_overlay_build` (lib/reminders.sh) from this source
 // into `pbrain-overlay.app/Contents/MacOS/`, so it runs inside a real app bundle
@@ -50,7 +49,7 @@
 //                  [--hold 5]               # seconds of hold required to act
 //                  [--background "#1e3a5f"] # solid bg colour (hex); default slate
 //                  [--subtext "..."]        # optional smaller line under the message
-//                  [--id <reminder_id>] [--db <path>] [--repeat <token|"">]
+//                  [--id <instance_id>] [--db <path>]
 //
 // Build: `swiftc -suppress-warnings pbrain-overlay.swift`
 
@@ -75,8 +74,6 @@ let holdSeconds  = max(0.5, Double(argValue("--hold") ?? "5") ?? 5.0)
 
 let reminderID: Int32?   = argValue("--id").flatMap { Int32($0) }
 let dbPath: String?      = { let p = argValue("--db"); return (p?.isEmpty == false) ? p : nil }()
-let repeatToken: String  = (argValue("--repeat") ?? "").trimmingCharacters(in: .whitespaces)
-let isOneShot: Bool      = repeatToken.isEmpty        // repeats already rolled forward → don't mutate
 let canWrite: Bool       = reminderID != nil && dbPath != nil
 
 func colorFromHex(_ hex: String?) -> NSColor {
@@ -93,8 +90,10 @@ func colorFromHex(_ hex: String?) -> NSColor {
 let background = colorFromHex(argValue("--background"))
 
 // ---------------------------------------------------------------------------
-// SQLite write-back — set the reminder's status directly (like pbrain-notify).
-// No-op unless this is a one-shot reminder with an --id and --db.
+// SQLite write-back — set this occurrence's terminal status directly. No-op
+// unless --id and --db were passed. The `AND status='pending'` guard makes it
+// first-writer-wins: whichever of skip / countdown / sleep-lock fires first
+// resolves the row, and the rest are inert.
 // ---------------------------------------------------------------------------
 func isoNow() -> String {
     let f = DateFormatter()
@@ -104,11 +103,11 @@ func isoNow() -> String {
 }
 
 func setReminderStatus(_ status: String) {
-    guard isOneShot, canWrite, let db = dbPath, let rid = reminderID else { return }
+    guard canWrite, let db = dbPath, let rid = reminderID else { return }
     var conn: OpaquePointer?
     guard sqlite3_open(db, &conn) == SQLITE_OK else { return }
     defer { sqlite3_close(conn) }
-    let sql = "UPDATE reminders SET status=?, done_at=? WHERE id=? AND status='pending'"
+    let sql = "UPDATE reminders SET status=?, resolved_at=? WHERE id=? AND status='pending'"
     var stmt: OpaquePointer?
     guard sqlite3_prepare_v2(conn, sql, -1, &stmt, nil) == SQLITE_OK else { return }
     defer { sqlite3_finalize(stmt) }
@@ -187,10 +186,8 @@ final class HoldBar: NSView {
 }
 
 // ---------------------------------------------------------------------------
-// Controller — owns the windows, the countdown, and the two hold gestures.
+// Controller — owns the windows, the countdown, and the single skip gesture.
 // ---------------------------------------------------------------------------
-enum HoldAction { case skip, done }
-
 final class Controller: NSObject {
     private var windows: [NSWindow] = []
     private var countdownLabel: NSTextField?
@@ -200,7 +197,7 @@ final class Controller: NSObject {
     private let holdSeconds: Double
     private var countdownEnd: Date?
     private var countdownTimer: Timer?
-    private var holdAction: HoldAction?
+    private var holding = false
     private var holdTimer: Timer?
     private var keyMonitor: Any?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -208,7 +205,6 @@ final class Controller: NSObject {
     private var isDismissing = false
 
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
-    private let doneColor = NSColor(calibratedRed: 0.45, green: 0.9,  blue: 0.55, alpha: 0.95)
 
     init(seconds: Int, hold: Double) {
         self.totalSeconds = seconds
@@ -258,9 +254,8 @@ final class Controller: NSObject {
         holdBar.isHidden = true
 
         let hintSkip = label("Hold ⌃ Control to skip", size: 17, weight: .regular, alpha: 0.55)
-        let hintDone = label("Hold ⏎ Return to mark done", size: 17, weight: .regular, alpha: 0.55)
 
-        let bottom = NSStackView(views: [status, holdBar, hintSkip, hintDone])
+        let bottom = NSStackView(views: [status, holdBar, hintSkip])
         bottom.orientation = .vertical
         bottom.alignment = .centerX
         bottom.spacing = 12
@@ -308,7 +303,7 @@ final class Controller: NSObject {
             countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
                 guard let s = self, let end = s.countdownEnd else { return }
                 let left = Int(ceil(end.timeIntervalSinceNow))
-                if left <= 0 { s.complete(.done); return }   // waited out the break → done
+                if left <= 0 { s.resolve("done"); return }   // waited out the break → done
                 s.countdownLabel?.stringValue = s.mmss(left)
             }
             if let t = countdownTimer { RunLoop.main.add(t, forMode: .common) }
@@ -326,59 +321,55 @@ final class Controller: NSObject {
         let wsnc = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(
             wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
-                             object: nil, queue: .main) { [weak self] _ in self?.dismiss() })
+                             object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
         let dnc = DistributedNotificationCenter.default()
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
-                            object: nil, queue: .main) { [weak self] _ in self?.dismiss() })
+                            object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
     }
 
     private func handle(_ ev: NSEvent) {
-        switch ev.type {
-        case .flagsChanged:
+        // Control (a modifier) arrives as .flagsChanged. Every other key is
+        // swallowed (the monitor returns nil) so nothing leaks past the overlay;
+        // there is no Return/done gesture — `done` only comes from the countdown.
+        if ev.type == .flagsChanged {
             let ctrl = ev.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control)
-            if ctrl { beginHold(.skip) } else if holdAction == .skip { resetHold() }
-        case .keyDown:
-            if ev.keyCode == 36 { beginHold(.done) }   // Return/Enter
-        case .keyUp:
-            if ev.keyCode == 36, holdAction == .done { resetHold() }
-        default:
-            break
+            if ctrl { beginHold() } else if holding { resetHold() }
         }
     }
 
-    private func beginHold(_ action: HoldAction) {
-        guard holdAction == nil else { return }   // one gesture at a time
-        holdAction = action
-        holdStatus?.stringValue = action == .skip ? "Skipping…" : "Marking done…"
-        holdStatus?.textColor = (action == .skip ? skipColor : doneColor)
+    private func beginHold() {
+        guard !holding else { return }
+        holding = true
+        holdStatus?.stringValue = "Skipping…"
+        holdStatus?.textColor = skipColor
         holdStatus?.isHidden = false
         holdBar.isHidden = false
-        holdBar.begin(duration: holdSeconds, color: action == .skip ? skipColor : doneColor)
+        holdBar.begin(duration: holdSeconds, color: skipColor)
         holdTimer = Timer.scheduledTimer(withTimeInterval: holdSeconds, repeats: false) { [weak self] _ in
-            self?.complete(action)
+            self?.resolve("skipped")
         }
     }
 
     private func resetHold() {
-        guard holdAction != nil else { return }
-        holdAction = nil
+        guard holding else { return }
+        holding = false
         holdTimer?.invalidate(); holdTimer = nil
         holdBar.cancel()
         holdBar.isHidden = true
         holdStatus?.isHidden = true
     }
 
-    private func complete(_ action: HoldAction) {
-        switch action {
-        case .skip: setReminderStatus("cancelled")
-        case .done: setReminderStatus("done")
-        }
+    // Write the occurrence's outcome, then tear down. setReminderStatus is
+    // first-writer-wins (guarded on status='pending'), so the earliest of
+    // skip / countdown / sleep-lock decides and later calls are inert.
+    private func resolve(_ status: String) {
+        setReminderStatus(status)
         dismiss()
     }
 
     private func dismiss() {
-        // Idempotent: sleep, lock, countdown-end, and the hold gestures can all
+        // Idempotent: sleep, lock, countdown-end, and the skip gesture can all
         // race to dismiss. Running the teardown twice would call
         // NSEvent.removeMonitor on an already-removed token (undefined behaviour).
         guard !isDismissing else { return }

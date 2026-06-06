@@ -64,22 +64,51 @@ try:
     CREATE INDEX IF NOT EXISTS idx_habit_events_habit ON habit_events(habit);
     CREATE INDEX IF NOT EXISTS idx_habit_events_date  ON habit_events(occurred_on);
 
+    -- /remind-blocking is the SOLE owner of these tables (/remind is Apple
+    -- Calendar-only and never touches the DB). The model is split in two:
+    --
+    --   reminder_schedules  = a recurring SERIES (the cadence). One row per
+    --                         recurring reminder; cron is the source of truth.
+    --                         next_due_at caches the next computed fire and is
+    --                         advanced every time an occurrence is processed —
+    --                         whether it actually fired or was missed — so the
+    --                         series can NEVER die from a skipped/locked fire.
+    --   reminders           = individual OCCURRENCES (instances / the log). One
+    --                         row per fire. schedule_id links back to the series
+    --                         (NULL for true one-shots). Each instance carries
+    --                         its own terminal status, so per-occurrence history
+    --                         survives and resolving one never touches the series.
+    CREATE TABLE IF NOT EXISTS reminder_schedules (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        text          TEXT NOT NULL,
+        cron          TEXT NOT NULL,                  -- 5-field cron expr (min hour dom month dow)
+        block_seconds INTEGER NOT NULL DEFAULT 0,     -- overlay stay/countdown secs (0 = until skipped)
+        hold_seconds  INTEGER NOT NULL DEFAULT 5,     -- seconds the user holds Control to skip
+        status        TEXT NOT NULL DEFAULT 'active', -- active|cancelled (cancelled = series stopped)
+        next_due_at   TEXT,                           -- next computed fire 'YYYY-MM-DD HH:MM' (cache)
+        source        TEXT,
+        created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_schedules_status ON reminder_schedules(status);
+
     CREATE TABLE IF NOT EXISTS reminders (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        text       TEXT NOT NULL,
-        due_at     TEXT,                            -- 'YYYY-MM-DD HH:MM' or 'YYYY-MM-DD' (local); NULL = someday
-        repeat     TEXT,                            -- daily|weekdays|weekly|monthly|NULL (legacy token; cron supersedes it)
-        status     TEXT NOT NULL DEFAULT 'pending', -- pending|done|cancelled
-        source     TEXT,
-        created_at TEXT NOT NULL,
-        fired_at   TEXT,                            -- last time a notification fired (NULL = not yet)
-        done_at    TEXT,
-        block_seconds INTEGER,                      -- NULL = normal notification reminder; set = full-screen blocking overlay that stays/counts down this many seconds (0 = until dismissed)
-        hold_seconds  INTEGER,                      -- seconds the user must hold space to skip a blocking overlay (NULL = default 5)
-        cron       TEXT                             -- 5-field cron expr (min hour dom month dow); recurrence source of truth when set. due_at holds the NEXT computed fire time.
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id   INTEGER,                        -- reminder_schedules.id; NULL = one-shot
+        text          TEXT NOT NULL,
+        due_at        TEXT NOT NULL,                  -- when this occurrence fires 'YYYY-MM-DD HH:MM' (local)
+        block_seconds INTEGER NOT NULL DEFAULT 0,     -- overlay stay/countdown secs (0 = until skipped)
+        hold_seconds  INTEGER NOT NULL DEFAULT 5,     -- seconds the user holds Control to skip
+        status        TEXT NOT NULL DEFAULT 'pending',-- pending|done|skipped|missed|cancelled
+        fired_at      TEXT,                           -- when the overlay was shown (NULL = never shown)
+        resolved_at   TEXT,                           -- when it reached a terminal state
+        source        TEXT,
+        created_at    TEXT NOT NULL,
+        UNIQUE(schedule_id, due_at)                   -- one occurrence per (series, time); blocks double-spawn
     );
     CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
     CREATE INDEX IF NOT EXISTS idx_reminders_due    ON reminders(due_at);
+    -- idx_reminders_sched is on the new schedule_id column, so it's created
+    -- AFTER the redesign migration below (an old-shape table lacks that column).
     """)
 
     # --- habit_events migration: key by stable habit_id ------------------
@@ -130,24 +159,76 @@ try:
     if cols and "amount" not in cols:
         con.execute("ALTER TABLE habit_events ADD COLUMN amount REAL")
 
-    # --- reminders migration: add the blocking-overlay columns -------------
-    # /remind-blocking stores full-screen "take a break" reminders in this same
-    # table: block_seconds turns a row into a blocking overlay (how long it
-    # stays / counts down; 0 = until dismissed) and hold_seconds sets the
-    # hold-space-to-skip duration. Older DBs predate both; add them once,
-    # nullable, so existing notification reminders stay NULL (= non-blocking).
-    # Guarded by table_info so it's a no-op on fresh and already-migrated DBs.
+    # --- reminders redesign migration: conflated row → schedule + instances ---
+    # The old `reminders` table conflated the recurrence definition and the
+    # current occurrence into ONE row (rewritten in place each fire). The new
+    # model splits them (reminder_schedules + per-occurrence reminders). Detect
+    # the old shape by the absence of `schedule_id` and rebuild ONCE. Only PENDING
+    # BLOCKING rows carry over — non-blocking rows were the old /remind
+    # notification queue, now dead (/remind is Calendar-only). One-time + guarded,
+    # so it's a no-op on fresh DBs (which already have the new shape) and on
+    # already-migrated DBs.
     rcols = [r[1] for r in con.execute("PRAGMA table_info(reminders)").fetchall()]
-    if rcols and "block_seconds" not in rcols:
-        con.execute("ALTER TABLE reminders ADD COLUMN block_seconds INTEGER")
-    if rcols and "hold_seconds" not in rcols:
-        con.execute("ALTER TABLE reminders ADD COLUMN hold_seconds INTEGER")
-    # cron: a 5-field cron expression driving flexible recurrence (multi-time,
-    # multi-day, step ranges) for /remind-blocking. due_at carries the next
-    # computed fire; the tick recomputes it from cron after each fire. Older DBs
-    # predate the column; add it once, nullable. No-op on fresh/migrated DBs.
-    if rcols and "cron" not in rcols:
-        con.execute("ALTER TABLE reminders ADD COLUMN cron TEXT")
+    if rcols and "schedule_id" not in rcols:
+        old = con.execute(
+            "SELECT text, due_at, repeat, cron, block_seconds, hold_seconds, source, created_at "
+            "FROM reminders WHERE status='pending' AND block_seconds IS NOT NULL AND due_at IS NOT NULL"
+        ).fetchall()
+        con.execute("DROP TABLE reminders")
+        con.executescript("""
+        CREATE TABLE reminders (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_id   INTEGER,
+            text          TEXT NOT NULL,
+            due_at        TEXT NOT NULL,
+            block_seconds INTEGER NOT NULL DEFAULT 0,
+            hold_seconds  INTEGER NOT NULL DEFAULT 5,
+            status        TEXT NOT NULL DEFAULT 'pending',
+            fired_at      TEXT,
+            resolved_at   TEXT,
+            source        TEXT,
+            created_at    TEXT NOT NULL,
+            UNIQUE(schedule_id, due_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
+        CREATE INDEX IF NOT EXISTS idx_reminders_due    ON reminders(due_at);
+        CREATE INDEX IF NOT EXISTS idx_reminders_sched  ON reminders(schedule_id);
+        """)
+        for text, due_at, repeat, cron, block_seconds, hold_seconds, source, created_at in old:
+            bs = int(block_seconds or 0)
+            hs = int(hold_seconds or 5)
+            # Legacy `repeat` token (daily/weekdays/weekly/monthly) → cron. The
+            # new model is cron-only; map the four old tokens onto the due time.
+            rep = (repeat or "").strip().lower()
+            if not cron and rep:
+                hh, mm = 9, 0
+                try:
+                    import datetime as _dt
+                    hh, mm = _dt.datetime.strptime(due_at.strip(), "%Y-%m-%d %H:%M").time().hour, \
+                             _dt.datetime.strptime(due_at.strip(), "%Y-%m-%d %H:%M").time().minute
+                except Exception:
+                    pass
+                cron = {"daily":    f"{mm} {hh} * * *",
+                        "weekdays": f"{mm} {hh} * * 1-5",
+                        "weekly":   f"{mm} {hh} * * *",   # best-effort; user can re-add for a specific weekday
+                        "monthly":  f"{mm} {hh} 1 * *"}.get(rep)
+            if cron:
+                sc = con.execute(
+                    "INSERT INTO reminder_schedules (text, cron, block_seconds, hold_seconds, status, next_due_at, source, created_at) "
+                    "VALUES (?,?,?,?, 'active', ?, ?, ?)",
+                    (text, cron, bs, hs, due_at, source, created_at or due_at),
+                )
+                con.execute(
+                    "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
+                    "VALUES (?,?,?,?,?, 'pending', ?, ?)",
+                    (sc.lastrowid, text, due_at, bs, hs, source, created_at or due_at),
+                )
+            else:
+                con.execute(
+                    "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
+                    "VALUES (NULL,?,?,?,?, 'pending', ?, ?)",
+                    (text, due_at, bs, hs, source, created_at or due_at),
+                )
 
     # habit_id indexes — created after the column is guaranteed to exist on
     # every code path (fresh CREATE TABLE above, or the ALTER just now).
@@ -157,6 +238,9 @@ try:
     -- (from any command) updates the row rather than adding a second event.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_events_uniq
         ON habit_events(habit_id, occurred_on);
+    -- reminders.schedule_id index — safe now that the column is guaranteed to
+    -- exist on every path (fresh new-shape CREATE, or the redesign rebuild).
+    CREATE INDEX IF NOT EXISTS idx_reminders_sched ON reminders(schedule_id);
     """)
 
     con.commit()

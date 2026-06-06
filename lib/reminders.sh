@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # pbrain reminders helper — sourced by lib/vault.sh (after db.sh).
 #
-# Reminders live in the shared SQLite DB (lib/db.sh). The /remind command owns
-# create / list / complete / tick / install; this helper provides the pieces
-# reused by /plan-my-day and /end-of-day (surfacing + opportunistic firing) and
-# the notification primitive.
+# Blocking-overlay reminders live in the shared SQLite DB (lib/db.sh), split into
+# reminder_schedules (recurring series) + reminders (per-occurrence instances).
+# /remind-blocking owns create / list / cancel / tick / install. /remind is Apple
+# Calendar-only and never touches the DB; its Calendar helpers also live here.
 #
 # Defines:
 #   pbrain_notify <title> <message>     fire a macOS notification, injection-safe, best-effort
+#                                       (only the overlay's no-swiftc degradation path uses it)
 #   pbrain_notify_build                 compile pbrain-notify.app from lib/pbrain-notify.swift (idempotent)
-#   pbrain_reminders_cmd                echo abs path to commands/remind.sh
-#   pbrain_reminders_tick               fire any due-and-unfired reminders now (advances repeats)
-#   pbrain_reminders_pending_text       text list of pending reminders (overdue/fired marked) for surfacing
+#   pbrain_overlay_build / _show        compile + launch the full-screen blocking overlay
+#   pbrain_reminders_cmd                echo abs path to commands/remind.sh (Calendar /remind)
+#   pbrain_reminders_tick               fire/defer/reconcile due blocking occurrences (poller only)
+#   pbrain_cron_next                    next datetime matching a 5-field cron expr
+#   pbrain_calendar_*                   Apple Calendar layer for /remind
 #
 # Like the other lib/ helpers, this NEVER exits non-zero — it is sourced into
 # commands under `set -euo pipefail`.
@@ -106,27 +109,6 @@ APPLESCRIPT
   return 0
 }
 
-# Like pbrain_notify but for reminder notifications — passes --id and --db so the
-# binary can enable Snooze / Cancel action buttons and update the DB on click.
-# Runs the binary async (background &) so the tick loop is never blocked by the
-# 30-second interaction window. Falls back to pbrain_notify if the binary is absent.
-pbrain_notify_reminder() {
-  local rid="${1:-}" msg="${2:-}"
-  pbrain_notify_build
-  local bin="$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify"
-  if [[ -x "$bin" ]]; then
-    local extra_id_args=(--id "$rid" --db "$PBRAIN_DB_FILE")
-    if [[ -n "${PBRAIN_NOTIFY_IDENTITY+x}" ]]; then
-      "$bin" --bundle-id "$PBRAIN_NOTIFY_IDENTITY" "${extra_id_args[@]}" \
-             --title "Reminder" --message "$msg" >/dev/null 2>&1 &
-    else
-      "$bin" "${extra_id_args[@]}" --title "Reminder" --message "$msg" >/dev/null 2>&1 &
-    fi
-    return 0
-  fi
-  pbrain_notify "Reminder" "$msg" || true
-}
-
 # Full-screen blocking overlay -----------------------------------------------
 # /remind-blocking fires a hard-to-dismiss "Take a break"-style overlay instead
 # of a notification. It's a separate compiled app bundle (pbrain-overlay.app)
@@ -180,19 +162,17 @@ PLIST
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
 # interpolated into an interpreted string — so arbitrary message text is inert.
-#   pbrain_overlay_show <message> <seconds> [<hold_seconds>] [<background-hex>]
-# <seconds> 0 = no countdown (stays until the user holds space to skip).
+#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>]
+# <seconds> 0 = no countdown (stays until the user holds Control to skip).
 # Launched with `open -n` so it runs in a proper Launch Services / GUI context
 # (works from the launchd poller's gui session); falls back to a notification if
 # the app can't be built (no swiftc).
-#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<repeat>]
-# When <id> + <db> are passed the overlay resolves the reminder on dismissal
-# (hold Control → cancelled, hold Return → done, countdown end → done). <repeat>
-# (empty for one-shots) tells the overlay NOT to mutate a repeating row, whose
-# next occurrence has already been scheduled by the tick.
+# When <id> + <db> are passed the overlay resolves THAT instance row on dismissal:
+# hold Control → skipped, countdown end → done, sleep/lock dismiss → missed. Every
+# occurrence is its own row, so resolving one never touches the recurring series.
 pbrain_overlay_show() {
   local msg="${1:-Take a break}" secs="${2:-0}" hold="${3:-5}" bg="${4:-${PBRAIN_OVERLAY_BG:-}}"
-  local rid="${5:-}" db="${6:-}" rep="${7:-}"
+  local rid="${5:-}" db="${6:-}"
   pbrain_overlay_build
   local bin="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
   if [[ -x "$bin" ]]; then
@@ -200,8 +180,6 @@ pbrain_overlay_show() {
     [[ -n "$bg" ]]  && args+=(--background "$bg")
     [[ -n "$rid" ]] && args+=(--id "$rid")
     [[ -n "$db" ]]  && args+=(--db "$db")
-    # Pass --repeat even when empty so the overlay treats it as a one-shot.
-    args+=(--repeat "$rep")
     if command -v open >/dev/null 2>&1; then
       open -n "$PBRAIN_OVERLAY_APP" --args "${args[@]}" >/dev/null 2>&1 && return 0
     fi
@@ -920,27 +898,37 @@ pbrain_reminders_cmd() {
   printf '%s\n' "$repo_dir/commands/remind.sh"
 }
 
-# Fire notifications for every reminder that is due now and hasn't fired yet.
-# Selection + marking happen in a single IMMEDIATE transaction so two concurrent
-# ticks (e.g. the launchd poller racing a /plan-my-day run) can't double-fire.
-# One-shot reminders get fired_at stamped (so they won't fire again, but stay
-# pending until the user marks them done). Repeating reminders advance due_at to
-# the next occurrence and clear fired_at so the next cycle is eligible.
+# Process every blocking occurrence that is due now. Selection + state changes
+# happen in a single IMMEDIATE transaction so two concurrent ticks can't double-
+# fire. Each due instance is handled by ONE of three paths:
+#
+#   FIRE    — within the grace window, screen unlocked, no overlay already up:
+#             stamp fired_at and launch the overlay (which resolves the instance
+#             to done/skipped/missed itself).
+#   MISSED  — overdue by more than the grace window (laptop was asleep/off, or
+#             locked too long): mark the instance `missed`. No overlay — a
+#             time-sensitive break is pointless hours late.
+#   DEFER   — within grace but the screen is locked, or an overlay is already on
+#             screen, or one was already launched this tick: leave it pending and
+#             untouched so a later tick fires (or eventually misses) it.
+#
+# Crucially, both FIRE and MISSED then ADVANCE the parent series: compute the
+# next cron occurrence and insert the next pending instance. Advancing on
+# *processing* (fire OR miss) — never on successful display — is what keeps a
+# recurring reminder alive across a missed/locked/asleep fire. Only cancelling
+# the schedule stops it.
+#
 # Fired ONLY by the background poller (remind-blocking.sh tick, ~60s). There are
 # deliberately NO opportunistic callers: a full-screen overlay is time-sensitive,
-# and catching one up late just because some other command happened to run is the
-# wrong behaviour. Notification reminders (/remind) live on Apple Calendar now and
-# are fired by Calendar — pbrain no longer fires any notifications itself.
-# Mode (first arg):
-#   all          (default) — fire every due reminder. The poller passes this.
-#   notify-only  — fire only NOTIFICATION reminders; leave blocking-overlay rows
-#                 untouched. Retained as a guard mode for callers that must never
-#                 pop an overlay; no command uses it currently.
+# and catching one up late just because some other command ran is wrong.
+# PBRAIN_REMIND_GRACE_SECONDS (default 600 = 10 min) sets the miss threshold.
 pbrain_reminders_tick() {
-  local mode="${1:-all}"
+  local rid rtext rblock rhold   # dispatch-loop vars — local so we don't clobber the caller's
   command -v python3 >/dev/null 2>&1 || return 0
   [[ -f "$PBRAIN_DB_FILE" ]] || return 0
-  local now due overlay_busy=0 is_screen_locked=0
+  local now due overlay_busy=0 is_screen_locked=0 grace
+  grace="${PBRAIN_REMIND_GRACE_SECONDS:-600}"
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=600
   now="$(date '+%Y-%m-%d %H:%M')"
   # Serialize overlays: if one is already on screen, defer firing more this tick.
   if command -v pgrep >/dev/null 2>&1 && pgrep -x pbrain-overlay >/dev/null 2>&1; then
@@ -960,13 +948,11 @@ pbrain_reminders_tick() {
     ioreg -n Root -d1 2>/dev/null | grep -q '"IOConsoleLocked" = Yes' \
       && is_screen_locked=1 || true
   fi
-  due="$(python3 - "$PBRAIN_DB_FILE" "$now" "$mode" "$overlay_busy" "$is_screen_locked" <<'PYEOF' 2>/dev/null || true
+  due="$(python3 - "$PBRAIN_DB_FILE" "$now" "$overlay_busy" "$is_screen_locked" "$grace" <<'PYEOF' 2>/dev/null || true
 import sqlite3, sys, datetime
-db, now_s, mode, overlay_busy, is_screen_locked = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5] == "1"
+db, now_s = sys.argv[1], sys.argv[2]
+overlay_busy, is_screen_locked, grace = sys.argv[3] == "1", sys.argv[4] == "1", int(sys.argv[5])
 now = datetime.datetime.strptime(now_s, "%Y-%m-%d %H:%M")
-# In notify-only mode, exclude blocking-overlay rows from selection entirely, so
-# they are neither fired nor advanced — they stay due for the next poller tick.
-BLOCK_FILTER = " AND block_seconds IS NULL" if mode == "notify-only" else ""
 
 DATE_ONLY_HOUR = 9  # a date with no time is treated as ~9am local
 
@@ -984,30 +970,6 @@ def parse_due(s):
         return datetime.datetime.strptime(s, "%Y-%m-%d").replace(hour=DATE_ONLY_HOUR)
     except ValueError:
         return None
-
-def add_month(dt):
-    # same day next month, clamped to month length
-    y, m = dt.year, dt.month + 1
-    if m > 12:
-        y, m = y + 1, 1
-    import calendar
-    d = min(dt.day, calendar.monthrange(y, m)[1])
-    return dt.replace(year=y, month=m, day=d)
-
-def next_occurrence(dt, repeat):
-    repeat = (repeat or "").lower()
-    if repeat == "daily":
-        return dt + datetime.timedelta(days=1)
-    if repeat == "weekly":
-        return dt + datetime.timedelta(days=7)
-    if repeat == "weekdays":
-        nxt = dt + datetime.timedelta(days=1)
-        while nxt.weekday() >= 5:  # Sat=5, Sun=6
-            nxt += datetime.timedelta(days=1)
-        return nxt
-    if repeat == "monthly":
-        return add_month(dt)
-    return None
 
 # --- cron --------------------------------------------------------------------
 # A standard 5-field cron expression: "minute hour day-of-month month day-of-week".
@@ -1088,187 +1050,87 @@ try:
     con.execute("PRAGMA busy_timeout=5000")
     con.isolation_level = None
     con.execute("BEGIN IMMEDIATE")
-    # block_seconds / hold_seconds drive the /remind-blocking full-screen overlay;
-    # older DBs predate those columns, so fall back to the base shape and treat
-    # every row as a normal notification reminder.
-    # BLOCK_FILTER is a fixed literal (not user input) — safe to concatenate.
-    try:
-        rows = con.execute(
-            "SELECT id, text, due_at, repeat, block_seconds, hold_seconds, cron FROM reminders "
-            "WHERE status='pending' AND due_at IS NOT NULL AND fired_at IS NULL" + BLOCK_FILTER
-        ).fetchall()
-    except sqlite3.OperationalError:
-        # Old DB without block_seconds/cron: every row is a notification reminder,
-        # so notify-only needs no filter here.
-        rows = [(r[0], r[1], r[2], r[3], None, None, None) for r in con.execute(
-            "SELECT id, text, due_at, repeat FROM reminders "
-            "WHERE status='pending' AND due_at IS NOT NULL AND fired_at IS NULL"
-        ).fetchall()]
+    # One pending instance per active series at a time (the frontier). Join the
+    # schedule so an instance of a cancelled series is never fired. fired_at IS
+    # NULL excludes an already-shown-but-unresolved occurrence from re-firing.
+    rows = con.execute(
+        "SELECT r.id, r.text, r.due_at, r.block_seconds, r.hold_seconds, r.schedule_id, s.cron "
+        "FROM reminders r LEFT JOIN reminder_schedules s ON r.schedule_id = s.id "
+        "WHERE r.status='pending' AND r.fired_at IS NULL AND r.due_at IS NOT NULL "
+        "AND (r.schedule_id IS NULL OR s.status='active')"
+    ).fetchall()
+    rows = sorted(rows, key=lambda r: (r[2] or ""))   # earliest due wins the overlay slot
+
+    def advance(schedule_id, cron):
+        # Materialise the NEXT occurrence of a series from its cron — independent
+        # of whether this occurrence fired or was missed. That independence is
+        # what keeps a series alive across a locked/asleep/missed fire. Idempotent
+        # via UNIQUE(schedule_id, due_at). No-op for one-shots (schedule_id NULL).
+        if not schedule_id or not cron:
+            return
+        nxt = cron_next(cron, now)
+        if nxt is None:
+            return
+        nfmt = nxt.strftime("%Y-%m-%d %H:%M")
+        sch = con.execute(
+            "SELECT text, block_seconds, hold_seconds, source FROM reminder_schedules WHERE id=?",
+            (schedule_id,),
+        ).fetchone()
+        if not sch:
+            return
+        try:
+            con.execute(
+                "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
+                "VALUES (?,?,?,?,?, 'pending', ?, ?)",
+                (schedule_id, sch[0], nfmt, sch[1], sch[2], sch[3], now_s),
+            )
+        except sqlite3.IntegrityError:
+            pass   # the next instance already exists (a prior tick created it)
+        con.execute("UPDATE reminder_schedules SET next_due_at=? WHERE id=?", (nfmt, schedule_id))
+
     fired = []
     overlay_fired = False   # serialize: at most ONE overlay launched per tick
-    # due_at order so the earliest blocking reminder wins the single overlay slot.
-    rows = sorted(rows, key=lambda r: (r[2] or ""))
-    for rid, text, due_at, repeat, block_seconds, hold_seconds, cron in rows:
+    for rid, text, due_at, block_seconds, hold_seconds, schedule_id, cron in rows:
         dt = parse_due(due_at)
         if dt is None or dt > now:
             continue
-        is_block = block_seconds is not None
-        # Serialize blocking overlays: only one on screen at a time. If one is
-        # already up (overlay_busy) or we already launched one this tick, SKIP
-        # this row WITHOUT stamping/advancing — it stays due for the next tick.
-        # Also skip when the screen is locked — the overlay would launch invisibly
-        # and be consumed without the user ever seeing it.
-        if is_block and (overlay_busy or overlay_fired or is_screen_locked):
+        overdue = (now - dt).total_seconds()
+        if overdue > grace:
+            # MISSED — too stale to show (asleep/off, or locked past the grace
+            # window). Reconcile this occurrence and advance the series so it
+            # never stalls. No overlay: a time-sensitive break is moot hours late.
+            con.execute(
+                "UPDATE reminders SET status='missed', resolved_at=? WHERE id=? AND status='pending'",
+                (now_s, rid),
+            )
+            advance(schedule_id, cron)
             continue
-        if is_block:
-            overlay_fired = True
-        # Emit a tab-separated record; block/hold are empty for normal reminders
-        # so the shell loop can dispatch overlay vs notification. rep is non-empty
-        # for any recurring row (token or cron) so the overlay leaves the series
-        # alone; empty only for true one-shots, which the overlay may resolve.
-        bs = "" if block_seconds is None else str(int(block_seconds))
-        hs = "" if hold_seconds is None else str(int(hold_seconds))
-        rep = repeat or ("cron" if cron else "")
-        fired.append((rid, text, bs, hs, rep))
-        # Recurrence: cron (flexible) supersedes the legacy repeat token.
-        if cron:
-            nxt = cron_next(cron, now)   # already strictly future
-        else:
-            nxt = next_occurrence(dt, repeat)
-        if nxt is not None and cron:
-            fmt = "%Y-%m-%d %H:%M"
-            con.execute(
-                "UPDATE reminders SET due_at=?, fired_at=NULL WHERE id=?",
-                (nxt.strftime(fmt), rid),
-            )
-        elif nxt is not None:
-            # Roll forward PAST now so a reminder that missed several cycles
-            # (laptop asleep, or just after install) fires once here and lands on
-            # its next FUTURE occurrence, instead of one ping per missed cycle
-            # across successive ticks. Daily and weekly jump arithmetically so an
-            # ancient backlog does not need thousands of steps; the bounded loop
-            # then finalises weekdays/monthly and guarantees a strictly-future
-            # result. The guard caps the loop in case next_occurrence ever fails
-            # to advance; it cannot for these repeat types.
-            rl = (repeat or "").lower()
-            if rl == "daily" and nxt <= now:
-                nxt = nxt + datetime.timedelta(days=(now.date() - nxt.date()).days)
-            elif rl == "weekly" and nxt <= now:
-                nxt = nxt + datetime.timedelta(weeks=((now - nxt).days // 7))
-            guard = 0
-            while nxt <= now and guard < 100000:
-                adv = next_occurrence(nxt, repeat)
-                if adv is None or adv <= nxt:
-                    break
-                nxt = adv
-                guard += 1
-            # keep the original time-of-day; carry the same string precision
-            fmt = "%Y-%m-%d %H:%M" if (" " in (due_at or "")) else "%Y-%m-%d"
-            con.execute(
-                "UPDATE reminders SET due_at=?, fired_at=NULL WHERE id=?",
-                (nxt.strftime(fmt), rid),
-            )
-        else:
-            con.execute(
-                "UPDATE reminders SET fired_at=? WHERE id=?", (now_s, rid)
-            )
+        # Within grace → fire candidate. DEFER (touch nothing) if the screen is
+        # locked, an overlay is already up, or we already launched one this tick;
+        # a later tick fires it, or it eventually ages into MISSED.
+        if is_screen_locked or overlay_busy or overlay_fired:
+            continue
+        # FIRE: stamp fired_at (the overlay then resolves the row itself), advance
+        # the series, and emit the launch record for the shell.
+        con.execute("UPDATE reminders SET fired_at=? WHERE id=?", (now_s, rid))
+        overlay_fired = True
+        fired.append((rid, text, str(int(block_seconds or 0)), str(int(hold_seconds or 5))))
+        advance(schedule_id, cron)
     con.execute("COMMIT")
     con.close()
-    for rid, text, bs, hs, rep in fired:
-        print(f"{rid}\t{text}\t{bs}\t{hs}\t{rep}")
+    for rid, text, bs, hs in fired:
+        print(f"{rid}\t{text}\t{bs}\t{hs}")
 except Exception:
     pass
 PYEOF
 )"
   [[ -n "$due" ]] || return 0
-  while IFS=$'\t' read -r rid rtext rblock rhold rrep; do
+  # At most one record (we serialize to one overlay per tick), but loop for safety.
+  while IFS=$'\t' read -r rid rtext rblock rhold; do
     [[ -n "$rtext" ]] || continue
-    if [[ -n "$rblock" ]]; then
-      # Blocking reminder → full-screen overlay (stays/counts down rblock secs).
-      # Pass id/db/repeat so the overlay can mark the (one-shot) reminder
-      # done/cancelled on dismissal.
-      pbrain_overlay_show "$rtext" "$rblock" "${rhold:-5}" "" "$rid" "$PBRAIN_DB_FILE" "$rrep"
-    else
-      pbrain_notify_reminder "$rid" "$rtext"
-    fi
+    # Pass the instance id + db so the overlay resolves THAT occurrence on
+    # dismissal (Control → skipped, countdown → done, sleep/lock → missed).
+    pbrain_overlay_show "$rtext" "${rblock:-0}" "${rhold:-5}" "" "$rid" "$PBRAIN_DB_FILE"
   done <<< "$due"
   return 0
-}
-
-# Print pending reminders as a human-readable list, overdue ones marked. Used by
-# /plan-my-day and /end-of-day to surface what's outstanding. Prints nothing if
-# there are none (caller treats empty as "no reminders").
-pbrain_reminders_pending_text() {
-  command -v python3 >/dev/null 2>&1 || return 0
-  [[ -f "$PBRAIN_DB_FILE" ]] || return 0
-  local now
-  now="$(date '+%Y-%m-%d %H:%M')"
-  python3 - "$PBRAIN_DB_FILE" "$now" <<'PYEOF' 2>/dev/null || true
-import sqlite3, sys, datetime
-db, now_s = sys.argv[1], sys.argv[2]
-now = datetime.datetime.strptime(now_s, "%Y-%m-%d %H:%M")
-today = now.date()
-
-DATE_ONLY_HOUR = 9  # a date with no time is treated as ~9am local
-
-def parse_due(s):
-    if not s:
-        return None
-    s = s.strip()
-    try:
-        return datetime.datetime.strptime(s, "%Y-%m-%d %H:%M")
-    except ValueError:
-        pass
-    try:
-        # date-only YYYY-MM-DD: anchor to a sensible morning hour so it does
-        # not fire or read as overdue at local midnight.
-        return datetime.datetime.strptime(s, "%Y-%m-%d").replace(hour=DATE_ONLY_HOUR)
-    except ValueError:
-        return None
-
-try:
-    con = sqlite3.connect(db, timeout=5)
-    con.execute("PRAGMA busy_timeout=5000")
-    try:
-        rows = con.execute(
-            "SELECT id, text, due_at, repeat, fired_at, block_seconds FROM reminders WHERE status='pending' "
-            "ORDER BY (due_at IS NULL), due_at"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        rows = [(r[0], r[1], r[2], r[3], r[4], None) for r in con.execute(
-            "SELECT id, text, due_at, repeat, fired_at FROM reminders WHERE status='pending' "
-            "ORDER BY (due_at IS NULL), due_at"
-        ).fetchall()]
-    con.close()
-except Exception:
-    sys.exit(0)
-
-lines = []
-for rid, text, due_at, repeat, fired_at, block_seconds in rows:
-    rep = f" (repeats {repeat})" if repeat else ""
-    if block_seconds is not None:
-        rep += " [blocking]"
-    dt = parse_due(due_at)
-    if dt is None:
-        lines.append(f"- [#{rid}] {text} — someday{rep}")
-        continue
-    d = dt.date()
-    when = due_at
-    if fired_at:
-        # Already notified (a one-shot that fired) but not marked done yet, so it
-        # stays pending; do not keep reading it as OVERDUE. (A repeat clears
-        # fired_at as it rolls forward, so this branch only hits one-shots.)
-        tag = "fired — mark done"
-    elif d < today or (d == today and dt <= now):
-        tag = "OVERDUE"
-    elif d == today:
-        tag = "today"
-    else:
-        days = (d - today).days
-        tag = "tomorrow" if days == 1 else f"in {days} days"
-    lines.append(f"- [#{rid}] {text} — due {when} ({tag}){rep}")
-
-if lines:
-    print("\n".join(lines))
-PYEOF
 }

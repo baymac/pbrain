@@ -1,16 +1,16 @@
 # /remind-blocking
 
-Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, an opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown. Two deliberate hold gestures resolve it (each held so it can't be hit by accident):
+Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, an opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown. Each occurrence resolves to exactly one outcome:
 
-- **Hold Control (⌃)** → **skip** → marks the reminder **cancelled**
-- **Hold Return (⏎)** → **mark done** → marks it **done**
-- **Let the countdown run out** → counts as **done** (you waited out the break)
+- **Hold Control (⌃)** for a few seconds → **skipped** (a deliberate hold, so it can't be hit by accident)
+- **Let the countdown run out** → **done** — you waited out the full break. *This is the only way to get a "done".*
+- **The Mac sleeps or the screen locks** while it's up, or it comes due while you're away past a grace window → **missed**
 
-So a fired blocking reminder doesn't linger as "mark me off later" — the overlay resolves it in the DB on the way out. (Repeating reminders are the exception: the series has already advanced to its next occurrence by the time the overlay shows, so the gestures just dismiss *this* occurrence without touching the schedule — skipping one daily break never cancels the whole habit.)
+There is no "mark done" shortcut — `done` means strictly that the allotted time elapsed. The overlay writes the outcome to that occurrence on the way out, so nothing lingers as "mark me off later."
 
 Use it for the moments you actually want to be *forced* to stop and notice — stretch breaks, posture nudges, screen-time hard stops, "step away now" cutoffs. For routine pings, use plain [`/remind`](remind.md) — those are notifications you can glance past.
 
-Blocking reminders share the same scheduling engine, SQLite store, and background poller as `/remind`; they're just rows with a duration attached.
+`/remind-blocking` is the **sole** owner of pbrain's SQLite reminders store and the background poller. (`/remind` is Apple Calendar-only and never touches the DB.) A recurring reminder is a **series** (`reminder_schedules`, defined by a cron expression); each fire is its own **occurrence** row, so per-occurrence history survives and resolving one never disturbs the series.
 
 ## Setting one
 
@@ -53,41 +53,45 @@ shows one overlay **right now** (10s, hold 3s to skip) so you can see it. Add `-
 ## Managing them
 
 ```bash
-/remind-blocking list           # pending blocking reminders, with durations
-/remind-blocking                # list + fire any due NOTIFICATION reminders (not overlays — see below)
+/remind-blocking list           # active series (S<id>) + pending one-shots (R<id>)
 ```
 
-To cancel one, just say so ("cancel the break reminder", "remove #3") — it matches your words to an id.
+The list tags each entry with a handle: a recurring **series** as `S<id>`, a one-shot **occurrence** as `R<id>`. To cancel, just say so ("cancel the break reminder", "stop the stretch one", "remove R3") — it matches your words to a handle. Cancelling a **series** (`S<id>`) stops the whole thing; cancelling a one-shot (`R<id>`, or a bare number) drops just that occurrence.
 
 ## How firing works
 
-A blocking overlay is **time-sensitive** — a "take a break at 3pm" screen is useless (and jarring) if it ambushes you at 6pm. So unlike `/remind`'s notifications, **blocking overlays fire only via the background poller**, which ticks every ~60s and so goes off within a minute of the due time.
+A blocking overlay is **time-sensitive** — a "take a break at 3pm" screen is useless (and jarring) if it ambushes you at 6pm. So **blocking overlays fire only via the background poller**, which ticks every ~60s and goes off within a minute of the due time. There are no opportunistic callers: running `/plan-my-day` or `/end-of-day` never pops a stale overlay. (The only way to summon one on demand is `/remind-blocking test`.)
 
-This means the **poller must be running** for a blocking reminder to fire on schedule. Your first `/remind-blocking add` installs it automatically (it's the same `com.pbrain.reminders` launchd agent `/remind` uses — nothing extra to install).
+This means the **poller must be running** for a blocking reminder to fire on schedule. Your first `/remind-blocking add` installs it automatically (the `com.pbrain.reminders` launchd agent — nothing extra to install).
 
-What they deliberately do **not** do: fire **opportunistically**. Running `/remind-blocking`, `/plan-my-day`, or `/end-of-day` will fire your due *notification* reminders as a catch-up, but it will **not** pop a stale overlay — that path is `notify-only` for exactly this reason. (The only way to summon an overlay on demand is `/remind-blocking test`.)
+When an occurrence comes due, the poller does one of three things:
 
-Repeating ones roll forward to their next occurrence after firing; one-shots fire once and then read as **fired** in the list.
+- **Fires** it (shows the overlay) if it's within the **grace window** (default 10 min, override `PBRAIN_REMIND_GRACE_SECONDS`) and the screen is unlocked.
+- **Defers** it — leaves it pending, untouched — if the screen is locked but it's still within grace (so unlocking soon still gets you the reminder), or if another overlay is already up (one at a time).
+- **Misses** it — marks it `missed`, no overlay — if it's overdue beyond the grace window (the Mac was asleep/off, or locked too long). A break that's an hour late is moot, so it's reconciled instead of fired.
 
-> **Heads-up:** because firing is poller-only, a blocking reminder won't fire while you're logged out / the Mac is asleep. On wake, the poller fires it once as a catch-up (not once per missed cycle). If you need a hard guarantee at an exact second, that's outside what a 60s poller offers.
+**A recurring series survives all of this.** Whether an occurrence fires or is missed, the poller immediately schedules the next one from the cron expression — so a missed/locked/asleep fire never breaks the chain. The *only* thing that stops a series is cancelling it.
+
+> **Heads-up:** because firing is poller-only, a blocking reminder won't fire while the Mac is asleep/off. On wake, anything overdue beyond grace is marked `missed` (not fired late, not fired once-per-missed-cycle), and the series rolls on. If you need a hard guarantee at an exact second, that's outside what a 60s poller offers.
 
 ### The overlay app
 
 The overlay is drawn by **pbrain's own tiny app** (`pbrain-overlay.app`), compiled on demand from a Swift source with `swiftc` (Apple Command Line Tools — already on any dev Mac) and cached at `~/.config/pbrain/pbrain-overlay.app`. Same packaging trick as the notifier: a real app bundle launches reliably even from the background poller. If `swiftc` isn't available, a blocking reminder **degrades to a normal notification** so it still surfaces.
 
-The overlay sets macOS kiosk options while it's up — it hides the Dock and menu bar and disables Cmd-Tab, force-quit, and Hide. This is *friction, not a prison*: it makes skipping deliberate, not impossible. Hold Control to skip / Return to mark done (or finish the countdown) and it tears down instantly, writing the resolution straight to the reminder row via SQLite.
+The overlay sets macOS kiosk options while it's up — it hides the Dock and menu bar and disables Cmd-Tab, force-quit, and Hide. This is *friction, not a prison*: it makes skipping deliberate, not impossible. Hold Control to skip (or finish the countdown for a "done") and it tears down instantly, writing the outcome straight to that occurrence's row via SQLite.
 
-**Sleep / lock safety.** An overlay must never linger invisibly behind the lock screen or across a sleep — that's how a stack of them piles up overnight and eats memory. Two guards prevent it: the poller **won't fire** a new overlay while the screen is locked (it leaves the reminder pending so it pops once you're back), and a live overlay **dismisses itself** the moment the Mac sleeps or the screen locks. Set `PBRAIN_SCREEN_LOCKED=1` to force the poller to treat the screen as locked (a manual "don't interrupt me" switch); `0` forces unlocked.
+**Sleep / lock safety.** An overlay must never linger invisibly behind the lock screen or across a sleep — that's how a stack of them piles up overnight and eats memory. Three guards prevent it: the poller **won't fire** a new overlay while the screen is locked (leaving it pending so it pops once you're back, or marking it `missed` if it ages past the grace window); a live overlay **dismisses itself** (resolving to `missed`) the moment the Mac sleeps or the screen locks; and the grace window stops anything from firing hours late on wake. Set `PBRAIN_SCREEN_LOCKED=1` to force the poller to treat the screen as locked (a manual "don't interrupt me" switch); `0` forces unlocked.
 
 ## Defaults and overrides
 
 | Env var | Effect | Default |
 |---|---|---|
-| `PBRAIN_DB_FILE` | SQLite DB path (shared with `/remind`, `/habits`) | `~/.config/pbrain/pbrain.db` |
+| `PBRAIN_DB_FILE` | SQLite DB path (shared with `/habits`) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_OVERLAY_APP` | Where the compiled overlay app is cached/built | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | Default overlay background colour (hex, e.g. `#1e3a5f`) | unset → slate |
+| `PBRAIN_REMIND_GRACE_SECONDS` | How overdue an occurrence may be and still fire; past it → `missed` | `600` (10 min) |
 | `PBRAIN_SCREEN_LOCKED` | Override the screen-lock probe: `1` = treat as locked (defer overlays), `0` = unlocked | unset → auto-detect via `ioreg` |
 
-**Subcommands (the script's API — you normally just type natural language):** `add --text … ( --due … | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]`, `test`, `list`, `done <id>`, `cancel <id>`, `tick`, `install`, `uninstall`.
+**Subcommands (the script's API — you normally just type natural language):** `add --text … ( --due … | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]`, `test`, `list`, `cancel <handle>` (`S<id>` series / `R<id>` one-shot), `tick`, `install`, `uninstall`.
 
 **Note:** macOS only (uses the bundled overlay app / launchd).

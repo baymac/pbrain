@@ -60,17 +60,29 @@ _run_cmd() { run bash "$CMD" "$@"; }
 }
 
 @test "add rejects a non-numeric duration" {
-  _run_cmd add --text x --duration abc
+  _run_cmd add --text x --due "2099-01-01 09:00" --duration abc
   [ "$status" -ne 0 ]
   [[ "$output" == *"--duration must be a whole number"* ]]
 }
 
-@test "add --cron stores the cron expr and computes a concrete next due_at" {
+@test "add needs exactly one of --due or --cron" {
+  _run_cmd add --text x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs --due"* ]]
+  _run_cmd add --text x --due "2099-01-01 09:00" --cron "0 9 * * *"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"EITHER --cron"* ]]
+}
+
+@test "add --cron creates a series + first instance with a concrete next due_at" {
   _run_cmd add --text "Stand up" --cron "0 14,17 * * 2,6" --duration 120
   [ "$status" -eq 0 ]
   [[ "$output" == *"cron: 0 14,17 * * 2,6"* ]]
-  run python3 -c "import sqlite3,sys,datetime; c=sqlite3.connect(sys.argv[1]); cr,d=c.execute('select cron,due_at from reminders').fetchone(); datetime.datetime.strptime(d,'%Y-%m-%d %H:%M'); print(cr)" "$PBRAIN_DB_FILE"
-  [ "$output" = "0 14,17 * * 2,6" ]
+  [[ "$output" == *"id=S1"* ]]
+  # cron lives on the schedule; the first instance carries a concrete due_at.
+  run python3 -c "import sqlite3,sys,datetime; c=sqlite3.connect(sys.argv[1]); print(c.execute('select cron,status from reminder_schedules').fetchone()); d=c.execute('select due_at from reminders').fetchone()[0]; datetime.datetime.strptime(d,'%Y-%m-%d %H:%M')" "$PBRAIN_DB_FILE"
+  [[ "$output" == *"0 14,17 * * 2,6"* ]]
+  [[ "$output" == *"active"* ]]
 }
 
 @test "add rejects an invalid --cron expression" {
@@ -85,24 +97,25 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [[ "$output" == *"--due must be"* ]]
 }
 
-@test "list shows only blocking reminders" {
-  # one blocking (via the command) + one plain notification reminder (direct insert)
+@test "list shows series as S<id> and one-shots as R<id>" {
   bash "$CMD" add --text "Take a break" --due "2099-01-01 09:00" --duration 120 >/dev/null 2>&1
-  python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"insert into reminders(text,due_at,status,created_at) values('plain ping','2099-01-01 09:00','pending','t')\"); c.commit()" "$PBRAIN_DB_FILE"
+  bash "$CMD" add --text "Stretch" --cron "0 9 * * *" --duration 60 >/dev/null 2>&1
   _run_cmd list
   [ "$status" -eq 0 ]
   [[ "$output" == *"Take a break"* ]]
-  [[ "$output" != *"plain ping"* ]]
+  [[ "$output" == *"Stretch"* ]]
+  [[ "$output" == *"[S"* ]]     # the series handle
+  [[ "$output" == *"[R"* ]]     # the one-shot handle
 }
 
-@test "done marks a blocking reminder done" {
-  bash "$CMD" add --text "Take a break" --due "2099-01-01 09:00" --duration 120 >/dev/null 2>&1
-  ID="$(python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select id from reminders').fetchone()[0])" "$PBRAIN_DB_FILE")"
-  _run_cmd done "$ID"
+@test "cancel S<id> stops the whole series (schedule + its pending occurrence)" {
+  bash "$CMD" add --text "Stretch" --cron "0 9 * * *" --duration 60 >/dev/null 2>&1
+  SID="$(python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select id from reminder_schedules').fetchone()[0])" "$PBRAIN_DB_FILE")"
+  _run_cmd cancel "S$SID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Marked done"* ]]
-  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select status from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
-  [ "$output" = "done" ]
+  [[ "$output" == *"cancelled series S$SID"* ]]
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select status from reminder_schedules').fetchone()[0], c.execute(\"select status from reminders where schedule_id=$SID\").fetchone()[0])" "$PBRAIN_DB_FILE"
+  [ "$output" = "cancelled cancelled" ]
 }
 
 @test "install writes a self-owned poller plist pointing at remind-blocking.sh tick" {
@@ -138,12 +151,12 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [[ "$output" == *"INSTRUCTIONS"* ]]
 }
 
-@test "cancel marks a blocking reminder cancelled" {
+@test "cancel R<id> (or a bare number) cancels a one-shot occurrence" {
   bash "$CMD" add --text "Cancel me" --due "2099-01-01 09:00" >/dev/null 2>&1
   ID="$(python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select id from reminders').fetchone()[0])" "$PBRAIN_DB_FILE")"
   _run_cmd cancel "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Marked cancelled"* ]]
+  [[ "$output" == *"cancelled R$ID"* ]]
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select status from reminders').fetchone()[0])" "$PBRAIN_DB_FILE"
   [ "$output" = "cancelled" ]
 }
