@@ -4,7 +4,7 @@ Daily diet journal + nutrition coach. Acts as a coach on first run (state + cond
 
 ## First-run setup (two-step bootstrap)
 
-**Step 1 — Profile.** Asks about body state (weight/height/age/activity), goals, **medical conditions** (diabetes, hypertension, kidney issues, IBS, PCOS, cancer/oncology diet, pregnancy, etc.), medications, allergies, intolerances, dietary preferences (veg/non-veg/vegan/halal/kosher), cuisine context, cooking capacity, budget, eating window, alcohol/caffeine habits. Writes machine-readable JSON to:
+**Step 1 — Profile.** Asks about body state (weight/height/age/activity), goals, **medical conditions** (diabetes, hypertension, kidney issues, IBS, PCOS, cancer/oncology diet, pregnancy, etc.), medications, allergies, intolerances, dietary preferences (veg/non-veg/vegan/halal/kosher), cuisine context, cooking capacity, budget, eating window, alcohol/caffeine habits, and any supplements you take regularly. Writes machine-readable JSON to:
 
 ```
 ~/.config/pbrain/diet-profile.json
@@ -35,9 +35,12 @@ Just describe what you ate. No upfront mode selection — the command opens with
 Every entry includes:
 
 - Meal-by-meal macros table (calories, protein, carbs, fat, fiber) with `Total / Plan target / Remaining` rows.
-- Hydration, supplements, late-eating notes.
+- A dedicated **Supplements** section (table: supplement · dose · timing · status · note) that doubles as a daily checklist — your regular regimen is pre-listed as `planned`, and items you take are marked `taken`.
+- Hydration and late-eating notes.
 - Nutrition Analysis rating per category, including a **Condition adherence** row tied to the user's profile.
 - Patterns across recent days, and a short coach note.
+
+Supplements that carry real calories (protein powder, mass gainer) also get a row in the meals table so their macros count; pure micronutrients (vitamins, creatine, omega-3) sit in the Supplements section only and don't affect macro totals.
 
 Cross-references today's `/fitness-journal` entry — pre/post-workout fuel timing, training-day carb bump, etc.
 
@@ -47,6 +50,7 @@ A growing reference of the named items you eat — so you can log "protein shake
 
 - **Home / regular foods** — staples you make or eat normally.
 - **Junk / outside food** — takeout, treats, restaurant items (kept separate so the pattern is visible).
+- **Supplements** — vitamins, minerals, and ergogenic aids you take regularly, each with its **Dose**, **Timing**, and **Key nutrients** (the active dose, e.g. "2000 IU D3", "5g creatine"). Macro columns are filled only for calorie-bearing supplements like protein powder. The daily Supplements checklist is pulled from here; on first run it's seeded from any supplements captured in your profile.
 
 Each entry carries a **Meal type** column (`breakfast`, `lunch`, `dinner`, `snack`, `post-workout`, `any`, or comma-separated combinations like `"breakfast, snack"`). The day-planner uses this to filter appropriate items for each slot. Entries without a Meal type column (older entries) are treated as `any` for full backward compatibility.
 

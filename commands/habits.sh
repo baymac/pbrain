@@ -780,6 +780,16 @@ Use these commands — never hand-edit the profile JSON or the tracking table di
   The user can also just open today's track_file in Obsidian and tick cells by hand.
 
 Step 3 — Keep it brief. This is a dashboard, not a coaching session.
+
+Step 4 — If the HABIT EXTRACTION block below appears, act on it: when the user
+has evidenced any tracked habit in this session (now or in a later turn), MARK
+it per that block instead of waiting to be asked — that's how the dashboard
+keeps progress live. Marking is idempotent, so it's safe.
 DASH
+
+# Habit extraction ride-along: lets the dashboard auto-mark habits the user
+# evidences this session (e.g. "I had one unclean meal") so progress updates in
+# the same run, not only when explicitly asked. Silent if nothing's evidenced.
+pbrain_emit_habits_extract "habits" || true
 
 pbrain_emit_self_improve "habits" "$PROFILE_FILE" "habits profile" || true

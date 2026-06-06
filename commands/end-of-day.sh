@@ -77,11 +77,10 @@ already_closed() {
 
 CLOSED="$(already_closed "$PLAN_FILE")"
 
-# Reminders + habits surfacing. No-ops (empty output) until the user opts in.
-# Firing due reminders here is deduped by fired_at, so it won't double-ping.
-pbrain_reminders_tick || true
-REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
-[[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+# Habits surfacing. No-ops (empty output) until the user opts in. (Reminders are
+# NOT surfaced or fired here: /remind reminders live on Apple Calendar, and
+# /remind-blocking overlays are time-sensitive and self-contained in their own
+# poller — neither should pollute the end-of-day reflection.)
 # Sync recent habit-tracking md into the DB so the rollup reflects today's marks.
 pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
@@ -89,7 +88,6 @@ HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || true)"
-REMIND_CMD="$(pbrain_reminders_cmd)"
 
 cat <<PROMPT
 END_OF_DAY_SESSION
@@ -111,9 +109,6 @@ $(read_or_missing "$FITNESS_FILE")
 
 --- DIET ---
 $(read_or_missing "$DIET_FILE")
-
---- PENDING REMINDERS ---
-$REMINDERS_PENDING
 
 --- HABITS (this week / month vs each habit's criteria) ---
 $HABITS_ROLLUP
@@ -224,15 +219,7 @@ without re-asking. Use the Edit tool on each file.
     leave it unchecked (it surfaces in /loose-ends). No new section, just the
     tick.
 
-4e) REMINDERS — read the PENDING REMINDERS block above:
-    - If any are OVERDUE or were due today, ask once which (if any) the user
-      handled, and mark those done: \`bash "$REMIND_CMD" done <id>\` (id = [#N]).
-    - Offer once to set a reminder for anything that should resurface tomorrow
-      (often the "carry into tomorrow" answer or a dropped item worth not
-      losing): \`bash "$REMIND_CMD" add --text "<text>" --due "<YYYY-MM-DD HH:MM>"\`.
-      Write only on a yes. Don't pester — one short offer.
-
-4f) HABITS — read the HABITS block + \`habits_setup_needed\`:
+4e) HABITS — read the HABITS block + \`habits_setup_needed\`:
     - If \`habits_setup_needed\` == yes: mention ONCE (unless prefs say not to
       nag) — "You haven't set up habit tracking yet — /habits picks a few habits
       to build or cap. Worth a look." Don't block the close.

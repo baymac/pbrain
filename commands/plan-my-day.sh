@@ -229,11 +229,6 @@ fi
 # PHASE 1 — today's plan already exists → review/update mode.
 # ---------------------------------------------------------------------------
 if [[ -f "$OUT_FILE" ]]; then
-  # Even on a re-run (plan already exists), fire any due reminders and surface
-  # pending ones — PHASE 2's tick/surface below is skipped once a plan exists,
-  # and /plan-my-day advertises itself as one of the commands that fires them.
-  pbrain_reminders_tick || true
-  _PMD_PENDING="$(pbrain_reminders_pending_text || true)"
   echo "PLAN_MY_DAY_EXISTING"
   echo "file: $OUT_FILE"
   echo ""
@@ -241,12 +236,6 @@ if [[ -f "$OUT_FILE" ]]; then
   echo ""
   echo "---"
   echo "Today's day plan already exists. Show it to the user and ask if they want to update the 'How it went' section, add more items, or revise blocks."
-  if [[ -n "${_PMD_PENDING//[[:space:]]/}" ]]; then
-    echo ""
-    echo "=== PENDING REMINDERS (due ones have already fired as notifications) ==="
-    echo "$_PMD_PENDING"
-    echo "Surface anything due today / overdue; if the user handled one, mark it: bash \"$(pbrain_reminders_cmd)\" done <id>."
-  fi
   exit 0
 fi
 
@@ -425,13 +414,16 @@ else:
 PYEOF
 )"
 
-# Reminders + habits surfacing. Every helper is a no-op (empty output) when the
-# user hasn't set anything up, so this costs nothing until they opt in. Firing
-# any due reminders here (opportunistic tick) is deduped by fired_at, so it
-# won't double-ping with the launchd poller if that's installed.
-pbrain_reminders_tick || true
-REMINDERS_PENDING="$(pbrain_reminders_pending_text || true)"
-[[ -n "${REMINDERS_PENDING//[[:space:]]/}" ]] || REMINDERS_PENDING="(none)"
+# Habits surfacing. Every helper is a no-op (empty output) when the user hasn't
+# set anything up, so this costs nothing until they opt in. (Reminders are NOT
+# surfaced or fired here: /remind creates Apple Reminders (EKReminder), which are
+# NOT Calendar events and are not read here; /remind-blocking overlays are
+# time-sensitive and stay self-contained in their own poller, by design.)
+# Today's Apple Calendar events (any commitments the user placed on the calendar),
+# recurrences expanded for today. These are HARD time anchors the day is built
+# around. No-op (empty) if osascript/Calendar is unavailable.
+CALENDAR_TODAY="$(pbrain_calendar_today "$TODAY" || true)"
+[[ -n "${CALENDAR_TODAY//[[:space:]]/}" ]] || CALENDAR_TODAY="(none)"
 # Sync recent habit-tracking md into the DB so the rollup reflects them.
 pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
@@ -439,6 +431,13 @@ HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || echo "$VAULT_DIR/life/habit-tracking/$TODAY.md")"
+# If a habits profile exists, today's tracker is created automatically (no offer).
+# track-init is idempotent — re-running on an existing file is a no-op.
+HABITS_TRACK_CREATED=no
+if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
+  if [[ ! -f "$HABITS_TRACK_FILE" ]]; then HABITS_TRACK_CREATED=yes; fi
+  pbrain_habit_track_init "$TODAY" >/dev/null 2>&1 || true
+fi
 HABITS_TODAY_MD="$(cat "$HABITS_TRACK_FILE" 2>/dev/null || echo "MISSING")"
 REMIND_CMD="$(pbrain_reminders_cmd)"
 
@@ -452,6 +451,7 @@ profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 habits_setup_needed: $HABITS_SETUP_NEEDED
 habits_track_file: $HABITS_TRACK_FILE
+habits_track_created: $HABITS_TRACK_CREATED
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -471,8 +471,8 @@ $CADENCE_SIGNAL
 === RECENT DAY PLANS (last 7) ===
 $RECENT_PLANS
 
-=== PENDING REMINDERS ===
-$REMINDERS_PENDING
+=== TODAY'S CALENDAR (Apple Calendar — hard time anchors for today) ===
+$CALENDAR_TODAY
 
 === HABITS (this week / month vs each habit's criteria) ===
 $HABITS_ROLLUP
@@ -514,9 +514,9 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
       - \`current\` → fewer than 7 days since the last weekly review: say nothing.
       - \`due <days> <plans> <last_date|never>\` → it's Monday and \`<days>\` calendar days (gaps included) have passed since your last weekly review — over a week of activity, with \`<plans>\` day-plans logged in that window. Suggest once, don't block. Phrase with the real numbers, e.g.: "It's Monday and it's been <days> days since your last weekly review (\`<last_date>\`), with <plans> day-plans since — want to run /weekly-review first? A few minutes, and it gives today's plan that context. Or I plan now and you do it later." If \`<last_date>\` is \`never\`, say it's been <days> days of planning with no weekly review yet. If they say plan now, continue; offer to remind them at the end.
   - If the profile's \`current_focus\` array is empty, mention once: "You haven't pinned a current focus in your profile yet — want to name 1–3 things you're actively pushing this month? I'll save them so I can anchor future plans on them." Don't block planning today either way.
-  - REMINDERS — read the PENDING REMINDERS block above. If anything is due today or OVERDUE, surface it briefly in your first message (e.g. "Reminders for today: call dentist (3pm), pay rent (overdue)"). Those due ones have already fired as macOS notifications. Don't list undated "someday" reminders unless the user asks. If the user says one's handled, run \`bash "$REMIND_CMD" done <id>\` (id is the [#N] in the block). If there are none, say nothing.
+  - CALENDAR — read the TODAY'S CALENDAR block above. These are the user's Apple Calendar events for today (created via /remind or set directly in Calendar), with recurrences already expanded. They are HARD ANCHORS — the day is built around them. Surface today's TIMED items in your first message as fixed points (e.g. "On your calendar today: standup 9:30, dentist 14:00"). Note any ALLDAY items as context, and mention FREQUENT pings (e.g. "hourly stand-up reminder") only once, briefly. If it's "(none)", say nothing. These feed Step 4a as non-negotiable rows — do NOT ask the user to restate them; treat them like already-confirmed locked-in commitments.
   - HABITS — read the HABITS block + \`habits_setup_needed\` above:
-      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits.
+      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits. If the user tells you to stop asking about habits, that's a GLOBAL standing preference (it spans commands) — capture it in \`prefs/_global.md\` via the self-improve loop, not a per-command pref.
       - If a HABITS rollup is present: note anything that needs attention today — a limit habit at/over cap (⚠️), or a high-priority build habit lagging / untouched this week — and factor it into the plan (e.g. slot a short block for a lagging build habit). One line, not a lecture.
 
 Step 1 — Show the user their lens, briefly:
@@ -570,9 +570,9 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   Time-range rules — ANCHOR-FIRST approach:
   Step 4a — Use the confirmed anchors from Step 1.5 as the fixed skeleton rows. Then layer on top:
-    1. Explicit block times from q2 and locked-in commitments from q3 — absolute, never shift these.
-    2. The confirmed anchors (workout, lunch, dinner, walk, bed) — these are non-negotiable skeleton rows.
-    Maximum 15–30 min variance from any confirmed anchor time. More than that is a plan error.
+    1. CALENDAR EVENTS (from the TODAY'S CALENDAR block) and locked-in commitments from q3, plus explicit block times from q2 — these are absolute, never shift them. A calendar TIMED item must appear in the table at its exact time window with its title; tie it to a goal/category or "—". Two calendar items that overlap → keep both and flag the conflict to the user. Don't invent calendar items that aren't in the block.
+    2. The confirmed anchors (workout, lunch, dinner, walk, bed) — these are non-negotiable skeleton rows, scheduled AROUND the fixed calendar/commitment rows above.
+    Maximum 15–30 min variance from any confirmed anchor time. More than that is a plan error. Calendar items have ZERO variance — they sit exactly where the calendar says.
     The skeleton arc is: wake → workout → post-workout/lunch → blocks → dinner → walk → wind-down → bed. Fill gaps with transitions, breaks, meals.
   Step 4b — CRITICAL: The table ALWAYS starts at wake_time (from the confirmed anchors or profile), NOT at current_time. current_time is only for surfacing reminders — it must NEVER influence where the plan begins. Even if /plan-my-day is run at 13:00 and wake_time is 07:30, the first table row is 07:30. The plan spans the full day: wake → bed. Place the 3 main blocks (from q2) at their stated times within that full-day arc. Each block must be at least deep_work_block_min wide (from the profile). Blocks can be any type: focused work, creative, social, outdoor — label them accurately in the table Tie column. Fill the gaps between blocks with meals, movement, transitions, wind-down. Cap total intentional block time at q4 hours.
   Step 4c — Use 24h times throughout (HH:MM–HH:MM). Never use "Morning / Midday / Evening" labels. Every row must have both a start and end time. Maximum 15–30 min deviation from learned/stated anchors unless the user explicitly set a different time.
@@ -708,20 +708,22 @@ Step 6 — Reminders (only if relevant — don't force it):
   only on a yes. Don't pester — at most one short offer covering all of them.
 
 Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very end:
-  a) Ensure today's tracker exists. If TODAY'S HABIT TRACKER == "MISSING", offer
-     ONCE: "Want me to set up today's habit tracker?" On yes:
-       bash "$HABITS_CMD" track --date $TODAY
-     On no: skip this step entirely.
-  b) Once the tracker is in place (or was already there), show the user today's
-     habit checklist from TODAY'S HABIT TRACKER — just the table rows, concise.
-     Then ask ONCE:
+  PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says not to nag /
+  ask about habits, skip this whole step — don't show the checklist or ask.
+  a) Today's tracker is ALREADY created — the command auto-builds it whenever a
+     habits profile exists, so there is NO offer to make and nothing to ask. Just
+     state it in one line: if \`habits_track_created\` == yes, "Set up today's
+     habit tracker."; if \`no\`, "Today's habit tracker is ready." (it already
+     existed). Never ask "Want me to set up today's habit tracker?" again.
+  b) Show the user today's habit checklist from TODAY'S HABIT TRACKER — just the
+     table rows, concise. Then ask ONCE:
        "Any you've already done today? Name them and I'll mark them now (e.g.
         'meditation, walked'). Or skip — run /habits anytime through the day to
         check and mark more, or just leave it and /end-of-day consolidates."
   c) On any named habits, mark each one:
        bash "$HABITS_CMD" mark --habit "<name>" --date $TODAY
      Confirm what was marked. One round only — don't loop asking for more.
-  Don't force tracker creation or marking — one offer each.
+  Don't force marking — the tracker is auto-created; marking is one ask, no loop.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the

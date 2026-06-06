@@ -1,4 +1,4 @@
-// pbrain-notify — macOS notifier with optional Snooze / Cancel action buttons.
+// pbrain-notify — minimal macOS notifier (fire-and-forget).
 //
 // WHY THIS EXISTS
 // ---------------
@@ -12,6 +12,12 @@
 // so it runs inside a real app bundle with a stable identity. `pbrain_notify`
 // then calls it instead of osascript, with osascript kept only as a last-resort
 // fallback when this binary can't be built (no swiftc).
+//
+// It is now used SOLELY as the /remind-blocking overlay's degradation path: when
+// swiftc is unavailable to build the full-screen overlay, a blocking reminder
+// falls back to a plain notification so it still surfaces. (The old interactive
+// Snooze/Cancel + SQLite write-back path was for /remind's notification queue,
+// which is gone — /remind is Apple Calendar-only and never touches the DB.)
 //
 // APPROACH: NSUserNotification + a borrowed identity
 // --------------------------------------------------
@@ -36,27 +42,14 @@
 // PBRAIN_NOTIFY_IDENTITY in the shell), or disable the swizzle entirely with
 // `--bundle-id ""` to deliver under this app's own com.pbrain.notify identity.
 //
-// ACTION BUTTONS (Snooze / Cancel)
-// ---------------------------------
-// Pass `--id <reminder_id>` and `--db <path>` to enable interactive mode:
-// - The notification gains "Snooze 1h" (action button) and "Cancel" (additional
-//   action, revealed via the ▼ dropdown in NC or banner long-press).
-// - The binary stays alive for --timeout seconds (default 30) listening for the
-//   delegate callback, then updates the DB directly via SQLite3 C API and exits.
-// - Without --id / --db the binary falls back to the original fire-and-forget
-//   behaviour (exits as soon as delivery is confirmed, ~sub-second).
-//
 // USAGE
 //   pbrain-notify --title "Reminder" --message "call the dentist"
-//                 [--id <reminder_id>] [--db <path>]
-//                 [--timeout <seconds>]          # default 30; only with --id
 //                 [--sound <name>|none] [--bundle-id <id>|""]
 //
 // Build: `swiftc -suppress-warnings pbrain-notify.swift`
 
 import Foundation
 import ObjectiveC.runtime
-import SQLite3
 
 // ---------------------------------------------------------------------------
 // Bundle-identity hook. After method_exchangeImplementations, the original
@@ -98,93 +91,16 @@ if let bid = argValue("--bundle-id") {
 }
 if pbrainImpersonatedID != nil { installBundleIDHook() }
 
-let title      = argValue("--title") ?? "pbrain"
-let message    = argValue("--message") ?? ""
-let soundArg   = argValue("--sound")
-let dbPath     = argValue("--db")
-let timeoutSec = Double(argValue("--timeout") ?? "30") ?? 30.0
-let reminderID: Int32? = argValue("--id").flatMap { Int32($0) }
-let hasInteractivity = reminderID != nil && dbPath != nil
+let title    = argValue("--title") ?? "pbrain"
+let message  = argValue("--message") ?? ""
+let soundArg = argValue("--sound")
 
 // ---------------------------------------------------------------------------
-// SQLite helpers — update the reminder row directly from Swift so the shell
-// caller can fire the binary asynchronously (fire-and-forget from remind.sh).
-// ---------------------------------------------------------------------------
-func isoDate(_ date: Date) -> String {
-    let f = DateFormatter()
-    f.locale = Locale(identifier: "en_US_POSIX")
-    f.dateFormat = "yyyy-MM-dd HH:mm"
-    return f.string(from: date)
-}
-
-func snoozeReminder(db: String, id: Int32, hours: Double) {
-    var conn: OpaquePointer?
-    guard sqlite3_open(db, &conn) == SQLITE_OK else { return }
-    defer { sqlite3_close(conn) }
-    let newDue = isoDate(Date().addingTimeInterval(hours * 3600))
-    let sql = "UPDATE reminders SET due_at=?, fired_at=NULL WHERE id=? AND status='pending'"
-    var stmt: OpaquePointer?
-    guard sqlite3_prepare_v2(conn, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-    defer { sqlite3_finalize(stmt) }
-    newDue.withCString { cstr in
-        sqlite3_bind_text(stmt, 1, cstr, -1, nil)
-        sqlite3_bind_int(stmt, 2, id)
-        sqlite3_step(stmt)
-    }
-}
-
-func cancelReminder(db: String, id: Int32) {
-    var conn: OpaquePointer?
-    guard sqlite3_open(db, &conn) == SQLITE_OK else { return }
-    defer { sqlite3_close(conn) }
-    let sql = "UPDATE reminders SET status='cancelled', done_at=? WHERE id=? AND status='pending'"
-    var stmt: OpaquePointer?
-    guard sqlite3_prepare_v2(conn, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-    defer { sqlite3_finalize(stmt) }
-    isoDate(Date()).withCString { cstr in
-        sqlite3_bind_text(stmt, 1, cstr, -1, nil)
-        sqlite3_bind_int(stmt, 2, id)
-        sqlite3_step(stmt)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Delegate — receives action button callbacks while the run loop is live.
+// A minimal delegate that forces presentation even if a foreground app exists.
 // ---------------------------------------------------------------------------
 class PBrainDelegate: NSObject, NSUserNotificationCenterDelegate {
-    let targetID: String
-    let reminderID: Int32?
-    let dbPath: String?
-    var handled = false
-
-    init(_ targetID: String, _ reminderID: Int32?, _ dbPath: String?) {
-        self.targetID = targetID
-        self.reminderID = reminderID
-        self.dbPath = dbPath
-    }
-
     func userNotificationCenter(_ center: NSUserNotificationCenter,
                                 shouldPresent notification: NSUserNotification) -> Bool { true }
-
-    func userNotificationCenter(_ center: NSUserNotificationCenter,
-                                didActivate notification: NSUserNotification) {
-        defer {
-            handled = true
-            CFRunLoopStop(CFRunLoopGetCurrent())
-        }
-        guard notification.identifier == targetID,
-              let rid = reminderID, let db = dbPath else { return }
-        switch notification.activationType {
-        case .actionButtonClicked:
-            cancelReminder(db: db, id: rid)
-        case .additionalActionClicked:
-            if notification.additionalActivationAction?.identifier == "snooze" {
-                snoozeReminder(db: db, id: rid, hours: 1.0)
-            }
-        default:
-            break
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,31 +119,15 @@ if let s = soundArg {
     note.soundName = NSUserNotificationDefaultSoundName
 }
 
-if hasInteractivity {
-    note.hasActionButton   = true
-    note.actionButtonTitle = "Cancel"
-    note.additionalActions = [NSUserNotificationAction(identifier: "snooze", title: "Snooze 1h")]
-}
-
-let delegate = PBrainDelegate(ident, reminderID, dbPath)
+let delegate = PBrainDelegate()
 center.delegate = delegate
 center.deliver(note)
 
 // ---------------------------------------------------------------------------
-// Run loop — spin until delivery is confirmed and, in interactive mode, until
-// the user acts (or the timeout elapses). Early exit keeps the poller snappy.
+// Fire-and-forget: spin only until delivery is confirmed, then exit (~sub-second).
 // ---------------------------------------------------------------------------
-if hasInteractivity {
-    // Stay alive so action button callbacks can reach the delegate.
-    let deadline = Date().addingTimeInterval(timeoutSec)
-    while !delegate.handled && Date() < deadline {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-    }
-} else {
-    // Fire-and-forget path: just confirm delivery then exit (~sub-second).
-    let deadline = Date().addingTimeInterval(3)
-    while Date() < deadline {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        if center.deliveredNotifications.contains(where: { $0.identifier == ident }) { break }
-    }
+let deadline = Date().addingTimeInterval(3)
+while Date() < deadline {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    if center.deliveredNotifications.contains(where: { $0.identifier == ident }) { break }
 }
