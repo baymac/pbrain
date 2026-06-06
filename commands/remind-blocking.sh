@@ -26,10 +26,11 @@ set -euo pipefail
 # /remind-blocking command translates):
 #   remind-blocking.sh add --text "..." (--due "YYYY-MM-DD HH:MM"  ←one-shot
 #                                        | --cron "<5-field expr>") ←recurring series
-#                          [--duration <seconds>] [--hold <seconds>] [--source X]
-#                            cron:     5-field cron (min hour dom month dow). Exactly one of --due/--cron.
-#                            duration: how long the overlay stays / counts down (0 = until skipped). default 0.
-#                            hold:     seconds of Control-key hold needed to skip. default 5.
+#                          [--duration <seconds>] [--hold <seconds>] [--mark-done] [--source X]
+#                            cron:      5-field cron (min hour dom month dow). Exactly one of --due/--cron.
+#                            duration:  how long the overlay stays / counts down (0 = until skipped). default 0.
+#                            hold:      seconds of hold needed to act (skip AND done). default 5.
+#                            mark-done: Option-hold resolves to done instead of countdown.
 #                          echoes a handle: S<id> (series) or R<id> (one-shot).
 #   remind-blocking.sh list                 # active series (S<id>) + pending one-shots (R<id>)
 #   remind-blocking.sh cancel <handle> ...  # S<id> stops a series; R<id> or <id> a one-shot
@@ -87,15 +88,16 @@ case "$SUB" in
   # -------------------------------------------------------------------------
   add)
     shift || true
-    R_TEXT=""; R_DUE=""; R_SOURCE="remind-blocking"; R_DURATION="0"; R_HOLD="5"; R_CRON=""
+    R_TEXT=""; R_DUE=""; R_SOURCE="remind-blocking"; R_DURATION="0"; R_HOLD="5"; R_CRON=""; R_MARK_DONE="0"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --text)     R_TEXT="${2:-}"; shift 2 2>/dev/null || shift ;;
-        --due)      R_DUE="${2:-}"; shift 2 2>/dev/null || shift ;;
-        --cron)     R_CRON="${2:-}"; shift 2 2>/dev/null || shift ;;
-        --duration) R_DURATION="${2:-0}"; shift 2 2>/dev/null || shift ;;
-        --hold)     R_HOLD="${2:-5}"; shift 2 2>/dev/null || shift ;;
-        --source)   R_SOURCE="${2:-remind-blocking}"; shift 2 2>/dev/null || shift ;;
+        --text)      R_TEXT="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --due)       R_DUE="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --cron)      R_CRON="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --duration)  R_DURATION="${2:-0}"; shift 2 2>/dev/null || shift ;;
+        --hold)      R_HOLD="${2:-5}"; shift 2 2>/dev/null || shift ;;
+        --mark-done) R_MARK_DONE="1"; shift ;;
+        --source)    R_SOURCE="${2:-remind-blocking}"; shift 2 2>/dev/null || shift ;;
         *) shift ;;
       esac
     done
@@ -152,9 +154,9 @@ PYEOF
     # Insert: a recurring --cron creates a reminder_schedules series + its first
     # pending instance; a one-shot --due creates a single instance (schedule_id
     # NULL). Echoes the handle to reference it by: S<id> (series) or R<id> (one-shot).
-    NEW_ID="$(python3 - "$PBRAIN_DB_FILE" "$R_TEXT" "$R_DUE" "$R_CRON" "$R_SOURCE" "$NOW_DT" "$R_DURATION" "$R_HOLD" <<'PYEOF'
+    NEW_ID="$(python3 - "$PBRAIN_DB_FILE" "$R_TEXT" "$R_DUE" "$R_CRON" "$R_SOURCE" "$NOW_DT" "$R_DURATION" "$R_HOLD" "$R_MARK_DONE" <<'PYEOF'
 import sqlite3, sys
-db, text, due, cron, source, now, duration, hold = sys.argv[1:9]
+db, text, due, cron, source, now, duration, hold, mark_done_s = sys.argv[1:10]
 text = text.strip()
 due = (due or "").strip() or None
 cron = (cron or "").strip() or None
@@ -165,28 +167,29 @@ except ValueError:
 try:
     hold_seconds = int(hold)
 except ValueError:
-    hold_seconds = 5
+    hold_seconds = 3
+mark_done = 1 if mark_done_s == "1" else 0
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("PRAGMA busy_timeout=5000")
     if cron:
         sc = con.execute(
-            "INSERT INTO reminder_schedules (text, cron, block_seconds, hold_seconds, status, next_due_at, source, created_at) "
-            "VALUES (?,?,?,?, 'active', ?, ?, ?)",
-            (text, cron, block_seconds, hold_seconds, due, source, now),
+            "INSERT INTO reminder_schedules (text, cron, block_seconds, hold_seconds, mark_done, status, next_due_at, source, created_at) "
+            "VALUES (?,?,?,?,?, 'active', ?, ?, ?)",
+            (text, cron, block_seconds, hold_seconds, mark_done, due, source, now),
         )
         con.execute(
-            "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
-            "VALUES (?,?,?,?,?, 'pending', ?, ?)",
-            (sc.lastrowid, text, due, block_seconds, hold_seconds, source, now),
+            "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, mark_done, status, source, created_at) "
+            "VALUES (?,?,?,?,?,?, 'pending', ?, ?)",
+            (sc.lastrowid, text, due, block_seconds, hold_seconds, mark_done, source, now),
         )
         con.commit()
         print(f"S{sc.lastrowid}")
     else:
         cur = con.execute(
-            "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
-            "VALUES (NULL,?,?,?,?, 'pending', ?, ?)",
-            (text, due, block_seconds, hold_seconds, source, now),
+            "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, mark_done, status, source, created_at) "
+            "VALUES (NULL,?,?,?,?,?, 'pending', ?, ?)",
+            (text, due, block_seconds, hold_seconds, mark_done, source, now),
         )
         con.commit()
         print(f"R{cur.lastrowid}")
@@ -205,10 +208,12 @@ PYEOF
     else
       WHEN_TXT="due $R_DUE"
     fi
-    if [[ "$R_DURATION" == "0" ]]; then
-      DUR_TXT="stays until you hold Control ${R_HOLD}s to skip"
+    if [[ "$R_MARK_DONE" == "1" ]]; then
+      DUR_TXT="hold ⌥ Option ${R_HOLD}s to mark done; hold ⌃ Control ${R_HOLD}s to skip"
+    elif [[ "$R_DURATION" == "0" ]]; then
+      DUR_TXT="stays until you hold ⌃ Control ${R_HOLD}s to skip"
     else
-      DUR_TXT="stays ${R_DURATION}s (done if you wait it out; hold Control ${R_HOLD}s to skip early)"
+      DUR_TXT="stays ${R_DURATION}s (done if you wait it out; hold ⌃ Control ${R_HOLD}s to skip early)"
     fi
     echo "REMIND_BLOCKING_ADDED id=$NEW_ID"
     echo "Set blocking: \"$R_TEXT\" — $WHEN_TXT — $DUR_TXT"
@@ -314,7 +319,7 @@ try:
             misses.append(raw); continue
         kind, num = m.group(1).lower(), int(m.group(2))
         if kind == "s":
-            c1 = con.execute("UPDATE reminder_schedules SET status='cancelled' WHERE id=? AND status='active'", (num,))
+            c1 = con.execute("UPDATE reminder_schedules SET status='deleted' WHERE id=? AND status='active'", (num,))
             # Stop the series' still-pending occurrence(s) too.
             con.execute("UPDATE reminders SET status='cancelled', resolved_at=? WHERE schedule_id=? AND status='pending'", (now, num))
             if c1.rowcount:
@@ -344,20 +349,25 @@ PYEOF
   # -------------------------------------------------------------------------
   test|show|preview)
     shift || true
-    T_TEXT="Take a break"; T_DURATION="10"; T_HOLD="3"; T_BG=""
+    T_TEXT="Take a break"; T_DURATION="10"; T_HOLD="3"; T_BG=""; T_MARK_DONE="0"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --text)       T_TEXT="${2:-Take a break}"; shift 2 2>/dev/null || shift ;;
         --duration)   T_DURATION="${2:-10}"; shift 2 2>/dev/null || shift ;;
         --hold)       T_HOLD="${2:-3}"; shift 2 2>/dev/null || shift ;;
         --background) T_BG="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --mark-done)  T_MARK_DONE="1"; shift ;;
         *) shift ;;
       esac
     done
-    pbrain_overlay_show "$T_TEXT" "$T_DURATION" "$T_HOLD" "$T_BG" || true
+    pbrain_overlay_show "$T_TEXT" "$T_DURATION" "$T_HOLD" "$T_BG" "" "" "$T_MARK_DONE" || true
     BIN="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
     if [[ -x "$BIN" ]]; then
-      echo "Showing test overlay: \"$T_TEXT\" — ${T_DURATION}s. Hold Control ${T_HOLD}s to skip, or Return ${T_HOLD}s to mark done."
+      if [[ "$T_MARK_DONE" == "1" ]]; then
+        echo "Showing test overlay: \"$T_TEXT\" (mark-done mode). Hold ⌥ Option ${T_HOLD}s to mark done; hold ⌃ Control ${T_HOLD}s to skip."
+      else
+        echo "Showing test overlay: \"$T_TEXT\" — ${T_DURATION}s countdown. Hold ⌃ Control ${T_HOLD}s to skip."
+      fi
     else
       echo "swiftc not available — pbrain-overlay.app couldn't be built; showed a fallback notification instead."
     fi
@@ -465,17 +475,26 @@ $LISTED
 INSTRUCTIONS — you are handling a /remind-blocking invocation.
 
 A BLOCKING reminder fires as a FULL-SCREEN overlay (a "Take a break" screen
-across every display, above the menu bar/Dock) that is hard to dismiss — the
-user HOLDS THE CONTROL KEY a few seconds to skip, or waits out a countdown. Use
+across every display, above the menu bar/Dock) that is hard to dismiss. Use
 this for things the user wants to be forced to stop and notice (stretch breaks,
 screen-time limits, hard stops), NOT routine pings (those are plain /remind).
 
-How an occurrence resolves: holding Control = SKIPPED; the countdown elapsing =
-DONE (only way to get "done"); the Mac sleeping or locking while it's up = MISSED;
-and the poller marks it MISSED if it comes due while asleep/locked past the grace
-window (default 10 min) rather than firing it hours late. Recurring reminders are
-a SERIES that survives missed/skipped occurrences — only cancelling the series
-stops it.
+TWO OVERLAY MODES — ask or infer from context when creating:
+
+  mark-done mode  (--mark-done flag):
+    The overlay shows until the user actively signals completion. No countdown.
+    Hold ⌥ Option 5s (default) → DONE. Hold ⌃ Control 5s → SKIP.
+    Use when the task length is unknown ("take a stretch break when you feel done").
+
+  duration mode (default, no --mark-done):
+    A MM:SS countdown runs. Countdown elapses → DONE (the only path to done).
+    Hold ⌃ Control → SKIP. Use when the break length is fixed ("5-minute eye rest").
+
+How an occurrence resolves: holding Control = SKIPPED; countdown elapsing OR
+Option-hold (mark-done mode only) = DONE; the Mac sleeping or locking while
+it's up = MISSED; and the poller marks it MISSED if it comes due while
+asleep/locked past the grace window (default 10 min). Recurring reminders are
+a SERIES that survives missed/skipped occurrences — only cancelling stops it.
 
 The raw_input above is whatever the user typed after /remind-blocking (may be
 empty). Decide intent and act via the Bash tool using the absolute path:
@@ -495,21 +514,22 @@ empty). Decide intent and act via the Bash tool using the absolute path:
        "1st of each month at 11pm"                 → --cron "0 23 1 * *"
      The poller resolution is ~1 minute, so sub-minute cadences ("every 30s")
      aren't possible — round to a whole minute and tell the user.
-   - DURATION = how long the overlay stays on screen, and the ONLY path to a
-     "done" outcome (wait it out). "for 5 minutes" → --duration 300, "for 15
-     min" → 900. No duration / "until I'm done" → omit it (defaults to 0 = stays
-     until they hold Control to skip; such a reminder can only ever be SKIPPED).
-   - HOLD = seconds of Control-key hold to skip (friction). Default 5; only set
-     --hold if the user asks for harder/easier dismissal.
+   - MODE — choose one:
+       --mark-done            Option-hold to mark done. No countdown. Omit --duration.
+       --duration <seconds>   Fixed countdown; elapses = done. Omit --mark-done.
+       (neither)              Stays until Control-hold to skip; can only be SKIPPED.
+   - DURATION = "for 5 minutes" → --duration 300. Only for duration mode.
+   - HOLD = seconds of hold required (applies to both Control-skip AND Option-done).
+     Default 5; only set --hold if the user asks for harder/easier dismissal.
    - Then run:
-       bash "$SELF" add --text "<clean message shown on screen>" ( --due "<YYYY-MM-DD HH:MM>" | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]
-   - Keep --text short — it's shown huge on screen (e.g. "Take a break", "Stand up", "Stop — hard limit").
+       bash "$SELF" add --text "<clean message>" ( --due "<YYYY-MM-DD HH:MM>" | --cron "<expr>" ) [--mark-done | --duration <seconds>] [--hold <seconds>]
+   - Keep --text short — it's shown huge on screen (e.g. "Eye break", "Stand up", "Take a break").
    - Confirm back in one line (the command echoes a handle: S<id> for a series, R<id> for a one-shot).
 
 2. TEST / "show me what it looks like": run
-     bash "$SELF" test
-   (optionally --text/--duration/--hold/--background <hex>). It shows one overlay
-   right now. Tell the user to hold the Control key to dismiss.
+     bash "$SELF" test [--mark-done]
+   (optionally --text/--duration/--hold/--background <hex> / --mark-done). Shows one overlay
+   right now. Tell the user the gesture(s) to dismiss.
 
 3. LIST / "what blocking reminders do I have": run \`bash "$SELF" list\` (or read
    the ACTIVE block above) and show them. Series are listed as S<id>, one-shots as R<id>.
@@ -517,7 +537,8 @@ empty). Decide intent and act via the Bash tool using the absolute path:
 4. CANCEL ("cancel the break one", "stop the stretch reminder", "remove R3"): match
    their reference to a handle, then run \`bash "$SELF" cancel <handle>\` — use
    S<id> to stop a whole recurring SERIES, or R<id> (a bare number also works) for
-   a one-shot. There is no "mark done" action; cancelling is the only management verb.
+   a one-shot. There is no standalone "mark done" management command — done is a
+   gesture on the live overlay, not a CLI verb.
 
 Keep it tight. One confirmation line is enough.
 ENTRY

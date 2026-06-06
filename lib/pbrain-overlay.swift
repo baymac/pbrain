@@ -46,9 +46,10 @@
 // USAGE
 //   pbrain-overlay --message "Take a break"
 //                  [--seconds 300]          # countdown; 0 / omitted = no countdown
-//                  [--hold 5]               # seconds of hold required to act
+//                  [--hold 3]               # seconds of hold required to act (skip AND done)
 //                  [--background "#1e3a5f"] # solid bg colour (hex); default slate
 //                  [--subtext "..."]        # optional smaller line under the message
+//                  [--mark-done]            # enable Option-hold + "Mark Done" button (no countdown)
 //                  [--id <instance_id>] [--db <path>]
 //
 // Build: `swiftc -suppress-warnings pbrain-overlay.swift`
@@ -70,7 +71,8 @@ func argValue(_ name: String) -> String? {
 let message      = argValue("--message") ?? "Take a break"
 let subtext      = argValue("--subtext")
 let totalSeconds = max(0, Int(argValue("--seconds") ?? "0") ?? 0)   // 0 = no countdown
-let holdSeconds  = max(0.5, Double(argValue("--hold") ?? "5") ?? 5.0)
+let holdSeconds  = max(0.5, Double(argValue("--hold") ?? "3") ?? 3.0)
+let markDone     = CommandLine.arguments.contains("--mark-done")
 
 let reminderID: Int32?   = argValue("--id").flatMap { Int32($0) }
 let dbPath: String?      = { let p = argValue("--db"); return (p?.isEmpty == false) ? p : nil }()
@@ -186,7 +188,87 @@ final class HoldBar: NSView {
 }
 
 // ---------------------------------------------------------------------------
-// Controller — owns the windows, the countdown, and the single skip gesture.
+// DoneButtonView — liquid-glass "Mark Done" button shown in --mark-done mode
+// as an alternative to the Option-hold gesture. Uses NSVisualEffectView
+// (withinWindow blending) for the frosted backdrop, a thin white border, and
+// a pointer cursor on hover.
+// ---------------------------------------------------------------------------
+final class DoneButtonView: NSView {
+    var action: (() -> Void)?
+    private let tintLayer = CALayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 14
+        layer?.masksToBounds = true
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.40).cgColor
+        layer?.borderWidth = 1
+        translatesAutoresizingMaskIntoConstraints = false
+
+        // Frosted-glass backdrop — blurs the overlay background behind the button
+        let vfx = NSVisualEffectView()
+        vfx.material = .hudWindow
+        vfx.blendingMode = .withinWindow
+        vfx.state = .active
+        vfx.appearance = NSAppearance(named: .darkAqua)
+        vfx.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(vfx)
+
+        // White tint over the blur; brightens slightly on hover
+        tintLayer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        layer?.addSublayer(tintLayer)
+
+        let lbl = NSTextField(labelWithString: "Mark Done")
+        lbl.font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+        lbl.textColor = .white
+        lbl.alignment = .center
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(lbl)
+
+        NSLayoutConstraint.activate([
+            vfx.leadingAnchor.constraint(equalTo: leadingAnchor),
+            vfx.trailingAnchor.constraint(equalTo: trailingAnchor),
+            vfx.topAnchor.constraint(equalTo: topAnchor),
+            vfx.bottomAnchor.constraint(equalTo: bottomAnchor),
+            lbl.centerXAnchor.constraint(equalTo: centerXAnchor),
+            lbl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: 48),
+            widthAnchor.constraint(equalToConstant: 180),
+        ])
+
+        addTrackingArea(NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        tintLayer.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+
+    override func mouseEntered(with event: NSEvent) {
+        tintLayer.backgroundColor = NSColor.white.withAlphaComponent(0.20).cgColor
+    }
+    override func mouseExited(with event: NSEvent) {
+        tintLayer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+    }
+    override func mouseDown(with event: NSEvent) { action?() }
+}
+
+// ---------------------------------------------------------------------------
+// Controller — owns the windows, the countdown, and the hold gestures.
+//
+// Two modes:
+//   mark-done  (--mark-done flag): Option-hold or "Mark Done" button → done,
+//              Control-hold → skip. No countdown; stays until a gesture/button.
+//   duration   (default):          countdown elapses → done, Control-hold → skip.
+//              The only path to "done" is waiting out the timer.
 // ---------------------------------------------------------------------------
 final class Controller: NSObject {
     private var windows: [NSWindow] = []
@@ -195,20 +277,25 @@ final class Controller: NSObject {
     private var holdStatus: NSTextField?
     private let totalSeconds: Int
     private let holdSeconds: Double
+    private let markDone: Bool
     private var countdownEnd: Date?
     private var countdownTimer: Timer?
     private var holding = false
     private var holdTimer: Timer?
+    private var holdingDone = false
+    private var doneHoldTimer: Timer?
     private var keyMonitor: Any?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
     private var isDismissing = false
 
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
+    private let doneColor = NSColor(calibratedRed: 0.3,  green: 0.85, blue: 0.45, alpha: 0.95)
 
-    init(seconds: Int, hold: Double) {
+    init(seconds: Int, hold: Double, markDone: Bool) {
         self.totalSeconds = seconds
         self.holdSeconds = hold
+        self.markDone = markDone
     }
 
     private func mmss(_ s: Int) -> String { String(format: "%d:%02d", s / 60, s % 60) }
@@ -255,7 +342,16 @@ final class Controller: NSObject {
 
         let hintSkip = label("Hold ⌃ Control to skip", size: 17, weight: .regular, alpha: 0.55)
 
-        let bottom = NSStackView(views: [status, holdBar, hintSkip])
+        let bottomViews: [NSView]
+        if markDone {
+            let doneBtn = DoneButtonView()
+            doneBtn.action = { [weak self] in self?.resolve("done") }
+            let hintDone = label("Hold ⌥ Option to mark done", size: 17, weight: .regular, alpha: 0.55)
+            bottomViews = [status, holdBar, doneBtn, hintDone, hintSkip]
+        } else {
+            bottomViews = [status, holdBar, hintSkip]
+        }
+        let bottom = NSStackView(views: bottomViews)
         bottom.orientation = .vertical
         bottom.alignment = .centerX
         bottom.spacing = 12
@@ -329,12 +425,28 @@ final class Controller: NSObject {
     }
 
     private func handle(_ ev: NSEvent) {
-        // Control (a modifier) arrives as .flagsChanged. Every other key is
-        // swallowed (the monitor returns nil) so nothing leaks past the overlay;
-        // there is no Return/done gesture — `done` only comes from the countdown.
+        // Modifier keys (Control, Option) arrive as .flagsChanged. Every other key
+        // is swallowed (the monitor returns nil) so nothing leaks past the overlay.
+        // Control = skip (always). Option = mark done (only in mark-done mode).
+        // The two gestures are mutually exclusive: starting one cancels the other.
         if ev.type == .flagsChanged {
-            let ctrl = ev.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control)
-            if ctrl { beginHold() } else if holding { resetHold() }
+            let flags = ev.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let ctrl  = flags.contains(.control)
+            let opt   = flags.contains(.option) && markDone
+
+            if ctrl && !holding {
+                if holdingDone { resetDoneHold() }
+                beginHold()
+            } else if !ctrl && holding {
+                resetHold()
+            }
+
+            if opt && !holdingDone {
+                if holding { resetHold() }
+                beginDoneHold()
+            } else if !opt && holdingDone {
+                resetDoneHold()
+            }
         }
     }
 
@@ -360,6 +472,28 @@ final class Controller: NSObject {
         holdStatus?.isHidden = true
     }
 
+    private func beginDoneHold() {
+        guard !holdingDone else { return }
+        holdingDone = true
+        holdStatus?.stringValue = "Marking done…"
+        holdStatus?.textColor = doneColor
+        holdStatus?.isHidden = false
+        holdBar.isHidden = false
+        holdBar.begin(duration: holdSeconds, color: doneColor)
+        doneHoldTimer = Timer.scheduledTimer(withTimeInterval: holdSeconds, repeats: false) { [weak self] _ in
+            self?.resolve("done")
+        }
+    }
+
+    private func resetDoneHold() {
+        guard holdingDone else { return }
+        holdingDone = false
+        doneHoldTimer?.invalidate(); doneHoldTimer = nil
+        holdBar.cancel()
+        holdBar.isHidden = true
+        holdStatus?.isHidden = true
+    }
+
     // Write the occurrence's outcome, then tear down. setReminderStatus is
     // first-writer-wins (guarded on status='pending'), so the earliest of
     // skip / countdown / sleep-lock decides and later calls are inert.
@@ -376,6 +510,7 @@ final class Controller: NSObject {
         isDismissing = true
         countdownTimer?.invalidate()
         holdTimer?.invalidate()
+        doneHoldTimer?.invalidate()
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         let wsnc = NSWorkspace.shared.notificationCenter
         for tok in workspaceObservers { wsnc.removeObserver(tok) }
@@ -410,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // no Dock icon; still shows windows + takes key events
-let controller = Controller(seconds: totalSeconds, hold: holdSeconds)
+let controller = Controller(seconds: totalSeconds, hold: holdSeconds, markDone: markDone)
 let delegate = AppDelegate(controller)
 app.delegate = delegate
 app.run()

@@ -162,24 +162,26 @@ PLIST
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
 # interpolated into an interpreted string — so arbitrary message text is inert.
-#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>]
-# <seconds> 0 = no countdown (stays until the user holds Control to skip).
+#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<mark_done>]
+# <seconds> 0 = no countdown (stays until a gesture resolves it).
+# <mark_done> 1 = enable Option-hold-to-done mode (no countdown needed).
 # Launched with `open -n` so it runs in a proper Launch Services / GUI context
 # (works from the launchd poller's gui session); falls back to a notification if
 # the app can't be built (no swiftc).
 # When <id> + <db> are passed the overlay resolves THAT instance row on dismissal:
-# hold Control → skipped, countdown end → done, sleep/lock dismiss → missed. Every
-# occurrence is its own row, so resolving one never touches the recurring series.
+# hold Control → skipped; countdown end or Option-hold → done; sleep/lock → missed.
+# Every occurrence is its own row, so resolving one never touches the recurring series.
 pbrain_overlay_show() {
-  local msg="${1:-Take a break}" secs="${2:-0}" hold="${3:-5}" bg="${4:-${PBRAIN_OVERLAY_BG:-}}"
-  local rid="${5:-}" db="${6:-}"
+  local msg="${1:-Take a break}" secs="${2:-0}" hold="${3:-3}" bg="${4:-${PBRAIN_OVERLAY_BG:-}}"
+  local rid="${5:-}" db="${6:-}" mark_done="${7:-0}"
   pbrain_overlay_build
   local bin="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
   if [[ -x "$bin" ]]; then
     local args=(--message "$msg" --seconds "$secs" --hold "$hold")
-    [[ -n "$bg" ]]  && args+=(--background "$bg")
-    [[ -n "$rid" ]] && args+=(--id "$rid")
-    [[ -n "$db" ]]  && args+=(--db "$db")
+    [[ -n "$bg" ]]            && args+=(--background "$bg")
+    [[ -n "$rid" ]]           && args+=(--id "$rid")
+    [[ -n "$db" ]]            && args+=(--db "$db")
+    [[ "$mark_done" == "1" ]] && args+=(--mark-done)
     if command -v open >/dev/null 2>&1; then
       open -n "$PBRAIN_OVERLAY_APP" --args "${args[@]}" >/dev/null 2>&1 && return 0
     fi
@@ -191,62 +193,64 @@ pbrain_overlay_show() {
   pbrain_notify "Reminder" "$msg" || true
 }
 
-# Apple Calendar integration -------------------------------------------------
-# /remind creates a real Calendar event per reminder, so Calendar owns firing
-# (reliable, synced across devices, editable in Calendar.app) instead of our
-# launchd poller. These helpers wrap osascript. macOS-only + best-effort: a
-# missing osascript or a Calendar error returns non-zero/empty and the caller
-# falls back. Override the target calendar with PBRAIN_CALENDAR.
+# Apple Reminders integration (/remind) --------------------------------------
+# /remind creates real Apple Reminders (EKReminder) — a to-do with an optional
+# timed due date, optional recurrence, a priority, and "early" alarms. Reminders
+# + iCloud own firing + sync; there is NO pbrain DB or launchd poller for /remind.
+# All ops go through a bundled EventKit helper (pbrain-reminders.app, compiled on
+# demand from lib/pbrain-reminders.swift) launched via `open`, so the Reminders
+# TCC permission is attributed to the bundle. Reminders access is a permission
+# DISTINCT from Calendar access; grant once via `/remind access`.
+#
+# PBRAIN_CALENDAR is kept below because pbrain_calendar_today (read-only, for
+# /plan-my-day's time anchors) still reads real Calendar EVENTS — that's separate
+# from /remind, which now lives in Reminders and does NOT appear on the grid.
 PBRAIN_CALENDAR="${PBRAIN_CALENDAR:-Calendar}"
 export PBRAIN_CALENDAR
 
-# Marker stamped into every pbrain-created event's notes, so list/cancel can
-# tell our reminders apart from the user's own calendar events. It's a normal
-# (visible) footer line — harmless in Calendar.app, and unique enough to filter.
-PBRAIN_CAL_MARKER="${PBRAIN_CAL_MARKER:-⟦pbrain-reminder⟧}"
-export PBRAIN_CAL_MARKER
+# PBRAIN_REMINDERS_LIST  — target Reminders list (empty = the default list)
+# PBRAIN_REMINDER_MARKER — hidden notes footer tagging pbrain reminders (so list
+#                          surfaces only ours), default the bracketed token below
+# PBRAIN_REMINDERS_APP   — where the compiled EventKit helper app is cached/built
+PBRAIN_REMINDERS_LIST="${PBRAIN_REMINDERS_LIST:-}"
+export PBRAIN_REMINDERS_LIST
+PBRAIN_REMINDER_MARKER="${PBRAIN_REMINDER_MARKER:-⟦pbrain-reminder⟧}"
+export PBRAIN_REMINDER_MARKER
+PBRAIN_REMINDERS_APP="${PBRAIN_REMINDERS_APP:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/pbrain-reminders.app}"
+export PBRAIN_REMINDERS_APP
 
-# EventKit helper app — robustly DELETES calendar events (incl. recurring iCloud
-# series, which AppleScript can't reliably remove). It needs Calendar access (a
-# TCC permission separate from AppleScript's Automation access), keyed to a real
-# app bundle, so we compile lib/pbrain-calendar.swift into pbrain-calendar.app
-# and launch it via `open` (the prompt is then attributed to the app, granted
-# once by the user). Override the build location with PBRAIN_CALENDAR_APP.
-PBRAIN_CALENDAR_APP="${PBRAIN_CALENDAR_APP:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/pbrain-calendar.app}"
-export PBRAIN_CALENDAR_APP
-
-# Build (or rebuild) pbrain-calendar.app from the checked-in Swift source.
-# Idempotent + best-effort (mirrors pbrain_notify_build / pbrain_overlay_build):
-# rebuilds only when the binary is missing or older than the source; a missing
-# swiftc or a compile failure just leaves the app absent and pbrain_calendar_delete
-# falls back to AppleScript. The Info.plist carries the Calendar usage strings
-# (required for the access prompt) and LSUIElement (no Dock icon). Ad-hoc signs
-# the bundle so TCC keeps a stable identity across runs. Never exits non-zero.
-pbrain_calendar_app_build() {
+# Build (or rebuild) pbrain-reminders.app from the checked-in Swift source.
+# Idempotent + best-effort: rebuilds only when the binary is missing or older
+# than the source; a missing swiftc or a compile failure leaves the app absent
+# and pbrain_reminders_run returns UNAVAILABLE. The Info.plist carries the
+# Reminders usage strings (required for the access prompt) and LSUIElement (no
+# Dock icon). Ad-hoc signs the bundle so TCC keeps a stable identity across runs.
+# Never exits non-zero, never prints.
+pbrain_reminders_app_build() {
   command -v swiftc >/dev/null 2>&1 || return 0
   local lib_dir src bin
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
-  src="$lib_dir/pbrain-calendar.swift"
+  src="$lib_dir/pbrain-reminders.swift"
   [[ -f "$src" ]] || return 0
-  bin="$PBRAIN_CALENDAR_APP/Contents/MacOS/pbrain-calendar"
+  bin="$PBRAIN_REMINDERS_APP/Contents/MacOS/pbrain-reminders"
   [[ -x "$bin" && ! "$src" -nt "$bin" ]] && return 0
-  mkdir -p "$PBRAIN_CALENDAR_APP/Contents/MacOS" 2>/dev/null || return 0
-  if [[ ! -f "$PBRAIN_CALENDAR_APP/Contents/Info.plist" ]]; then
-    cat > "$PBRAIN_CALENDAR_APP/Contents/Info.plist" 2>/dev/null <<'PLIST' || return 0
+  mkdir -p "$PBRAIN_REMINDERS_APP/Contents/MacOS" 2>/dev/null || return 0
+  if [[ ! -f "$PBRAIN_REMINDERS_APP/Contents/Info.plist" ]]; then
+    cat > "$PBRAIN_REMINDERS_APP/Contents/Info.plist" 2>/dev/null <<'PLIST' || return 0
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>com.pbrain.calendar</string>
-  <key>CFBundleName</key><string>pbrain-calendar</string>
-  <key>CFBundleExecutable</key><string>pbrain-calendar</string>
+  <key>CFBundleIdentifier</key><string>com.pbrain.reminders</string>
+  <key>CFBundleName</key><string>pbrain-reminders</string>
+  <key>CFBundleExecutable</key><string>pbrain-reminders</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSUIElement</key><true/>
-  <key>NSCalendarsUsageDescription</key><string>pbrain manages your /remind reminders as Calendar events, including removing ones you cancel.</string>
-  <key>NSCalendarsFullAccessUsageDescription</key><string>pbrain manages your /remind reminders as Calendar events, including removing ones you cancel.</string>
+  <key>NSRemindersUsageDescription</key><string>pbrain manages your /remind reminders in Reminders, including creating, editing, and removing them.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>pbrain manages your /remind reminders in Reminders, including creating, editing, and removing them.</string>
 </dict>
 </plist>
 PLIST
@@ -254,24 +258,22 @@ PLIST
   local tmp="$bin.tmp.$$"
   if swiftc -suppress-warnings "$src" -o "$tmp" >/dev/null 2>&1; then
     mv -f "$tmp" "$bin" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
-    # Ad-hoc sign so TCC tracks a stable identity across rebuilds (best-effort).
-    command -v codesign >/dev/null 2>&1 && codesign --force --sign - "$PBRAIN_CALENDAR_APP" >/dev/null 2>&1 || true
+    command -v codesign >/dev/null 2>&1 && codesign --force --sign - "$PBRAIN_REMINDERS_APP" >/dev/null 2>&1 || true
   else
     rm -f "$tmp" 2>/dev/null || true
   fi
   return 0
 }
 
-# _pbrain_cal_app_run <op-args...> — launch the EventKit app via `open` and return
-# the one-line status it writes. Must go through `open` (not direct exec) so the
-# Calendar TCC permission is attributed to the bundle identity. `open -W` waits
-# for the app to quit, but a freshly built+signed binary can be slow on its very
-# first launch (Gatekeeper assessment) and return before the result is flushed,
-# so we ALSO poll the result file briefly. Echoes "" if nothing was produced.
-_pbrain_cal_app_run() {
-  local resf; resf="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/pbrain-cal-$$.res")"
+# _pbrain_rem_app_run <op-args...> — launch the EventKit app via `open` and echo
+# the one-line status it writes to the --result file. Must go through `open` (not
+# direct exec) so the Reminders TCC permission is attributed to the bundle. We
+# poll the result file briefly because a freshly built+signed binary can return
+# from `open -W` before its first-launch output is flushed.
+_pbrain_rem_app_run() {
+  local resf; resf="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/pbrain-rem-$$.res")"
   : > "$resf"
-  open -W -n "$PBRAIN_CALENDAR_APP" --args "$@" --result "$resf" >/dev/null 2>&1 || true
+  open -W -n "$PBRAIN_REMINDERS_APP" --args "$@" --result "$resf" >/dev/null 2>&1 || true
   local res tries=0
   res="$(cat "$resf" 2>/dev/null || true)"
   while [[ -z "${res//[[:space:]]/}" && $tries -lt 20 ]]; do
@@ -283,208 +285,247 @@ _pbrain_cal_app_run() {
   printf '%s' "$res"
 }
 
-# pbrain_calendar_access — request/verify Calendar (EventKit) access via the app.
-# Echoes OK if granted, ACCESS_DENIED if not, or UNAVAILABLE if the app can't be
-# built. Used by `/remind calendar-access` to trigger the one-time grant.
-pbrain_calendar_access() {
-  pbrain_calendar_app_build
-  local bin="$PBRAIN_CALENDAR_APP/Contents/MacOS/pbrain-calendar"
+# pbrain_reminders_run <op> [extra-args...] — run any helper op and echo its
+# one-line status: ADDED <id> | OK | EDITED | COMPLETED | DELETED | NOT_FOUND |
+# ACCESS_DENIED | ERROR:<msg> | UNAVAILABLE (helper can't be built: no swiftc /
+# no `open`). The marker and target list are injected centrally so callers don't
+# repeat them.
+pbrain_reminders_run() {
+  local op="${1:-}"; shift || true
+  pbrain_reminders_app_build
+  local bin="$PBRAIN_REMINDERS_APP/Contents/MacOS/pbrain-reminders"
   if [[ ! -x "$bin" ]] || ! command -v open >/dev/null 2>&1; then
     printf 'UNAVAILABLE\n'; return 0
   fi
-  local res; res="$(_pbrain_cal_app_run --op access-check)"
+  local extra=(--marker "$PBRAIN_REMINDER_MARKER")
+  [[ -n "${PBRAIN_REMINDERS_LIST:-}" ]] && extra+=(--list "$PBRAIN_REMINDERS_LIST")
+  local out; out="$(_pbrain_rem_app_run --op "$op" "$@" "${extra[@]}")"
+  printf '%s\n' "${out:-ERROR:no-output}"
+}
+
+# pbrain_reminders_access — request/verify Reminders (EventKit) access via the
+# helper. Echoes OK | ACCESS_DENIED | UNAVAILABLE. Used by `/remind access`.
+pbrain_reminders_access() {
+  pbrain_reminders_app_build
+  local bin="$PBRAIN_REMINDERS_APP/Contents/MacOS/pbrain-reminders"
+  if [[ ! -x "$bin" ]] || ! command -v open >/dev/null 2>&1; then
+    printf 'UNAVAILABLE\n'; return 0
+  fi
+  local res; res="$(_pbrain_rem_app_run --op access-check)"
   printf '%s\n' "${res:-ERROR}"
 }
 
-# pbrain_calendar_add <summary> <YYYY-MM-DD HH:MM | YYYY-MM-DD> <rrule-or-empty> [<notes>]
-# Creates a timed Calendar event with an alarm at start; echoes a pbrain HANDLE
-# (a UUID embedded in the event notes) on success, prints nothing + returns 1 on
-# failure. The handle — NOT the AppleScript uid or EventKit identifier — is what
-# list/cancel use, because AppleScript's uid and EventKit's identifier don't line
-# up (different identifier spaces). Embedding our own id in the notes and matching
-# on it keeps create (AppleScript) and delete (EventKit) talking about the same
-# event. The summary/notes reach osascript as argv (never interpolated) so quotes
-# / $ / \ can't break or inject. A date-only due anchors to 09:00 local.
-pbrain_calendar_add() {
-  command -v osascript >/dev/null 2>&1 || return 1
-  local summary="${1:-Reminder}" due="${2:-}" rrule="${3:-}" notes="${4:-}"
-  [[ -n "${due//[[:space:]]/}" ]] || return 1
-  # Mint a stable pbrain id and embed it in the notes as a hidden tag.
-  local pbid
-  pbid="$(python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || true)"
-  [[ -n "${pbid//[[:space:]]/}" ]] || return 1
-  # Compose the event notes: optional context, then the marker + id footer.
-  local desc footer
-  footer="$PBRAIN_CAL_MARKER"$'\n'"⟦pbrain-id:$pbid⟧"
-  if [[ -n "${notes//[[:space:]]/}" ]]; then
-    desc="$notes"$'\n\n'"$footer"
-  else
-    desc="$footer"
-  fi
-  # Split the due string into integer date components (date-only → 09:00) so the
-  # AppleScript builds the date by assignment — robust against locale-dependent
-  # AppleScript date-string parsing.
-  local comps
-  comps="$(python3 - "$due" <<'PY' 2>/dev/null || true
-import sys, datetime
-s = sys.argv[1].strip()
-for fmt, anchor in (("%Y-%m-%d %H:%M", None), ("%Y-%m-%d", 9)):
-    try:
-        dt = datetime.datetime.strptime(s, fmt)
-        if anchor is not None:
-            dt = dt.replace(hour=anchor)
-        print(f"{dt.year} {dt.month} {dt.day} {dt.hour} {dt.minute}")
-        break
-    except ValueError:
-        continue
-PY
-)"
-  [[ -n "${comps//[[:space:]]/}" ]] || return 1
-  local uid
-  # $comps is intentionally unquoted: it word-splits into the 5 integer argv items.
-  uid="$(osascript - "$PBRAIN_CALENDAR" "$summary" "$rrule" "$desc" $comps <<'APPLESCRIPT' 2>/dev/null || true
-on run argv
-  set calName to item 1 of argv
-  set theSummary to item 2 of argv
-  set theRule to item 3 of argv
-  set theDesc to item 4 of argv
-  set y to (item 5 of argv) as integer
-  set mo to (item 6 of argv) as integer
-  set d to (item 7 of argv) as integer
-  set hh to (item 8 of argv) as integer
-  set mi to (item 9 of argv) as integer
-  set startDate to (current date)
-  set day of startDate to 1
-  set year of startDate to y
-  set month of startDate to mo
-  set day of startDate to d
-  set hours of startDate to hh
-  set minutes of startDate to mi
-  set seconds of startDate to 0
-  set endDate to startDate + (15 * minutes)
-  tell application "Calendar"
-    tell calendar calName
-      if theRule is "" then
-        set ev to make new event with properties {summary:theSummary, start date:startDate, end date:endDate, description:theDesc}
-      else
-        set ev to make new event with properties {summary:theSummary, start date:startDate, end date:endDate, description:theDesc, recurrence:theRule}
-      end if
-      tell ev
-        make new display alarm at end with properties {trigger interval:0}
-      end tell
-      return uid of ev
-    end tell
-  end tell
-end run
-APPLESCRIPT
-)"
-  # The AppleScript uid only confirms the event was created; the HANDLE we return
-  # is our embedded pbrain id (what list/cancel match on).
-  [[ -n "${uid//[[:space:]]/}" ]] || return 1
-  printf '%s\n' "$pbid"
-}
+# pbrain_cron_to_rrules <cron-expr> [<after 'YYYY-MM-DD HH:MM'>] — translate a
+# 5-field cron expression into one or MORE Apple-reminder recurrences. Apple
+# reminder recurrence (EKRecurrenceRule) is far less expressive than cron, so the
+# translation is honest about the impedance mismatch instead of silently lying:
+#   * NO sub-daily: a cron with many distinct fire-times/day (minutely/hourly)
+#     can't be a reminder — REJECT (route the user to /remind-blocking).
+#   * MULTIPLE times-of-day (e.g. 0 9,17 * * *) → SPLIT into one reminder each.
+#   * cron dom AND dow both restricted = OR semantics → SPLIT (a single rule
+#     would silently flip OR→AND).
+#   * cron has no interval: */step in a field is a SET (mapped via BY* lists),
+#     never INTERVAL. Use the --repeat tokens for true every-N cadences.
+#   * nth/last weekday via the dow#n / dowL extensions (1#1 = first Monday,
+#     5L = last Friday) → BYDAY=1MO / -1FR.
+# Output (stdout), one line per resulting reminder, OR a single REJECT line:
+#   OK<TAB><due 'YYYY-MM-DD HH:MM'><TAB><RRULE>
+#   REJECT<TAB><CODE><TAB><human message>
+# CODE in INVALID | SUBDAILY | UNREP | TOOMANY. Never exits non-zero.
+pbrain_cron_to_rrules() {
+  command -v python3 >/dev/null 2>&1 || { printf 'REJECT\tINVALID\tpython3 unavailable\n'; return 0; }
+  local expr="${1:-}" after="${2:-}"
+  [[ -n "$after" ]] || after="$(date '+%Y-%m-%d %H:%M')"
+  python3 - "$expr" "$after" <<'PYEOF' 2>/dev/null || printf 'REJECT\tINVALID\tcould not parse expression\n'
+import sys, datetime, re
+import calendar as calmod
 
-# pbrain_calendar_delete <uid> — remove the event carrying this UID. Echoes a
-# status token so the caller can report honestly:
-#   DELETED       — the EventKit helper removed it (reliable, incl. recurring)
-#   NOT_FOUND     — no event with that UID (already gone)
-#   ACCESS_DENIED — Calendar access not granted (run `/remind calendar-access`)
-#   FALLBACK      — EventKit helper unavailable; tried AppleScript (UNRELIABLE for
-#                   recurring iCloud events — may resync back)
-#   ERROR         — the helper errored
-# Never errors out (sourced under set -euo pipefail).
-#
-# Primary path: the bundled EventKit app, launched via `open` so the Calendar
-# permission is attributed to the app bundle. AppleScript is the fallback only
-# when the app can't be built (no swiftc) — and it's the unreliable path that
-# motivated the EventKit helper in the first place.
-pbrain_calendar_delete() {
-  local uid="${1:-}"
-  [[ -n "${uid//[[:space:]]/}" ]] || { printf 'NOT_FOUND\n'; return 0; }
-  pbrain_calendar_app_build
-  local bin="$PBRAIN_CALENDAR_APP/Contents/MacOS/pbrain-calendar"
-  if [[ -x "$bin" ]] && command -v open >/dev/null 2>&1; then
-    local res; res="$(_pbrain_cal_app_run --op delete --id "$uid" --calendar "$PBRAIN_CALENDAR")"
-    case "$res" in
-      DELETED*)       printf 'DELETED\n' ;;
-      NOT_FOUND)      printf 'NOT_FOUND\n' ;;
-      ACCESS_DENIED)  printf 'ACCESS_DENIED\n' ;;
-      *)              printf 'ERROR\n' ;;
-    esac
-    return 0
-  fi
-  # Fallback: AppleScript (unreliable for recurring iCloud events). Single fresh
-  # query + `exit repeat` on first match to dodge the delete-during-iteration
-  # fault (-1728).
-  command -v osascript >/dev/null 2>&1 || { printf 'ERROR\n'; return 0; }
-  osascript - "$PBRAIN_CALENDAR" "$uid" <<'APPLESCRIPT' >/dev/null 2>&1 || true
-on run argv
-  set calName to item 1 of argv
-  set theTag to "⟦pbrain-id:" & (item 2 of argv) & "⟧"
-  set lo to (current date) - (400 * days)
-  set hi to (current date) + (730 * days)
-  tell application "Calendar"
-    tell calendar calName
-      set hit to missing value
-      repeat with ev in (every event whose start date ≥ lo and start date ≤ hi)
-        set dsc to description of ev
-        if dsc is not missing value and dsc contains theTag then
-          set hit to ev
-          exit repeat
-        end if
-      end repeat
-      if hit is not missing value then delete hit
-    end tell
-  end tell
-end run
-APPLESCRIPT
-  printf 'FALLBACK\n'
-  return 0
-}
+expr = (sys.argv[1] or "").strip()
+after_s = sys.argv[2]
+try:
+    after = datetime.datetime.strptime(after_s, "%Y-%m-%d %H:%M")
+except ValueError:
+    print("REJECT\tINVALID\tbad 'after' time"); sys.exit(0)
 
-# pbrain_calendar_list [<days-ahead>] — print pbrain-created upcoming events as
-# lines "handle<TAB>start<TAB>summary", filtered by the marker in their notes so
-# the user's own calendar events are excluded. The handle is the embedded
-# pbrain-id (what cancel matches on); events with the marker but no id (legacy)
-# fall back to "legacy". Best-effort; prints nothing on error / when none match.
-pbrain_calendar_list() {
-  command -v osascript >/dev/null 2>&1 || return 0
-  local days="${1:-60}"
-  osascript - "$PBRAIN_CALENDAR" "$PBRAIN_CAL_MARKER" "$days" <<'APPLESCRIPT' 2>/dev/null || true
-on run argv
-  set calName to item 1 of argv
-  set marker to item 2 of argv
-  set daysAhead to (item 3 of argv) as integer
-  set startWin to (current date)
-  set hours of startWin to 0
-  set minutes of startWin to 0
-  set seconds of startWin to 0
-  set endWin to startWin + (daysAhead * days)
-  set outLines to {}
-  tell application "Calendar"
-    tell calendar calName
-      set evs to (every event whose start date ≥ startWin and start date ≤ endWin)
-      repeat with ev in evs
-        set dsc to description of ev
-        if dsc is not missing value and dsc contains marker then
-          set theHandle to "legacy"
-          if dsc contains "⟦pbrain-id:" then
-            set AppleScript's text item delimiters to "⟦pbrain-id:"
-            set afterTag to text item 2 of dsc
-            set AppleScript's text item delimiters to "⟧"
-            set theHandle to text item 1 of afterTag
-            set AppleScript's text item delimiters to ""
-          end if
-          set end of outLines to theHandle & tab & ((start date of ev) as string) & tab & (summary of ev)
-        end if
-      end repeat
-    end tell
-  end tell
-  set AppleScript's text item delimiters to (ASCII character 10)
-  return outLines as text
-end run
-APPLESCRIPT
-  return 0
+def reject(code, msg):
+    print("REJECT\t%s\t%s" % (code, msg)); sys.exit(0)
+
+parts = expr.split()
+if len(parts) != 5:
+    reject("INVALID", "a cron expression has 5 fields: minute hour day-of-month month day-of-week")
+min_raw, hour_raw, dom_raw, mon_raw, dow_raw = parts
+
+CODES = {0: "SU", 1: "MO", 2: "TU", 3: "WE", 4: "TH", 5: "FR", 6: "SA"}  # cron dow -> RRULE
+def cron_dow_to_py(c):   # cron Sun=0..Sat=6 -> python Mon=0..Sun=6
+    return (c - 1) % 7
+def cron_dow_to_code(c):
+    return CODES[c]
+
+def parse_field(field, lo, hi):
+    vals = set()
+    for part in field.split(","):
+        part = part.strip()
+        if not part:
+            return None
+        step, rng = 1, part
+        if "/" in part:
+            rng, step_s = part.split("/", 1)
+            if not step_s.isdigit() or int(step_s) < 1:
+                return None
+            step = int(step_s)
+        if rng == "*":
+            a, b = lo, hi
+        elif "-" in rng:
+            x, y = rng.split("-", 1)
+            if not (x.isdigit() and y.isdigit()):
+                return None
+            a, b = int(x), int(y)
+        else:
+            if not rng.isdigit():
+                return None
+            a = b = int(rng)
+        if a > b or a < lo or b > hi:
+            return None
+        for v in range(a, b + 1, step):
+            vals.add(v)
+    return vals or None
+
+minutes = parse_field(min_raw, 0, 59)
+hours = parse_field(hour_raw, 0, 23)
+months = parse_field(mon_raw, 1, 12)
+if minutes is None or hours is None or months is None:
+    reject("INVALID", "could not parse minute/hour/month field")
+
+dom_restricted = dom_raw.strip() != "*"
+doms = None
+if dom_restricted:
+    doms = parse_field(dom_raw, 1, 31)
+    if doms is None:
+        reject("INVALID", "could not parse day-of-month field")
+
+mon_restricted = mon_raw.strip() != "*"
+mon_list = sorted(months) if mon_restricted else None
+
+dow_restricted = dow_raw.strip() != "*"
+ordinal_byday = None
+dows = None
+if dow_restricted:
+    if "#" in dow_raw or "L" in dow_raw.upper():
+        ordinal_byday = []
+        for tok in dow_raw.split(","):
+            t = tok.strip().upper()
+            m = re.match(r'^([0-7])#([1-5])$', t)
+            mL = re.match(r'^([0-7])L$', t)
+            if m:
+                cd, ordn = int(m.group(1)) % 7, int(m.group(2))
+            elif mL:
+                cd, ordn = int(mL.group(1)) % 7, -1
+            else:
+                reject("INVALID", "bad day-of-week token '%s' (use d#n like 1#1, or dL like 5L)" % tok)
+            ordinal_byday.append((ordn, cron_dow_to_py(cd), cron_dow_to_code(cd)))
+    else:
+        raw = parse_field(dow_raw, 0, 7)
+        if raw is None:
+            reject("INVALID", "could not parse day-of-week field")
+        dows = set((0 if d == 7 else d) for d in raw)
+
+CAP_TIMES = 6
+times = sorted([(h, m) for h in hours for m in minutes])
+if len(times) > CAP_TIMES:
+    reject("SUBDAILY", "more than %d fire-times a day — Apple Reminders can't repeat sub-daily; use /remind-blocking for minute/hour cadences" % CAP_TIMES)
+
+def wd_codes(s):
+    return [CODES[c] for c in sorted(s)]
+
+clauses = []
+if ordinal_byday is not None:
+    if dom_restricted:
+        reject("UNREP", "an nth-weekday combined with a day-of-month is ambiguous — use one or the other")
+    clauses.append({
+        "freq": "YEARLY" if mon_restricted else "MONTHLY",
+        "byday_ord": [(o, c) for (o, _py, c) in ordinal_byday],
+        "byday_ord_py": [(o, py) for (o, py, _c) in ordinal_byday],
+        "bymonth": mon_list,
+    })
+elif dom_restricted and dow_restricted:
+    if mon_restricted:
+        reject("UNREP", "day-of-month AND weekday within specific months can't be one reminder — simplify or set it in the Reminders app")
+    clauses.append({"freq": "WEEKLY", "byday": wd_codes(dows),
+                    "byday_py": set(cron_dow_to_py(c) for c in dows)})
+    clauses.append({"freq": "MONTHLY", "bymonthday": sorted(doms)})
+elif dow_restricted:
+    if mon_restricted:
+        reject("UNREP", "a weekly schedule limited to specific months isn't a reminder recurrence — drop the month limit or use the Reminders app")
+    clauses.append({"freq": "WEEKLY", "byday": wd_codes(dows),
+                    "byday_py": set(cron_dow_to_py(c) for c in dows)})
+elif dom_restricted:
+    if mon_restricted:
+        clauses.append({"freq": "YEARLY", "bymonth": mon_list, "bymonthday": sorted(doms)})
+    else:
+        clauses.append({"freq": "MONTHLY", "bymonthday": sorted(doms)})
+else:
+    if mon_restricted:
+        reject("UNREP", "every day within specific months isn't a reminder recurrence — drop the month limit or use the Reminders app")
+    clauses.append({"freq": "DAILY"})
+
+if len(times) * len(clauses) > 8:
+    reject("TOOMANY", "this expands to too many reminders; simplify the schedule")
+
+def nth_ok(d, ordn):
+    if ordn > 0:
+        return (d.day - 1) // 7 == ordn - 1
+    last = calmod.monthrange(d.year, d.month)[1]
+    return d.day > last - 7
+
+def date_matches(d, cl):
+    bm = cl.get("bymonth")
+    if bm and d.month not in bm:
+        return False
+    f = cl["freq"]
+    if f == "DAILY":
+        return True
+    if cl.get("byday_ord_py"):
+        for (ordn, py) in cl["byday_ord_py"]:
+            if d.weekday() == py and nth_ok(d, ordn):
+                return True
+        return False
+    if cl.get("byday_py"):
+        return d.weekday() in cl["byday_py"]
+    if cl.get("bymonthday"):
+        return d.day in cl["bymonthday"]
+    return True
+
+def rrule_of(cl):
+    p = ["FREQ=" + cl["freq"]]
+    if cl.get("byday"):
+        p.append("BYDAY=" + ",".join(cl["byday"]))
+    if cl.get("byday_ord"):
+        p.append("BYDAY=" + ",".join("%d%s" % (o, c) for (o, c) in cl["byday_ord"]))
+    if cl.get("bymonth"):
+        p.append("BYMONTH=" + ",".join(str(x) for x in cl["bymonth"]))
+    if cl.get("bymonthday"):
+        p.append("BYMONTHDAY=" + ",".join(str(x) for x in cl["bymonthday"]))
+    return ";".join(p)
+
+def next_occ(hour, minute, cl):
+    base = after.date()
+    for i in range(0, 366 * 5 + 1):
+        d = base + datetime.timedelta(days=i)
+        if date_matches(d, cl):
+            cand = datetime.datetime(d.year, d.month, d.day, hour, minute)
+            if cand > after:
+                return cand
+    return None
+
+out = []
+for (h, m) in times:
+    for cl in clauses:
+        nx = next_occ(h, m, cl)
+        if nx is None:
+            reject("INVALID", "no valid occurrence (impossible date like Feb 30, or out of range)")
+        out.append("OK\t%s\t%s" % (nx.strftime("%Y-%m-%d %H:%M"), rrule_of(cl)))
+print("\n".join(out))
+PYEOF
 }
 
 # pbrain_calendar_today [<YYYY-MM-DD>] — print the calendar events that occur on
@@ -923,7 +964,7 @@ pbrain_reminders_cmd() {
 # and catching one up late just because some other command ran is wrong.
 # PBRAIN_REMIND_GRACE_SECONDS (default 600 = 10 min) sets the miss threshold.
 pbrain_reminders_tick() {
-  local rid rtext rblock rhold   # dispatch-loop vars — local so we don't clobber the caller's
+  local rid rtext rblock rhold rmarkdone   # dispatch-loop vars — local so we don't clobber the caller's
   command -v python3 >/dev/null 2>&1 || return 0
   [[ -f "$PBRAIN_DB_FILE" ]] || return 0
   local now due overlay_busy=0 is_screen_locked=0 grace
@@ -1054,7 +1095,7 @@ try:
     # schedule so an instance of a cancelled series is never fired. fired_at IS
     # NULL excludes an already-shown-but-unresolved occurrence from re-firing.
     rows = con.execute(
-        "SELECT r.id, r.text, r.due_at, r.block_seconds, r.hold_seconds, r.schedule_id, s.cron "
+        "SELECT r.id, r.text, r.due_at, r.block_seconds, r.hold_seconds, r.schedule_id, s.cron, r.mark_done "
         "FROM reminders r LEFT JOIN reminder_schedules s ON r.schedule_id = s.id "
         "WHERE r.status='pending' AND r.fired_at IS NULL AND r.due_at IS NOT NULL "
         "AND (r.schedule_id IS NULL OR s.status='active')"
@@ -1073,16 +1114,16 @@ try:
             return
         nfmt = nxt.strftime("%Y-%m-%d %H:%M")
         sch = con.execute(
-            "SELECT text, block_seconds, hold_seconds, source FROM reminder_schedules WHERE id=?",
+            "SELECT text, block_seconds, hold_seconds, source, mark_done FROM reminder_schedules WHERE id=?",
             (schedule_id,),
         ).fetchone()
         if not sch:
             return
         try:
             con.execute(
-                "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, status, source, created_at) "
-                "VALUES (?,?,?,?,?, 'pending', ?, ?)",
-                (schedule_id, sch[0], nfmt, sch[1], sch[2], sch[3], now_s),
+                "INSERT INTO reminders (schedule_id, text, due_at, block_seconds, hold_seconds, mark_done, status, source, created_at) "
+                "VALUES (?,?,?,?,?,?, 'pending', ?, ?)",
+                (schedule_id, sch[0], nfmt, sch[1], sch[2], sch[4] or 0, sch[3], now_s),
             )
         except sqlite3.IntegrityError:
             pass   # the next instance already exists (a prior tick created it)
@@ -1090,7 +1131,7 @@ try:
 
     fired = []
     overlay_fired = False   # serialize: at most ONE overlay launched per tick
-    for rid, text, due_at, block_seconds, hold_seconds, schedule_id, cron in rows:
+    for rid, text, due_at, block_seconds, hold_seconds, schedule_id, cron, mark_done in rows:
         dt = parse_due(due_at)
         if dt is None or dt > now:
             continue
@@ -1114,23 +1155,23 @@ try:
         # the series, and emit the launch record for the shell.
         con.execute("UPDATE reminders SET fired_at=? WHERE id=?", (now_s, rid))
         overlay_fired = True
-        fired.append((rid, text, str(int(block_seconds or 0)), str(int(hold_seconds or 5))))
+        fired.append((rid, text, str(int(block_seconds or 0)), str(int(hold_seconds or 3)), str(int(mark_done or 0))))
         advance(schedule_id, cron)
     con.execute("COMMIT")
     con.close()
-    for rid, text, bs, hs in fired:
-        print(f"{rid}\t{text}\t{bs}\t{hs}")
+    for rid, text, bs, hs, md in fired:
+        print(f"{rid}\t{text}\t{bs}\t{hs}\t{md}")
 except Exception:
     pass
 PYEOF
 )"
   [[ -n "$due" ]] || return 0
   # At most one record (we serialize to one overlay per tick), but loop for safety.
-  while IFS=$'\t' read -r rid rtext rblock rhold; do
+  while IFS=$'\t' read -r rid rtext rblock rhold rmarkdone; do
     [[ -n "$rtext" ]] || continue
     # Pass the instance id + db so the overlay resolves THAT occurrence on
-    # dismissal (Control → skipped, countdown → done, sleep/lock → missed).
-    pbrain_overlay_show "$rtext" "${rblock:-0}" "${rhold:-5}" "" "$rid" "$PBRAIN_DB_FILE"
+    # dismissal (Control → skipped, countdown/Option-hold → done, sleep/lock → missed).
+    pbrain_overlay_show "$rtext" "${rblock:-0}" "${rhold:-3}" "" "$rid" "$PBRAIN_DB_FILE" "${rmarkdone:-0}"
   done <<< "$due"
   return 0
 }

@@ -108,6 +108,8 @@ doesn't apply.
   - Typical eating window (e.g. 8am–9pm, intermittent fasting)?
   - Caffeine intake?
   - Hydration habit?
+  - Any supplements you take regularly (vitamins, minerals, protein powder,
+    creatine, omega-3, etc.) — with dose + timing if you know it?
   - Anything you've tried before that worked or backfired?
   - One sentence on your relationship with food — relaxed / anxious / restrictive / chaotic?
 
@@ -135,6 +137,7 @@ Step 2 — Once you have answers, write the profile to:
     "eating_window": "...",
     "alcohol_freq": "...",
     "caffeine": "...",
+    "supplements": ["name — dose — timing", "..."],
     "notes": "free-form summary of anything important not captured above"
   }
 
@@ -340,7 +343,8 @@ DIET_PLAN_CONTENT="$(cat "$DIET_PLAN_FILE")"
 
 # Food library — a growing reference of named items the user eats, so they can
 # log "protein shake" without re-describing it, and so there's one place to see
-# everything they eat. Two sections: home/regular foods, and junk/outside food.
+# everything they eat. Three sections: home/regular foods, junk/outside food,
+# and supplements (vitamins/minerals/ergogenics with their dose + values).
 # Create an empty stub the first time (idempotent); Claude fills it over time.
 if [[ ! -f "$FOOD_LIBRARY_FILE" ]]; then
   mkdir -p "$(dirname "$FOOD_LIBRARY_FILE")"
@@ -366,6 +370,19 @@ description just needs enough detail to estimate macros.
 ## Junk / outside food
 
 | Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
+|---|---|---|---|---|---|---|---|---|
+
+## Supplements
+
+Vitamins, minerals, and ergogenic aids you take regularly — so a supplement can
+be logged by name and its adherence tracked day to day. **Key nutrients** holds
+the active dose(s) (e.g. "2000 IU D3", "5g creatine monohydrate", "EPA 360 /
+DHA 240 mg"); the macro columns matter only for supplements that meaningfully
+add calories (protein powder, mass gainer) and are ~0 for pure micronutrients.
+**Timing** drives when each appears in the daily checklist (morning, with-meal,
+pre-workout, post-workout, bedtime, any).
+
+| Supplement | Form | Dose | Timing | Key nutrients | Cals | P (g) | C (g) | F (g) |
 |---|---|---|---|---|---|---|---|---|
 LIBEOF
 fi
@@ -423,9 +440,9 @@ add more food, swap something, or refine.
 
 Step 1 — Show a one-line summary of what's already logged (the meal names +
 the running macro totals from the existing table), then ask:
-  "What's the update — did you eat something new, want to log a meal you're
-  about to have, swap something, want me to suggest the next meal, or plan
-  the rest of today's meals?"
+  "What's the update — did you eat something new, take a supplement, want to
+  log a meal you're about to have, swap something, want me to suggest the next
+  meal, or plan the rest of today's meals?"
 
 Step 2 — Based on intent:
 
@@ -442,6 +459,17 @@ Step 2 — Based on intent:
 
   B) UPDATING / CORRECTING AN EXISTING MEAL
      - Replace the row(s) cleanly. Recompute totals.
+
+  B2) LOGGING A SUPPLEMENT
+     - Mark its row in the ## Supplements section as "taken" (add the row if
+       the regimen list didn't already carry it). Reuse the dose + timing from
+       the FOOD LIBRARY Supplements section for any named supplement.
+     - If the supplement carries meaningful calories (protein powder, mass
+       gainer), ALSO add/keep a row in the Meals table so macros count. Pure
+       micronutrients (vitamins, creatine, omega-3, magnesium) do NOT touch the
+       macro totals.
+     - If it's a new recurring supplement not in the library, offer ONCE to add
+       it — see the FOOD LIBRARY step at the end. Write only on a yes.
 
   C) SUGGESTING THE NEXT MEAL
      - Compute remaining macros = plan targets − current totals.
@@ -496,6 +524,12 @@ Step 6 — FOOD LIBRARY upkeep (only if a new staple came up this session):
   breakfast, lunch, dinner, snack, post-workout, any — use comma-separated for
   items that fit multiple slots (e.g. "breakfast, snack"). Keep columns aligned.
   Don't add one-off meals; only genuine repeat items. Never write without a yes.
+
+  Supplements: if the user took a NEW regular supplement not in the FOOD
+  LIBRARY **Supplements** section, offer once the same way, then append a row
+  there — Supplement | Form | Dose | Timing | Key nutrients | Cals | P | C | F.
+  Timing values: morning, with-meal, pre-workout, post-workout, bedtime, any.
+  Macro columns ~0 for pure micronutrients. Only genuine repeats; yes only.
 UPDATE
   pbrain_emit_habits_extract "diet-journal" || true
   exit 0
@@ -541,6 +575,13 @@ Step 1 — Open with:
 
 Step 2 — Log whatever the user described. Add each item as an "eaten" row,
 estimate macros (reuse FOOD LIBRARY values for named items). Recompute totals.
+Pre-populate the ## Supplements section from the FOOD LIBRARY Supplements list
+(the user's regular regimen) as "planned" rows, and mark any the user says they
+took today as "taken". If that library section is still empty but the DIET
+PROFILE lists "supplements", seed the library Supplements section from the
+profile first (one row each, estimating dose/timing/values), then use it.
+Calorie-bearing supplements (protein powder) also get a Meals row; micronutrient
+supplements do not affect macro totals.
 
 Step 3 — After logging (or if the user said "nothing yet"):
 
@@ -608,8 +649,23 @@ Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
   | **Remaining** | | {cal} | {P} | {C} | {F} | {fiber} | |
 
   **Hydration:** {L water so far / target}
-  **Supplements:** {list or "none"}
   **Late eating (after 9pm):** {yes — what / no}
+
+  ---
+
+  ## Supplements
+
+  | Supplement | Dose | Timing | Status | Note |
+  |---|---|---|---|---|
+  | {name} | {dose, e.g. 2000 IU} | {morning / with-meal / post-workout / bedtime} | taken / planned / skipped | {brief, optional} |
+
+  {Pull each row from the FOOD LIBRARY Supplements section — reuse the saved
+  dose + timing for any supplement named there. List the user's regular regimen
+  even if not yet taken today (status "planned"), so the section doubles as a
+  checklist. If the user takes none and the library has no supplements, write
+  "(none)". Supplements with meaningful calories (protein powder) ALSO get a row
+  in the Meals table so their macros count toward totals — micronutrient
+  supplements (vitamins, creatine, omega-3) do NOT affect the macro totals.}
 
   ---
 
@@ -658,6 +714,12 @@ Step 6 — FOOD LIBRARY upkeep (only if a recurring item came up this session):
   Meal type values: breakfast, lunch, dinner, snack, post-workout, any — use
   comma-separated for items that fit multiple slots (e.g. "breakfast, snack").
   Only genuine repeat items, never one-offs. Never write without a yes.
+
+  Supplements: if the user mentioned a NEW regular supplement not in the FOOD
+  LIBRARY **Supplements** section, offer once the same way, then append a row
+  there — Supplement | Form | Dose | Timing | Key nutrients | Cals | P | C | F.
+  Timing values: morning, with-meal, pre-workout, post-workout, bedtime, any.
+  Macro columns ~0 for pure micronutrients. Only genuine repeats; yes only.
 
 Step 7 — End with: "Saved → $OUT_FILE. Re-run /diet-journal later to add
 meals or have me suggest the next one against remaining macros."

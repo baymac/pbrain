@@ -83,8 +83,8 @@ try:
         text          TEXT NOT NULL,
         cron          TEXT NOT NULL,                  -- 5-field cron expr (min hour dom month dow)
         block_seconds INTEGER NOT NULL DEFAULT 0,     -- overlay stay/countdown secs (0 = until skipped)
-        hold_seconds  INTEGER NOT NULL DEFAULT 5,     -- seconds the user holds Control to skip
-        status        TEXT NOT NULL DEFAULT 'active', -- active|cancelled (cancelled = series stopped)
+        hold_seconds  INTEGER NOT NULL DEFAULT 3,     -- seconds the user holds Control to skip
+        status        TEXT NOT NULL DEFAULT 'active', -- active|cancelled|deleted (deleted = user-cancelled)
         next_due_at   TEXT,                           -- next computed fire 'YYYY-MM-DD HH:MM' (cache)
         source        TEXT,
         created_at    TEXT NOT NULL
@@ -97,7 +97,7 @@ try:
         text          TEXT NOT NULL,
         due_at        TEXT NOT NULL,                  -- when this occurrence fires 'YYYY-MM-DD HH:MM' (local)
         block_seconds INTEGER NOT NULL DEFAULT 0,     -- overlay stay/countdown secs (0 = until skipped)
-        hold_seconds  INTEGER NOT NULL DEFAULT 5,     -- seconds the user holds Control to skip
+        hold_seconds  INTEGER NOT NULL DEFAULT 3,     -- seconds the user holds Control to skip
         status        TEXT NOT NULL DEFAULT 'pending',-- pending|done|skipped|missed|cancelled
         fired_at      TEXT,                           -- when the overlay was shown (NULL = never shown)
         resolved_at   TEXT,                           -- when it reached a terminal state
@@ -196,7 +196,7 @@ try:
         """)
         for text, due_at, repeat, cron, block_seconds, hold_seconds, source, created_at in old:
             bs = int(block_seconds or 0)
-            hs = int(hold_seconds or 5)
+            hs = int(hold_seconds or 3)
             # Legacy `repeat` token (daily/weekdays/weekly/monthly) → cron. The
             # new model is cron-only; map the four old tokens onto the due time.
             rep = (repeat or "").strip().lower()
@@ -229,6 +229,16 @@ try:
                     "VALUES (NULL,?,?,?,?, 'pending', ?, ?)",
                     (text, due_at, bs, hs, source, created_at or due_at),
                 )
+
+    # --- reminders: add mark_done column (Option-hold-to-done mode) -----------
+    # Older DBs predate the mark-done mode. Add the column once, with a DEFAULT
+    # of 0 (duration-based, the original behaviour) so existing rows are unaffected.
+    rcols2 = [r[1] for r in con.execute("PRAGMA table_info(reminders)").fetchall()]
+    if rcols2 and "mark_done" not in rcols2:
+        con.execute("ALTER TABLE reminders ADD COLUMN mark_done INTEGER NOT NULL DEFAULT 0")
+    scols = [r[1] for r in con.execute("PRAGMA table_info(reminder_schedules)").fetchall()]
+    if scols and "mark_done" not in scols:
+        con.execute("ALTER TABLE reminder_schedules ADD COLUMN mark_done INTEGER NOT NULL DEFAULT 0")
 
     # habit_id indexes — created after the column is guaranteed to exist on
     # every code path (fresh CREATE TABLE above, or the ALTER just now).

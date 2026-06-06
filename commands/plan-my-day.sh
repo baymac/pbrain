@@ -416,10 +416,10 @@ PYEOF
 
 # Habits surfacing. Every helper is a no-op (empty output) when the user hasn't
 # set anything up, so this costs nothing until they opt in. (Reminders are NOT
-# surfaced or fired here: /remind reminders are Apple Calendar events — see
-# CALENDAR_TODAY below — and /remind-blocking overlays are time-sensitive and
-# stay self-contained in their own poller, by design.)
-# Today's Apple Calendar events (from /remind + any commitments on the calendar),
+# surfaced or fired here: /remind creates Apple Reminders (EKReminder), which are
+# NOT Calendar events and are not read here; /remind-blocking overlays are
+# time-sensitive and stay self-contained in their own poller, by design.)
+# Today's Apple Calendar events (any commitments the user placed on the calendar),
 # recurrences expanded for today. These are HARD time anchors the day is built
 # around. No-op (empty) if osascript/Calendar is unavailable.
 CALENDAR_TODAY="$(pbrain_calendar_today "$TODAY" || true)"
@@ -431,6 +431,13 @@ HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || echo "$VAULT_DIR/life/habit-tracking/$TODAY.md")"
+# If a habits profile exists, today's tracker is created automatically (no offer).
+# track-init is idempotent — re-running on an existing file is a no-op.
+HABITS_TRACK_CREATED=no
+if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
+  if [[ ! -f "$HABITS_TRACK_FILE" ]]; then HABITS_TRACK_CREATED=yes; fi
+  pbrain_habit_track_init "$TODAY" >/dev/null 2>&1 || true
+fi
 HABITS_TODAY_MD="$(cat "$HABITS_TRACK_FILE" 2>/dev/null || echo "MISSING")"
 REMIND_CMD="$(pbrain_reminders_cmd)"
 
@@ -444,6 +451,7 @@ profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 habits_setup_needed: $HABITS_SETUP_NEEDED
 habits_track_file: $HABITS_TRACK_FILE
+habits_track_created: $HABITS_TRACK_CREATED
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -508,7 +516,7 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
   - If the profile's \`current_focus\` array is empty, mention once: "You haven't pinned a current focus in your profile yet — want to name 1–3 things you're actively pushing this month? I'll save them so I can anchor future plans on them." Don't block planning today either way.
   - CALENDAR — read the TODAY'S CALENDAR block above. These are the user's Apple Calendar events for today (created via /remind or set directly in Calendar), with recurrences already expanded. They are HARD ANCHORS — the day is built around them. Surface today's TIMED items in your first message as fixed points (e.g. "On your calendar today: standup 9:30, dentist 14:00"). Note any ALLDAY items as context, and mention FREQUENT pings (e.g. "hourly stand-up reminder") only once, briefly. If it's "(none)", say nothing. These feed Step 4a as non-negotiable rows — do NOT ask the user to restate them; treat them like already-confirmed locked-in commitments.
   - HABITS — read the HABITS block + \`habits_setup_needed\` above:
-      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits.
+      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits. If the user tells you to stop asking about habits, that's a GLOBAL standing preference (it spans commands) — capture it in \`prefs/_global.md\` via the self-improve loop, not a per-command pref.
       - If a HABITS rollup is present: note anything that needs attention today — a limit habit at/over cap (⚠️), or a high-priority build habit lagging / untouched this week — and factor it into the plan (e.g. slot a short block for a lagging build habit). One line, not a lecture.
 
 Step 1 — Show the user their lens, briefly:
@@ -700,20 +708,22 @@ Step 6 — Reminders (only if relevant — don't force it):
   only on a yes. Don't pester — at most one short offer covering all of them.
 
 Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very end:
-  a) Ensure today's tracker exists. If TODAY'S HABIT TRACKER == "MISSING", offer
-     ONCE: "Want me to set up today's habit tracker?" On yes:
-       bash "$HABITS_CMD" track --date $TODAY
-     On no: skip this step entirely.
-  b) Once the tracker is in place (or was already there), show the user today's
-     habit checklist from TODAY'S HABIT TRACKER — just the table rows, concise.
-     Then ask ONCE:
+  PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says not to nag /
+  ask about habits, skip this whole step — don't show the checklist or ask.
+  a) Today's tracker is ALREADY created — the command auto-builds it whenever a
+     habits profile exists, so there is NO offer to make and nothing to ask. Just
+     state it in one line: if \`habits_track_created\` == yes, "Set up today's
+     habit tracker."; if \`no\`, "Today's habit tracker is ready." (it already
+     existed). Never ask "Want me to set up today's habit tracker?" again.
+  b) Show the user today's habit checklist from TODAY'S HABIT TRACKER — just the
+     table rows, concise. Then ask ONCE:
        "Any you've already done today? Name them and I'll mark them now (e.g.
         'meditation, walked'). Or skip — run /habits anytime through the day to
         check and mark more, or just leave it and /end-of-day consolidates."
   c) On any named habits, mark each one:
        bash "$HABITS_CMD" mark --habit "<name>" --date $TODAY
      Confirm what was marked. One round only — don't loop asking for more.
-  Don't force tracker creation or marking — one offer each.
+  Don't force marking — the tracker is auto-created; marking is one ask, no loop.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the

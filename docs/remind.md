@@ -1,8 +1,8 @@
 # /remind
 
-A simple **"add it to my calendar"** command. Describe a reminder in plain language and `/remind` creates a real **Apple Calendar event** for it — title, time, recurrence, and any extra context. Calendar then owns the notification and syncs it across your devices (Mac, iPhone, iPad).
+A simple **"remind me to…"** command. Describe a reminder in plain language and `/remind` creates a real **Apple Reminder** (in the Reminders app) — a to-do with a timed due date, an optional recurrence, a priority, and optional early heads-up alarms. Reminders + iCloud own the notification and sync it across your devices (Mac, iPhone, iPad).
 
-There's no pbrain database, notifier, or background poller involved: the reminder is just a calendar event, editable in Calendar.app like any other. Today's calendar events also become **hard anchors in `/plan-my-day`** (see below).
+There's no pbrain database or background poller involved — the reminder lives in Reminders, editable there like any other. (Reminders are *not* calendar events, so they do **not** appear on the calendar grid and do **not** anchor `/plan-my-day` — that planner reads your real Calendar events, separately.)
 
 ## Setting a reminder
 
@@ -10,92 +10,100 @@ There's no pbrain database, notifier, or background poller involved: the reminde
 /remind call the dentist tomorrow at 3pm
 /remind pay rent on the 1st every month
 /remind take a walk every weekday at 5pm
-/remind stand up and stretch every hour
-/remind submit the report friday — include the Q3 numbers and the link
+/remind drink water at 9am, 1pm and 5pm every day
+/remind submit the report friday, high priority, warn me 30 min before
 ```
 
 The command reads what you asked and works out:
 
-- **Title** — a clean event title (filler like "remind me to" is stripped).
-- **Time** — resolved **relative to now**, so "tomorrow 3pm" becomes a concrete datetime. A **date with no time** ("remind me Friday") lands at **9am** that day.
-- **Frequency** — recurrence, if you imply one (see the table below).
-- **Context** — any extra detail ("include the Q3 numbers and the link") goes into the event's **notes**.
+- **Title** — a clean title (filler like "remind me to" is stripped).
+- **Time** — resolved **relative to now**. A **date with no time** ("remind me Friday") anchors to **9am** (a reminder needs a time to fire a notification).
+- **Frequency** — a recurrence, if you imply one (see below).
+- **Priority** — `high` / `medium` / `low`, if you signal urgency ("important", "urgent").
+- **Early alarm** — an extra heads-up *before* the due time ("warn me 15 min before").
 
-If the time is genuinely ambiguous it asks one quick question first, then creates the event and confirms in one line.
+If the time is genuinely ambiguous it asks one quick question first, then creates the reminder and confirms in one line.
 
-### Recurrence
+### Recurrence — cron is the language
 
-| You say | Repeat token | iCalendar rule |
+Repeats are expressed as a 5-field **cron** expression (`minute hour day-of-month month day-of-week`). You speak naturally; pbrain maps your words to cron, validates it, and converts it to an Apple recurrence:
+
+| You say | cron | Apple recurrence |
 |---|---|---|
-| every day | `daily` | `FREQ=DAILY` |
-| every weekday | `weekdays` | `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR` |
-| every week | `weekly` | `FREQ=WEEKLY` |
-| **Wed and Sat** | `weekly:WE,SA` | `FREQ=WEEKLY;BYDAY=WE,SA` |
-| every Tuesday | `weekly:TU` | `FREQ=WEEKLY;BYDAY=TU` |
-| every 3 days | `every-3d` | `FREQ=DAILY;INTERVAL=3` |
-| every other week | `every-2w` | `FREQ=WEEKLY;INTERVAL=2` |
-| biweekly on Mon | `every-2w:MO` | `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO` |
-| every month | `monthly` | `FREQ=MONTHLY` |
-| **first Monday** of the month | `monthly:1MO` | `FREQ=MONTHLY;BYDAY=1MO` |
-| **last Friday** of the month | `monthly:-1FR` | `FREQ=MONTHLY;BYDAY=-1FR` |
-| every 2 hours | `every-2h` | `FREQ=HOURLY;INTERVAL=2` |
-| every 5 minutes | `every-5m` | `FREQ=MINUTELY;INTERVAL=5` |
-| every 30 seconds | `every-30s` | `FREQ=MINUTELY;INTERVAL=1` |
+| every day at 9am | `0 9 * * *` | daily |
+| weekdays at 7:30 | `30 7 * * 1-5` | weekly, Mon–Fri |
+| every Monday 6pm | `0 18 * * 1` | weekly, Mon |
+| Wed & Sat 9am | `0 9 * * 3,6` | weekly, Wed+Sat |
+| 15th of the month, 9am | `0 9 15 * *` | monthly, day 15 |
+| 1st & 15th, 9am | `0 9 1,15 * *` | monthly, days 1 & 15 |
+| **first Monday** 8am | `0 8 * * 1#1` | monthly, 1st Monday |
+| **last Friday** 10pm | `0 22 * * 5L` | monthly, last Friday |
+| Dec 25 at 9am | `0 9 25 12 *` | yearly, Dec 25 |
+| quarterly (1st of Jan/Apr/Jul/Oct), noon | `0 12 1 1,4,7,10 *` | yearly, those months |
+| **9am AND 5pm** daily | `0 9,17 * * *` | **two** reminders (one per time) |
 
-Day codes are `MO TU WE TH FR SA SU`. Apple Calendar's finest recurrence granularity is **one minute**, so a sub-minute cadence (`every-30s`) becomes a once-a-minute event.
+cron day-of-week: `0`/`7`=Sun, `1`=Mon … `6`=Sat. The `d#n` extension means *nth weekday* (`1#1` = first Monday) and `dL` means *last weekday* (`5L` = last Friday).
 
-### Ending a recurrence (bounded reminders)
+**What cron-as-reminders can't do (and what happens):**
 
-A recurring reminder can stop automatically — say "until Friday" or "for the next 3 days" and it sets a bound:
+- **Sub-daily** (`every 5 minutes`, `hourly`, `*/30 9-17 * * *`) — Apple reminder recurrence is daily-or-coarser only, so these are **rejected** with a pointer to **`/remind-blocking`** (which runs a real cron poller and *can* fire sub-daily).
+- **Multiple times of day** (`0 9,17 * * *`) — one Apple rule fires at one time, so this **splits into one reminder per time**.
+- **`day-of-month` AND `day-of-week` together** (cron's OR-match) — **splits into two reminders** (a single rule would silently change the meaning to AND).
+- **Every-N intervals** (`every 2 days`, `every other week`) — cron can't express an interval, so use the **`--repeat`** token form instead: `every-Nd`, `every-Nw[:WE,SA]`, plus `daily | weekdays | weekly | weekly:TU | monthly | monthly:1MO`.
+
+### Bounding a recurrence
+
+Say "until Friday" or "10 times" and it stops automatically — one of `--until "YYYY-MM-DD"` or `--count N` (mutually exclusive, recurrence only).
 
 ```bash
 /remind water the plants every day until next Sunday
 /remind take the medication twice a day for 10 days   # → two reminders, each capped
 ```
 
-Under the hood these add **one** of `--until "YYYY-MM-DD"` (stop after that date) or `--count N` (stop after N occurrences) to the recurrence. The two are mutually exclusive, and only apply alongside a `--repeat`.
-
-**Multiple distinct times a day** ("9am and 5pm daily") isn't a single calendar rule, so `/remind` creates **one reminder per time** (each with the same recurrence).
-
-**Still not a token:** arbitrary RRULE pieces beyond the above (e.g. "every 2nd and 4th week on specific days with a count") — set those in Calendar.app directly.
-
-Every event also gets an **alarm at its start time**, so Calendar delivers a notification when it's due.
-
 ## Managing reminders
 
 ```bash
-/remind list      # upcoming pbrain reminders on your calendar (with uids)
-/remind           # same — shows your upcoming reminders, ready for a new one
+/remind list                 # upcoming pbrain reminders (with ids, priority, recurrence)
+/remind                      # same — shows your upcoming reminders, ready for a new one
 ```
 
-`list` shows only reminders **pbrain created** (each is tagged with a hidden marker in its notes), not your whole calendar. To remove one, just say so ("cancel the dentist one", "I submitted the report") — it matches your words to the event and removes it.
+`list` shows only reminders **pbrain created** (each carries a hidden marker in its notes), not your whole Reminders list. Refer to one in plain language and pbrain matches it to an id:
 
-Deletion is **reliable**, including recurring reminders. AppleScript can't dependably delete recurring iCloud events, so `/remind cancel` uses a tiny bundled **EventKit** helper (`pbrain-calendar.app`, compiled on demand from `lib/pbrain-calendar.swift`) which removes the whole series and commits it. Each pbrain reminder carries a hidden id in its notes, so cancel always targets the right event regardless of how Calendar/iCloud renumber things.
+- **"I did it" / "mark done"** → marks the reminder **complete**. For a recurring reminder this rolls it forward to the next occurrence (Apple's model).
+- **"cancel" / "remove" / "delete"** → **deletes** the reminder. For a recurring one this removes the whole series.
 
-> **One-time Calendar permission:** the first cancel triggers a macOS prompt to let **pbrain-calendar** access your Calendar — approve it once. You can trigger it ahead of time with `/remind calendar-access`. (This is a separate permission from the Automation access used to *create* events.) If `swiftc` (Xcode Command Line Tools) isn't installed, the helper can't be built and cancel falls back to the unreliable AppleScript path — then delete recurring ones in Calendar.app.
+### Editing (this and all future occurrences)
+
+```bash
+/remind move the dentist reminder to friday 4pm
+/remind make the standup reminder weekly on mondays
+/remind bump the rent reminder to high priority
+```
+
+A recurring reminder is a single series object, so editing it (time, recurrence, priority, title, early alarm) changes **all future occurrences**. Under the hood: `edit <id> [--text …] [--due …] [--cron …] [--repeat …] [--clear-recurrence] [--priority …] [--early …] [--clear-early] [--notes …]`.
+
+**What needs the Reminders app instead:** editing or skipping **just one occurrence** of a recurring reminder. EventKit has no per-instance API for reminders — only the whole series — so for "skip just this Tuesday" or "move only next week's", open the Reminders app.
+
+> **One-time Reminders permission:** the first create/list/edit/cancel triggers a macOS prompt to let **pbrain-reminders** access your Reminders — approve it once. Trigger it ahead of time with `/remind access`. (This is a permission distinct from Calendar access.) If `swiftc` (Xcode Command Line Tools) isn't installed the EventKit helper can't be built, and `/remind` will say so rather than half-work — run `xcode-select --install`.
 
 ## Where reminders show up
 
-- **Apple Calendar / Notification Center** — the event fires a notification at its time and syncs to all your Apple devices.
-- **`/plan-my-day`** — today's calendar events (recurrences expanded) are pulled in as **hard time anchors**. The planner surfaces them up front ("On your calendar today: standup 9:30, dentist 14:00") and builds the day's schedule around them, treating them as non-negotiable fixed rows. All-day items show as context; frequent pings (e.g. an hourly stand-up reminder) are noted once.
+- **Reminders app / Notification Center** — the reminder fires a notification at its due time (plus any early alarms) and syncs to all your Apple devices.
+- **NOT in `/plan-my-day`** — reminders aren't timed calendar events, so the planner doesn't read them. `/plan-my-day` anchors the day around your real **Calendar** events and your fitness session.
 
 ## Defaults and overrides
 
 | Env var | Effect | Default |
 |---|---|---|
-| `PBRAIN_CALENDAR` | Which Apple Calendar to create/read reminders in | `Calendar` |
-| `PBRAIN_CAL_MARKER` | Hidden notes marker that tags pbrain-created events (so `list`/`cancel` can find them) | `⟦pbrain-reminder⟧` |
+| `PBRAIN_REMINDERS_LIST` | Which Reminders list to create/read in | the system default list |
+| `PBRAIN_REMINDER_MARKER` | Hidden notes marker tagging pbrain reminders (so `list` finds them) | `⟦pbrain-reminder⟧` |
+| `PBRAIN_REMINDERS_APP` | Where the EventKit helper app is cached/built | `~/.config/pbrain/pbrain-reminders.app` |
 
 **Subcommands (the script's API — you normally just type natural language):**
-`add --text "…" --due "YYYY-MM-DD HH:MM" [--repeat <token>] [--until YYYY-MM-DD | --count N] [--notes "context"]`, `list`, `done <id>`, `cancel <id>`, `calendar-access`.
-Repeat tokens: `daily | weekdays | weekly | weekly:WE,SA | monthly | monthly:1MO | every-Nd | every-Nw[:WE,SA] | every-Nh | every-Nm | every-Ns`.
+`add --text "…" (--due "YYYY-MM-DD HH:MM" | --cron "<5-field>" | --repeat <token>) [--priority high|medium|low] [--early "15" | "15,60"] [--until YYYY-MM-DD | --count N] [--notes "…"] [--list "<list>"]`, `list`, `edit <id> …`, `done <id>`, `cancel <id>`, `access`.
 
-**Note:** macOS only. Creating/listing reminders drives **Calendar.app** via AppleScript (`osascript`, needs Automation access — prompted the first time); cancelling uses the EventKit helper (needs Calendar access — see above). The reminder events live in the calendar named by `PBRAIN_CALENDAR`; point that at a dedicated calendar if you'd rather keep them separate from your main one.
-
-| Env var | Effect | Default |
-|---|---|---|
-| `PBRAIN_CALENDAR_APP` | Where the EventKit cancel helper app is cached/built | `~/.config/pbrain/pbrain-calendar.app` |
+**Note:** macOS only. All Reminders operations go through a tiny bundled **EventKit** helper (`pbrain-reminders.app`, compiled on demand from `lib/pbrain-reminders.swift`), launched via `open` so the one-time Reminders access is attributed to the bundle. Needs `swiftc` (Xcode Command Line Tools).
 
 ---
 
-*Looking for full-screen "take a break" style blocking reminders, or the SQLite-backed reminder queue? That's a separate feature (`remind-block`) — `/remind` itself is purely a calendar front-end.*
+*Looking for full-screen "take a break" style blocking reminders, or a true sub-daily cron cadence? That's a separate feature — `/remind-blocking` — backed by a launchd poller and a SQLite queue. `/remind` itself is purely an Apple Reminders front-end.*

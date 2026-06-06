@@ -50,7 +50,7 @@ _run_cmd() { run bash "$CMD" "$@"; }
   _run_cmd add --text "Stand up" --due "2099-01-02 10:00"
   [ "$status" -eq 0 ]
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select block_seconds,hold_seconds from reminders').fetchone())" "$PBRAIN_DB_FILE"
-  [ "$output" = "(0, 5)" ]
+  [ "$output" = "(0, 3)" ]
 }
 
 @test "add requires --text" {
@@ -115,7 +115,7 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"cancelled series S$SID"* ]]
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select status from reminder_schedules').fetchone()[0], c.execute(\"select status from reminders where schedule_id=$SID\").fetchone()[0])" "$PBRAIN_DB_FILE"
-  [ "$output" = "cancelled cancelled" ]
+  [ "$output" = "deleted cancelled" ]
 }
 
 @test "install writes a self-owned poller plist pointing at remind-blocking.sh tick" {
