@@ -376,3 +376,37 @@ EOF
   pbrain_notify_build
   [ -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
 }
+
+@test "tick skips (and preserves) a due blocking overlay while the screen is locked" {
+  OVERLAY_LOG="$TMP/overlay.log"
+  pbrain_overlay_show() { echo "$1" >> "$OVERLAY_LOG"; }
+  _add_block "break A" "2000-01-01 09:00" 120 5
+  # Screen locked → the overlay must NOT fire and the row stays pending/unfired.
+  PBRAIN_SCREEN_LOCKED=1 pbrain_reminders_tick
+  [ ! -f "$OVERLAY_LOG" ] || [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "0" ]
+  run _col 1 fired_at
+  [ "$output" = "NULL" ]
+  run _col 1 status
+  [ "$output" = "pending" ]
+  # Once unlocked it fires normally on the next tick.
+  PBRAIN_SCREEN_LOCKED=0 pbrain_reminders_tick
+  [ "$(wc -l < "$OVERLAY_LOG" | tr -d ' ')" = "1" ]
+  [ "$(cat "$OVERLAY_LOG")" = "break A" ]
+}
+
+@test "tick still fires a NON-blocking notification while the screen is locked" {
+  NOTIFY_LOG="$TMP/notify.log"
+  pbrain_notify_reminder() { echo "$2" >> "$NOTIFY_LOG"; }
+  pbrain_overlay_show() { echo "OVERLAY:$1" >> "$NOTIFY_LOG"; }
+  # A plain (non-blocking) reminder is not an overlay, so a locked screen is
+  # irrelevant — it should still fire.
+  python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("insert into reminders(text,due_at,status,created_at) "
+          "values('ping','2000-01-01 09:00','pending','2026-01-01 00:00')")
+c.commit()
+PY
+  PBRAIN_SCREEN_LOCKED=1 pbrain_reminders_tick
+  [ "$(cat "$NOTIFY_LOG")" = "ping" ]
+}

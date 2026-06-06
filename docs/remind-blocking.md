@@ -77,6 +77,8 @@ The overlay is drawn by **pbrain's own tiny app** (`pbrain-overlay.app`), compil
 
 The overlay sets macOS kiosk options while it's up — it hides the Dock and menu bar and disables Cmd-Tab, force-quit, and Hide. This is *friction, not a prison*: it makes skipping deliberate, not impossible. Hold Control to skip / Return to mark done (or finish the countdown) and it tears down instantly, writing the resolution straight to the reminder row via SQLite.
 
+**Sleep / lock safety.** An overlay must never linger invisibly behind the lock screen or across a sleep — that's how a stack of them piles up overnight and eats memory. Two guards prevent it: the poller **won't fire** a new overlay while the screen is locked (it leaves the reminder pending so it pops once you're back), and a live overlay **dismisses itself** the moment the Mac sleeps or the screen locks. Set `PBRAIN_SCREEN_LOCKED=1` to force the poller to treat the screen as locked (a manual "don't interrupt me" switch); `0` forces unlocked.
+
 ## Defaults and overrides
 
 | Env var | Effect | Default |
@@ -84,6 +86,7 @@ The overlay sets macOS kiosk options while it's up — it hides the Dock and men
 | `PBRAIN_DB_FILE` | SQLite DB path (shared with `/remind`, `/habits`) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_OVERLAY_APP` | Where the compiled overlay app is cached/built | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | Default overlay background colour (hex, e.g. `#1e3a5f`) | unset → slate |
+| `PBRAIN_SCREEN_LOCKED` | Override the screen-lock probe: `1` = treat as locked (defer overlays), `0` = unlocked | unset → auto-detect via `ioreg` |
 
 **Subcommands (the script's API — you normally just type natural language):** `add --text … ( --due … | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]`, `test`, `list`, `done <id>`, `cancel <id>`, `tick`, `install`, `uninstall`.
 

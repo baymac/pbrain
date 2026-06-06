@@ -203,6 +203,9 @@ final class Controller: NSObject {
     private var holdAction: HoldAction?
     private var holdTimer: Timer?
     private var keyMonitor: Any?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var distributedObservers: [NSObjectProtocol] = []
+    private var isDismissing = false
 
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
     private let doneColor = NSColor(calibratedRed: 0.45, green: 0.9,  blue: 0.55, alpha: 0.95)
@@ -317,12 +320,17 @@ final class Controller: NSObject {
             return nil
         }
         // Dismiss and exit when the machine sleeps or the screen locks so the
-        // process doesn't accumulate invisibly in memory overnight.
+        // process doesn't accumulate invisibly in memory overnight. System/display
+        // sleep arrives on the workspace centre; screen-lock is delivered as a
+        // distributed notification ("com.apple.screenIsLocked"), not via NSWorkspace.
         let wsnc = NSWorkspace.shared.notificationCenter
-        wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
-                         object: nil, queue: .main) { [weak self] _ in self?.dismiss() }
-        wsnc.addObserver(forName: NSWorkspace.screensDidLockNotification,
-                         object: nil, queue: .main) { [weak self] _ in self?.dismiss() }
+        workspaceObservers.append(
+            wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
+                             object: nil, queue: .main) { [weak self] _ in self?.dismiss() })
+        let dnc = DistributedNotificationCenter.default()
+        distributedObservers.append(
+            dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
+                            object: nil, queue: .main) { [weak self] _ in self?.dismiss() })
     }
 
     private func handle(_ ev: NSEvent) {
@@ -370,9 +378,20 @@ final class Controller: NSObject {
     }
 
     private func dismiss() {
+        // Idempotent: sleep, lock, countdown-end, and the hold gestures can all
+        // race to dismiss. Running the teardown twice would call
+        // NSEvent.removeMonitor on an already-removed token (undefined behaviour).
+        guard !isDismissing else { return }
+        isDismissing = true
         countdownTimer?.invalidate()
         holdTimer?.invalidate()
-        if let m = keyMonitor { NSEvent.removeMonitor(m) }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        let wsnc = NSWorkspace.shared.notificationCenter
+        for tok in workspaceObservers { wsnc.removeObserver(tok) }
+        workspaceObservers.removeAll()
+        let dnc = DistributedNotificationCenter.default()
+        for tok in distributedObservers { dnc.removeObserver(tok) }
+        distributedObservers.removeAll()
         for w in windows { w.orderOut(nil) }
         NSApp.terminate(nil)
     }

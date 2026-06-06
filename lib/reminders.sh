@@ -947,10 +947,17 @@ pbrain_reminders_tick() {
     overlay_busy=1
   fi
   # Skip blocking overlays when the screen is locked — they'd fire invisibly and
-  # be consumed without the user ever seeing them. Best-effort; if ioreg is
-  # unavailable or the key is absent, we assume unlocked (safe to fire).
-  if command -v ioreg >/dev/null 2>&1; then
-    ioreg -n IOPMrootDomain -r 2>/dev/null | grep -q '"CGSSessionScreenIsLocked" = Yes' \
+  # be consumed without the user ever seeing them. The console lock state lives in
+  # IOConsoleUsers under the Root node as a stable always-present boolean
+  # ("IOConsoleLocked" = Yes|No). Best-effort; if ioreg is unavailable we assume
+  # unlocked (safe to fire). PBRAIN_SCREEN_LOCKED (0/1) overrides the probe — a
+  # test seam and a manual "never fire while I'm at this" switch.
+  if [[ "${PBRAIN_SCREEN_LOCKED:-}" == "1" ]]; then
+    is_screen_locked=1
+  elif [[ "${PBRAIN_SCREEN_LOCKED:-}" == "0" ]]; then
+    is_screen_locked=0
+  elif command -v ioreg >/dev/null 2>&1; then
+    ioreg -n Root -d1 2>/dev/null | grep -q '"IOConsoleLocked" = Yes' \
       && is_screen_locked=1 || true
   fi
   due="$(python3 - "$PBRAIN_DB_FILE" "$now" "$mode" "$overlay_busy" "$is_screen_locked" <<'PYEOF' 2>/dev/null || true
