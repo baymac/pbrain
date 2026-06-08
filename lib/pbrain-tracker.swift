@@ -16,7 +16,8 @@
 // contiguous (app, host) active span. Away/idle/locked/asleep is NOT a row: it is
 // the ABSENCE of a segment, derived at render time from the gap between one
 // segment's ended_at and the next's started_at. The daemon stores RAW signals
-// (raw bundle id, raw URL host straight from AppleScript, an attribution reason);
+// (raw bundle id, raw URL host + path straight from AppleScript with the query
+// string dropped, an attribution reason);
 // the python renderer does all normalization + active/away classification, so the
 // edge-case logic is unit-testable and the Swift surface stays thin.
 //
@@ -141,9 +142,14 @@ final class TrackerDB {
             app_bundle_id TEXT,
             app_name      TEXT,
             raw_host      TEXT,
+            raw_path      TEXT,
             attribution   TEXT NOT NULL DEFAULT 'ok'
         );
         """)
+        // Migration for DBs created before raw_path existed. ALTER is a no-op-safe
+        // failure if the column is already present (older sqlite has no IF NOT
+        // EXISTS for ADD COLUMN), so we just swallow the error.
+        exec("ALTER TABLE tracker_segments ADD COLUMN raw_path TEXT;")
         exec("CREATE INDEX IF NOT EXISTS idx_tracker_seg_day ON tracker_segments(occurred_on);")
         exec("CREATE INDEX IF NOT EXISTS idx_tracker_seg_open ON tracker_segments(ended_at);")
         // Startup sweep: clamp any stray open row (ended_at NULL, e.g. a crash
@@ -168,11 +174,12 @@ final class TrackerDB {
     // Open a new active segment; returns its row id (0 on failure). ended_at is
     // seeded to started_at so even an instant crash credits ~0s, never "now".
     func insertSegment(start: Int64, occurredOn: String, bundleId: String?,
-                       appName: String?, host: String?, attribution: String) -> Int64 {
+                       appName: String?, host: String?, path: String?,
+                       attribution: String) -> Int64 {
         let sql = """
         INSERT INTO tracker_segments
-          (started_at, ended_at, occurred_on, app_bundle_id, app_name, raw_host, attribution)
-        VALUES (?,?,?,?,?,?,?)
+          (started_at, ended_at, occurred_on, app_bundle_id, app_name, raw_host, raw_path, attribution)
+        VALUES (?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
@@ -183,7 +190,8 @@ final class TrackerDB {
         bindText(stmt, 4, bundleId)
         bindText(stmt, 5, appName)
         bindText(stmt, 6, host)
-        bindText(stmt, 7, attribution)
+        bindText(stmt, 7, path)
+        bindText(stmt, 8, attribution)
         guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
         return sqlite3_last_insert_rowid(db)
     }
@@ -222,27 +230,33 @@ func automationRequest(_ bundleId: String) -> OSStatus {
     return AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, true)
 }
 
-// Run the per-browser AppleScript and reduce it to (host?, attribution). Blocks
-// the calling thread (always invoked on a background queue). Domain-only by
-// design: we keep only the URL host (drops path/query — the privacy boundary)
-// and leave www-stripping / display normalization to the python renderer.
-func runURLScript(_ src: String) -> (String?, String) {
-    guard let script = NSAppleScript(source: src) else { return (nil, "non_web") }
+// Run the per-browser AppleScript and reduce it to (host?, path?, attribution).
+// Blocks the calling thread (always invoked on a background queue). We keep the
+// URL host AND path but DROP the query string (?…) — the privacy boundary: a
+// query can carry tokens, search terms, and session secrets. www-stripping /
+// display normalization is left to the python renderer.
+func runURLScript(_ src: String) -> (String?, String?, String) {
+    guard let script = NSAppleScript(source: src) else { return (nil, nil, "non_web") }
     var errInfo: NSDictionary?
     let result = script.executeAndReturnError(&errInfo)
     if let err = errInfo {
         let code = (err[NSAppleScript.errorNumber] as? Int) ?? 0
-        if code == -1743 { return (nil, "tcc_denied") }   // not permitted
-        return (nil, "non_web")                            // no window / no tab / other
+        if code == -1743 { return (nil, nil, "tcc_denied") }   // not permitted
+        return (nil, nil, "non_web")                           // no window / no tab / other
     }
     guard let urlString = result.stringValue,
           let u = URL(string: urlString),
           let scheme = u.scheme?.lowercased(),
           scheme == "http" || scheme == "https",
           let host = u.host, !host.isEmpty else {
-        return (nil, "non_web")
+        return (nil, nil, "non_web")
     }
-    return (host, "ok")
+    // path excludes query+fragment by construction (URL.path). Trim a lone
+    // trailing slash so "/" and "" collapse to the bare host.
+    var path = u.path
+    if path == "/" { path = "" }
+    let hostPath = path.isEmpty ? host : host + path
+    return (host, hostPath, "ok")
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +292,7 @@ final class Tracker {
 
     // live segment
     private var liveRow: Int64 = 0
-    private var liveKey: String? = nil       // "\(bundleId)\u{1f}\(host ?? "")"
+    private var liveKey: String? = nil       // "\(bundleId)\u{1f}\(path ?? host ?? "")\u{1f}\(attr)"
     private var liveDay: String = ""
 
     // away latches
@@ -395,29 +409,29 @@ final class Tracker {
 
     // Resolve the frontmost app's (bundleId, name) and, if it's a browser we can
     // read and are permitted to, its active-tab host + attribution.
-    private func currentTarget() -> (bundleId: String?, name: String?, host: String?, attr: String) {
+    private func currentTarget() -> (bundleId: String?, name: String?, host: String?, path: String?, attr: String) {
         let front = NSWorkspace.shared.frontmostApplication
         let bundleId = front?.bundleIdentifier
         let name = front?.localizedName
         guard let bid = bundleId, isKnownBrowser(bid) else {
-            return (bundleId, name, nil, "not_browser")
+            return (bundleId, name, nil, nil, "not_browser")
         }
         guard automationPermitted(bid) else {
-            return (bundleId, name, nil, "tcc_denied")
+            return (bundleId, name, nil, nil, "tcc_denied")
         }
-        let (host, attr) = fetchHostBounded(bid)
-        return (bundleId, name, host, attr)
+        let (host, path, attr) = fetchHostBounded(bid)
+        return (bundleId, name, host, path, attr)
     }
 
     // Non-reentrant, timeout-bounded AppleScript fetch. The common case returns in
     // well under fetchTimeout, giving an accurate host this poll. A wedged browser
     // is abandoned after fetchTimeout (attribution=timeout) and NOT re-issued until
     // the in-flight task finishes — so a hung browser can never wedge the recorder.
-    private func fetchHostBounded(_ bundleId: String) -> (String?, String) {
-        if hostFetchInFlight { return (nil, "timeout") }
+    private func fetchHostBounded(_ bundleId: String) -> (String?, String?, String) {
+        if hostFetchInFlight { return (nil, nil, "timeout") }
         hostFetchInFlight = true
         let src = urlScript(for: bundleId)
-        final class Box { var v: (String?, String) = (nil, "timeout") }
+        final class Box { var v: (String?, String?, String) = (nil, nil, "timeout") }
         let box = Box()
         let sem = DispatchSemaphore(value: 0)
         aeQueue.async {
@@ -428,7 +442,7 @@ final class Tracker {
         }
         if sem.wait(timeout: .now() + fetchTimeout) == .timedOut {
             // Leave hostFetchInFlight = true; the bg task clears it when it finishes.
-            return (nil, "timeout")
+            return (nil, nil, "timeout")
         }
         return box.v
     }
@@ -456,15 +470,18 @@ final class Tracker {
         }
 
         let t = currentTarget()
-        let key = "\(t.bundleId ?? "")\u{1f}\(t.host ?? "")\u{1f}\(t.attr)"
+        // Path is part of the key: navigating to a new path within the same host
+        // closes the old span and opens a fresh one, so each path buckets its own
+        // active seconds.
+        let key = "\(t.bundleId ?? "")\u{1f}\(t.path ?? t.host ?? "")\u{1f}\(t.attr)"
 
         if liveRow == 0 || key != liveKey {
             // Close the old span (ended_at already ~now from its last heartbeat),
-            // then open a fresh one for the new (app, host, attribution).
+            // then open a fresh one for the new (app, host, path, attribution).
             if liveRow != 0 { db.touchEnded(rowId: liveRow, end: nowEpoch) }
             liveRow = db.insertSegment(start: nowEpoch, occurredOn: today,
                                        bundleId: t.bundleId, appName: t.name,
-                                       host: t.host, attribution: t.attr)
+                                       host: t.host, path: t.path, attribution: t.attr)
             liveKey = (liveRow != 0) ? key : nil
         } else {
             // Same target, still active → heartbeat.

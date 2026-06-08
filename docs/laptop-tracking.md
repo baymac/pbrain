@@ -4,7 +4,7 @@ A resident macOS daemon that records, per day, **which app you're in and for how
 
 The honesty is the point. A naive "frontmost app" logger lies twice: it counts a two-hour movie as idle (no keystrokes), and it flattens "4h in Chrome" into one bar. This tracker fixes both — **media-aware idle** (a held power assertion means a video/music counts as active even with zero input) and **domain-level browser attribution** (4h Chrome → 2h github.com · 1h youtube.com · 1h gmail.com).
 
-**Write target:** `$VAULT_DIR/life/laptop-tracking/YYYY-MM-DD.md` (domain-level only). The granular record lives in a **local-only** SQLite DB (`~/.config/pbrain/tracker.db`) that is **never synced to the vault** — only the derived daily markdown is. Full URLs, paths, and query strings are out of scope by design (domain only).
+**Write target:** `$VAULT_DIR/life/laptop-tracking/YYYY-MM-DD.md` (host + path). The granular record lives in a **local-only** SQLite DB (`~/.config/pbrain/tracker.db`) that is **never synced to the vault** — only the derived daily markdown is. The captured URL keeps host and path (so a **Top pages** table can show `github.com/anthropics/claude-code` distinct from `github.com/settings`); the `?query=…` string is dropped at capture by design — that's the privacy boundary (tokens, search terms, secrets).
 
 ## How it works
 
@@ -103,5 +103,5 @@ The bash + Python read/render path is covered by `tests/tracker.bats` (schema, g
 
 - **No live/periodic markdown updates** — the md renders at end-of-day (and on demand), so iCloud isn't churned all day.
 - **No HTML / menubar dashboard yet** — the granular DB is built so those can be layered on later without re-instrumenting (see TODOS).
-- **No full URLs / paths / query strings** — domain only, a deliberate privacy boundary.
+- **No query strings** — the captured URL keeps host **and path** (so `github.com/anthropics/claude-code` is distinct from `github.com/settings`), but the `?query=…` is dropped at capture: that's where tokens, search terms, and session secrets live. The path stays local-only in `tracker.db` and renders into a **Top pages** table; only the per-day md (host+path) travels with the vault.
 - **No cross-machine DB sync** — `tracker.db` is per-machine local state; only the derived md travels with the vault.
