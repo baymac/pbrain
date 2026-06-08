@@ -114,6 +114,10 @@ doesn't apply to them.
   - Energy peak: morning person, afternoon, night owl, mixed?
   - Anything that wrecks your day if it slips? (sleep, exercise, sunlight,
     talking to no one, etc.)
+  - Break activities: between work blocks you'll get a ~30-min break — what
+    restful things do you actually like doing in those? (e.g. short walk,
+    a couple of games, prep + eat a light snack, stretch, sit outside.) These
+    become a menu the daily plan rotates through automatically between blocks.
 
   Anti-patterns to actively avoid
   - What behaviours sabotage you? (doomscrolling, late nights, alcohol mid-
@@ -174,6 +178,8 @@ Step 3 — Write the profile to:
       "focus_window": "e.g. 9am-1pm + 8pm-10pm",
       "focused_hours_per_day": 4,
       "deep_work_block_min": 90,
+      "break_block_min": 30,
+      "break_activities": ["short walk", "2 games", "prep + eat a light snack"],
       "energy_peak": "morning|afternoon|evening|mixed",
       "day_wreckers": ["sleep<7h", "no exercise", "no sunlight"]
     },
@@ -437,9 +443,33 @@ HABITS_TRACK_CREATED=no
 if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
   if [[ ! -f "$HABITS_TRACK_FILE" ]]; then HABITS_TRACK_CREATED=yes; fi
   pbrain_habit_track_init "$TODAY" >/dev/null 2>&1 || true
+  # Habit↔reminder upkeep (best-effort, silent, degrades without Reminders access):
+  # ensure today's one-shots exist for linked habits, then pull any the user
+  # already ticked off in the Reminders app back into today's tracker.
+  if [[ -n "${HABITS_CMD//[[:space:]]/}" ]]; then
+    bash "$HABITS_CMD" reminders-ensure --date "$TODAY" >/dev/null 2>&1 || true
+    bash "$HABITS_CMD" reminders-sync   --date "$TODAY" >/dev/null 2>&1 || true
+    pbrain_habits_sync_range 1 >/dev/null 2>&1 || true   # re-mirror any pulled marks
+    HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
+    [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+  fi
 fi
 HABITS_TODAY_MD="$(cat "$HABITS_TRACK_FILE" 2>/dev/null || echo "MISSING")"
 REMIND_CMD="$(pbrain_reminders_cmd)"
+
+# Laptop-tracking opt-in state (the tracker is OFF by default). active = the
+# LaunchAgent has been installed; declined = the user said no (or disabled it),
+# recorded in the nudge-off marker; not_setup = never touched → nudge ONCE.
+LAPTOP_CMD="$_SCRIPT_DIR/laptop-tracking.sh"
+LAPTOP_PLIST="$HOME/Library/LaunchAgents/com.pbrain.tracker.plist"
+LAPTOP_NUDGE_OFF="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/tracker-nudge-off"
+if [[ -f "$LAPTOP_PLIST" ]]; then
+  LAPTOP_TRACKING_STATE=active
+elif [[ -f "$LAPTOP_NUDGE_OFF" ]]; then
+  LAPTOP_TRACKING_STATE=declined
+else
+  LAPTOP_TRACKING_STATE=not_setup
+fi
 
 cat <<PROMPT
 PLAN_MY_DAY_SESSION
@@ -452,6 +482,8 @@ weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 habits_setup_needed: $HABITS_SETUP_NEEDED
 habits_track_file: $HABITS_TRACK_FILE
 habits_track_created: $HABITS_TRACK_CREATED
+laptop_tracking_state: $LAPTOP_TRACKING_STATE
+laptop_tracking_cmd: $LAPTOP_CMD
 
 === GOALS PROFILE ===
 $PROFILE_JSON
@@ -518,6 +550,9 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
   - HABITS — read the HABITS block + \`habits_setup_needed\` above:
       - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits. If the user tells you to stop asking about habits, that's a GLOBAL standing preference (it spans commands) — capture it in \`prefs/_global.md\` via the self-improve loop, not a per-command pref.
       - If a HABITS rollup is present: note anything that needs attention today — a limit habit at/over cap (⚠️), or a high-priority build habit lagging / untouched this week — and factor it into the plan (e.g. slot a short block for a lagging build habit). One line, not a lecture.
+  - LAPTOP TRACKING — read \`laptop_tracking_state\` above. It's OFF by default:
+      - \`not_setup\` → mention ONCE, don't block — "Want me to track where your laptop time goes (which apps, which sites)? /laptop-tracking start turns on a quiet background tracker and you'll get a daily breakdown. Or say no and I won't ask again." If they say yes, tell them to run \`/laptop-tracking start\` (then \`/laptop-tracking access\` to grant per-browser domain access). If they say no / not now / stop asking, run \`bash "\$laptop_tracking_cmd" decline\` so this never nudges again. Skip the nudge entirely if the user's preferences say not to nag about it.
+      - \`active\` or \`declined\` → say NOTHING about laptop tracking.
 
 Step 1 — Show the user their lens, briefly:
   Print 2-3 lines max — their current_focus goals as bullets (or, if empty,
@@ -545,23 +580,66 @@ Step 1.5 — Anchor confirmation (its own message, before Step 2):
   Wait for their reply. Store the confirmed anchor times as the fixed skeleton for Step 4.
   Track which anchors differ from the profile's daily_anchors (or that the profile has no daily_anchors yet) — Step 5 will offer to save any changes.
 
-Step 2 — Ask all preference questions at once, in one message:
-  "Quick check-in before we plan today:
-  1. Energy/mood right now? (1–10 + one word)
-  2. Your 3 main intentional blocks today, in chronological order — **block 1**, **block 2**, **block 3**. Each can be anything: a work session, creative time, going outside to meet someone, a DJ set, a gym session — whatever makes this day feel deliberate. Give each a start time. Each block is at least {deep_work_block_min from profile} min. Example: 'block 1: Lettuce cron fix (16:00), block 2: DJ practice (19:00), block 3: dinner with client (21:00)'.
-  3. Any locked-in commitments not already covered above? (meetings, calls, exact-time appointments)
-  4. Roughly how many focused hours do you have today?
-  5. Anything to specifically AVOID today? (defaults to profile anti_patterns if you skip)
-  6. Mood for creative work? (yes / maybe / not today)
-  7. Anything to declutter or tidy? (inbox, desk, files, browser tabs — or 'none')"
+Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
+  list of questions in one message. Instead, have a short back-and-forth: lead with
+  the morning, then let each answer steer what you ask next, asking ONE thing (or a
+  tight, naturally-related pair) per turn and waiting for the reply before moving on.
+  Keep it warm and brief — a conversation, not a form.
 
-  DECLUTTER OVERRIDE: q7 is opt-out. If the user's standing preferences say not to ask about decluttering, DROP q7 entirely and renumber — don't ask it. Otherwise always include it. If the user says "stop asking me to declutter" this session, the self-improve check at the end will offer to save that as a preference.
+  HOW TO RUN IT:
+  - OPEN with the morning, always first: "Before we plan — what time did you wake up,
+    and what have you got done since?" Wait. This anchors the plan to the real day.
+  - THEN let it flow adaptively. Read each answer and ask the natural next thing. If an
+    answer already covers a later topic (e.g. they mention "I've got a 4pm call" or "no
+    energy today"), DON'T re-ask it — note it and move on. Skip anything already answered
+    in passing. The goal is to feel heard, not interrogated.
+  - You may bundle two closely-related things in one turn when it reads naturally
+    (e.g. energy + how the body feels), but never more than that — no walls of questions.
+
+  DATA POINTS TO COLLECT (these are the fields the rest of the plan needs — gather them
+  through the conversation in whatever order fits, not as a fixed script). Referenced
+  later as q1–q9:
+  - q1 — wake time today.
+  - q2 — what they've already done since waking (the important parts: work, meals,
+    exercise, errands). You'll backfill these as already-done (✓) rows.
+  - q3 — energy/mood right now (1–10 + a word).
+  - q4 — their TOP THINGS to get done today, named IN ORDER OF COMPLEXITY / PRIORITY
+    (most complex or highest-priority first). This is the Now / Next / Later input: usually
+    the top 3, but NOT capped — they can name 2, or 5. Ask for the things and their order,
+    NOT for block counts or start times — YOU allocate those in Step 4. A "thing" can be
+    any deliberate task: work, creative, seeing someone, a gym session. If they're unsure
+    of order, infer it from focus_today priority + how hard each sounds, and confirm.
+    On a low-energy day it's fine if they name only one thing or none.
+    (How these become blocks: Step 4 splits them across as many work blocks as the day
+    holds, giving the more complex / higher-priority things MORE blocks, tucking small
+    ones into a shared block, and weaving 30-min breaks between blocks — then shows the
+    proposed split for the user to adjust. You don't ask the user to place blocks or
+    breaks one by one.)
+  - q5 — any locked-in commitments not already mentioned (meetings, calls, appointments).
+  - q6 — roughly how many focused hours they have today.
+  - q7 — anything to specifically avoid today (defaults to profile anti_patterns if they
+    don't volunteer one).
+  - q8 — mood for creative work (yes / maybe / not today).
+  - q9 — anything to declutter or tidy (inbox, desk, files, tabs — or none).
+
+  q1 and q2 anchor the plan to the real day: use q1 as the table's start time (overriding
+  the profile/inferred wake time if it differs), and log each important thing from q2 as
+  a ✓ row in the "Today at a glance" table. These q-labels carry through to Steps 3–4.
+
+  Don't belabor it — if the user gives a lot up front, a couple of follow-ups is enough;
+  don't ask all nine just to complete the set. Once you have what you need to build a
+  real plan, move on.
+
+  DECLUTTER OVERRIDE: the declutter point (q9) is opt-out. If the user's standing
+  preferences say not to ask about decluttering, DON'T ask it at all. Otherwise work it in.
+  If the user says "stop asking me to declutter" this session, the self-improve check at
+  the end will offer to save that as a preference.
 
 Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relationships to decide if any touchpoints should be surfaced today. Rules of thumb (only suggest if the contact appears in personal_anchors.relationships):
     - parents (mom/dad) gap >= 6 days → suggest a call
     - siblings gap >= 14 days → suggest a quick check-in
     - friends gap >= 7 days → suggest reaching out to one named friend from the profile
-    - creative gap >= 4 days AND user said yes/maybe in q6 → suggest a creative block tied to their craft from personal_anchors.creative_pursuits
+    - creative gap >= 4 days AND user said yes/maybe in q8 → suggest a creative block tied to their craft from personal_anchors.creative_pursuits
     - walk gap >= 2 days AND "daily walk" or similar is in personal_anchors.health_habits → suggest one
   Phrase as suggestions, not commands. Skip anything the profile doesn't endorse.
 
@@ -570,24 +648,35 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   Time-range rules — ANCHOR-FIRST approach:
   Step 4a — Use the confirmed anchors from Step 1.5 as the fixed skeleton rows. Then layer on top:
-    1. CALENDAR EVENTS (from the TODAY'S CALENDAR block) and locked-in commitments from q3, plus explicit block times from q2 — these are absolute, never shift them. A calendar TIMED item must appear in the table at its exact time window with its title; tie it to a goal/category or "—". Two calendar items that overlap → keep both and flag the conflict to the user. Don't invent calendar items that aren't in the block.
+    1. CALENDAR EVENTS (from the TODAY'S CALENDAR block) and locked-in commitments from q5, plus explicit block times from q4 — these are absolute, never shift them. A calendar TIMED item must appear in the table at its exact time window with its title; tie it to a goal/category or "—". Two calendar items that overlap → keep both and flag the conflict to the user. Don't invent calendar items that aren't in the block.
     2. The confirmed anchors (workout, lunch, dinner, walk, bed) — these are non-negotiable skeleton rows, scheduled AROUND the fixed calendar/commitment rows above.
     Maximum 15–30 min variance from any confirmed anchor time. More than that is a plan error. Calendar items have ZERO variance — they sit exactly where the calendar says.
     The skeleton arc is: wake → workout → post-workout/lunch → blocks → dinner → walk → wind-down → bed. Fill gaps with transitions, breaks, meals.
-  Step 4b — CRITICAL: The table ALWAYS starts at wake_time (from the confirmed anchors or profile), NOT at current_time. current_time is only for surfacing reminders — it must NEVER influence where the plan begins. Even if /plan-my-day is run at 13:00 and wake_time is 07:30, the first table row is 07:30. The plan spans the full day: wake → bed. Place the 3 main blocks (from q2) at their stated times within that full-day arc. Each block must be at least deep_work_block_min wide (from the profile). Blocks can be any type: focused work, creative, social, outdoor — label them accurately in the table Tie column. Fill the gaps between blocks with meals, movement, transitions, wind-down. Cap total intentional block time at q4 hours.
+  Step 4b — CRITICAL: The table ALWAYS starts at the user's actual wake time today (q1), NOT at current_time. If q1 differs from the profile/inferred wake time, q1 wins. current_time is only for surfacing reminders — it must NEVER influence where the plan begins. Even if /plan-my-day is run at 13:00 and wake time is 07:30, the first table row is 07:30. The plan spans the full day: wake → bed. BACKFILL the morning: everything the user reported in q2 (what they've already done since waking) goes into the table as already-done rows at its real time, marked with a ✓ in the Action cell — so the table reflects the whole real day, not just what's ahead.
+
+  ALLOCATE BLOCKS FROM TASKS (q4): the user gave a priority/complexity-ordered list of things to do, NOT pre-formed blocks. YOU turn that list into blocks:
+    - Estimate each task's complexity/effort from its description + its focus_today priority + the order the user gave (earlier = more complex/important).
+    - Give the more complex / higher-priority tasks MORE blocks (a deep task → 2–3 blocks; a medium task → 1 block; a small/light task → tuck it into the tail of another block or let one block hold 2 small things). Block count is proportional to complexity, not 1-per-task.
+    - There is NO 3-block cap — lay in as many ~deep_work_block_min blocks as the wake→bed span and the q6 focused-hours ceiling allow. A full day might be 5–6 blocks; a low-energy day might be 1.
+    - Default placement rhythm: morning block(s), then post-lunch, then evening (the Now / Next / Later arc — most complex/important first while fresh). Honor any time the user explicitly stated for a task.
+    - Each block ≥ deep_work_block_min wide; total intentional block time ≤ q6 hours.
+    - Label each block with its task(s) and tie it to the right goal/category in the Tie column.
+    - PROPOSE the split and let the user adjust (Step 4d already shows the table for confirmation — make the block→task allocation visible there, e.g. "Lettuce got 2 blocks, Spotify tucked into Kickapp's tail — adjust?").
+  Step 4b-breaks — BREAK BLOCKS: between every pair of CONSECUTIVE work/intentional blocks, weave in a ~break_block_min break row (default 30 min; from working_style.break_block_min, fallback 30). Each break's activity is drawn from working_style.break_activities (e.g. short walk, a couple of games, prep + eat a light snack, stretch) — ROTATE through the menu so consecutive breaks differ; don't repeat the same one back-to-back. Tie column = Rest (or Rest / Eating for a snack break, Rest / Fit body for a walk). These breaks are part of how gaps between blocks get filled — so two adjacent blocks become: block → break → block. If working_style.break_activities is empty/absent, fall back to a generic "Break — short walk / rest, no screens" row. Don't force a break before the very first block of the day or after the last (those gaps are filled by meals/transitions/wind-down as usual). Respect anti_patterns: if a break activity is on the avoid list today (e.g. EAFC over cap), pick a different one from the menu.
   Step 4c — Use 24h times throughout (HH:MM–HH:MM). Never use "Morning / Midday / Evening" labels. Every row must have both a start and end time. Maximum 15–30 min deviation from learned/stated anchors unless the user explicitly set a different time.
+  - GAP-FREE & OVERLAP-FREE: the table must account for every span of time from wake to bed with NO gaps and NO overlaps. No two rows may overlap (one row ends exactly where/before the next begins); no unexplained empty time between rows. Fill any gap with an explicit rest / transition / meal / decompress row rather than leaving a hole. Already-done backfilled rows (from q2) follow the same rule — they tile cleanly alongside the planned rows. If a backfilled item and a planned anchor would overlap, adjust to remove the overlap and flag it to the user.
   - REQUIRED rows (every plan must include ALL of these if confirmed): wake/morning-start, workout, lunch, dinner, walk (if anchored), wind-down, bed. Missing any of these is a plan error.
-  - Include in the table: each named block (Block 1/2/3 with time windows), the fitness anchor, every meal window (breakfast if present, lunch, dinner), post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative, Social), or "—" if standalone.
+  - Include in the table: every named block (Block 1, Block 2, … however many, with time windows), the break blocks woven between them, the fitness anchor, every meal window (breakfast if present, lunch, dinner), post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative, Social), or "—" if standalone.
   - Keep the table tight — one line per action, no wrapped text. Time | Action | Tie.
-  - Named blocks (Block 1/2/3) should tie to a current_focus goal or profile category in the Tie column where possible.
+  - Named blocks (Block 1, Block 2, …) should tie to a current_focus goal or profile category in the Tie column where possible.
 
   ---
   type: plan
   date: $TODAY
   day_of_week: $DOW
   status: planned
-  energy: {1-10 from q1}
-  focus_today: [{current_focus goal names that any of the q2 top 3 items tie back to — empty array if none}]
+  energy: {1-10 from q3}
+  focus_today: [{current_focus goal names that any of the q4 blocks tie back to — empty array if none}]
   tags: []
   ---
 
@@ -614,14 +703,13 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
   ## Anchors
 
   - {fitness session — note the focus + RPE / duration from the fitness journal, not the time (which is in the table)}
-  - {each locked-in commitment from q3 with brief context, not the time — skip if none}
+  - {each locked-in commitment from q5 with brief context, not the time — skip if none}
 
   ## Blocks
 
-  - **Block 1 (HH:MM–HH:MM):** {q2 first block — type (work/creative/social/etc), concrete description + what "done" looks like. Time window must match the table row exactly. Minimum deep_work_block_min wide. Annotate "→ <goal/category>" if it ties back.}
-  - **Block 2 (HH:MM–HH:MM):** {q2 second block — same format. Can be any type.}
-  - **Block 3 (HH:MM–HH:MM):** {q2 third block — same format. Can be any type.}
-  - Cap on intentional block time today: {q4 number}h — ceiling, not floor.
+  - {ONE bullet per block the user named in q4 — however many (Block 1, Block 2, Block 3, Block 4, …). For each: **Block N (HH:MM–HH:MM):** type (work/creative/social/etc), concrete description + what "done" looks like. Time window must match the table row exactly. Minimum deep_work_block_min wide. Annotate "→ <goal/category>" if it ties back. Don't pad to a fixed count and don't cap at 3 — list exactly the blocks that exist today.}
+  - {The 30-min break blocks woven between them live in the table; you don't need a bullet each here, but you may add one line noting the break rhythm, e.g. "Each block is separated by a 30-min break (walk / 2 games / snack prep) — the rhythm, not a quota."}
+  - Cap on intentional block time today: {q6 number}h — ceiling, not floor.
 
   ## Breaks & movement
 
@@ -643,16 +731,16 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   ## Creative
 
-  - {if yes/maybe in q6, suggest 1 concrete block tied to a craft from profile.personal_anchors.creative_pursuits — "30-60 min music practice", "Draft one section after dinner", "Edit 10 photos", etc. If creative was already named as one of the 3 main blocks in q2, just reference it here — don't double-list.}
+  - {if yes/maybe in q8, suggest 1 concrete block tied to a craft from profile.personal_anchors.creative_pursuits — "30-60 min music practice", "Draft one section after dinner", "Edit 10 photos", etc. If creative was already named as one of the q4 tasks/blocks, just reference it here — don't double-list.}
   - {if not today, write "Skipping creative today — recharge"}
 
   ## Rest
 
-  - {1-2 lines on what NOT to do in the wind-down, tied to q5 and profile.anti_patterns. Times for wind-down and bed live in the table above.}
+  - {1-2 lines on what NOT to do in the wind-down, tied to q7 and profile.anti_patterns. Times for wind-down and bed live in the table above.}
 
   ## Avoiding today
 
-  - {union of q5 answers + profile.anti_patterns relevant for today, deduped — one bullet each}
+  - {union of q7 answers + profile.anti_patterns relevant for today, deduped — one bullet each}
 
   ## Notes
 
@@ -660,7 +748,7 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   ## Declutter
 
-  - {q7: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q7 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.  Note: q7 here corresponds to the new q7 (declutter) in Step 2.}
+  - {q9: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q9 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.}
 
   ---
 
@@ -687,7 +775,7 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
   -
 
 Step 4d — Show the full **Today at a glance** table to the user and ask for confirmation:
-  Show the table, then ask: "Does this look right? You can change any times, swap blocks, add or remove rows — just tell me what to adjust. Say 'looks good' to save."
+  Show the table, then briefly name how you split the tasks into blocks (e.g. "Lettuce got 2 blocks since it's the deep one, Spotify's tucked into Kickapp's tail, 30-min breaks between each"), then ask: "Does this look right? You can re-split the blocks, change any times, swap or drop rows — just tell me what to adjust. Say 'looks good' to save."
   Wait for their response. Apply any edits they request (time changes, new rows, renamed actions, dropped rows). Repeat the updated table if changes were made.
   Once the user says it looks good (or gives no objections), write the complete plan — table + all sections — to $OUT_FILE.
 

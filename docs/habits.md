@@ -4,15 +4,27 @@ Track your habits over time — each with its **own** fulfillment criteria. Ther
 
 **Two layers.** Definitions live in `Habits Profile.md` (the *what*). The day-to-day log lives in **dated markdown files** — `life/habit-tracking/<date>.md` — exactly like `/journal` and `/fitness-journal`. Those files are what you work with. A local SQLite DB is a *derived* analysis store, synced from the markdown, that the history/rollup/weekly-review reads. You edit markdown; the DB stays in sync underneath.
 
-## The criteria model
+## Two axes: schedule + scoring
 
-Each habit carries three fields that say how it's evaluated:
+A habit is defined by **two independent things**:
 
-- **schedule_type** — `daily` (every day, e.g. brush at night, 4L water), `weekly` (N times a week, e.g. nail cut twice), or `monthly` (N times a month, e.g. a long run 5×).
-- **direction** — `at_least` (a habit you're building) or `at_most` (a habit you're capping, e.g. alcohol).
-- **target_count** — how many times within the period. For a plain daily habit this is just 1 (every day).
+**1. Schedule (when it happens).** Every habit carries a `schedule` that says which days it's due — the same thing that decides when a linked reminder fires. Four kinds:
 
-Plus a **priority** (low / medium / high) and an optional short note.
+- **daily** — every day.
+- **weekdays** — specific weekdays, e.g. `mon,wed,fri`. "N times a week" is entered as a frequency + a start day and **resolved into spaced days** (2×/week from Monday → Mon + Thu; 3×/week → Mon/Wed/Fri).
+- **interval** — every N days from a start date (e.g. every 15 days).
+- **monthly** — specific calendar days of the month, e.g. the 1st (or N×/month spaced from a start date).
+
+**2. Direction (how it's scored).** Independent of the schedule:
+
+- **at_least** — a habit you're **building** (eat clean, exercise). Done on its due days = good.
+- **at_most** — a habit you're **capping** (no smoking, alcohol ≤ 2). A mark means you lapsed.
+
+Plus **target_count** (the cap for a limit habit, or per-period count), a **priority** (low / medium / high), and an optional note.
+
+**Scoring is schedule-aware.** A habit with a fixed schedule is only *expected* on its due days — a Mon/Wed/Fri habit is never "missed" on a Tuesday, and its streak counts only due days. (A legacy "N times a week, any days" habit with no fixed schedule stays count-based: "did you do it N times this week.")
+
+> The old `schedule_type` (daily/weekly/monthly) field is still written for compatibility, but the `schedule` block is the source of truth for *when* a habit occurs.
 
 ### Measured habits (quantity tracking)
 
@@ -23,15 +35,16 @@ A habit can optionally carry a **measure** — a `unit` and a `measure_target` �
 
 When a habit is measured, fulfillment checks the **summed amount over its period** against the target (`2.5/4 L`, `12/20 km this week`) instead of done/not-done — and `target_count` is then irrelevant. Most habits are genuinely binary; only set a measure when the user frames the habit as a quantity. You record the day's amount with `--amount` (it lands in the Count cell of the tracking file and the `amount` column in the DB).
 
-| Example | schedule_type | direction | target_count | unit | measure_target |
-|---|---|---|---|---|---|
-| Brush at night | daily | at_least | 1 | — | — |
-| Drink 4L water | daily | at_least | — | L | 4 |
-| Run 20 km/week | weekly | at_least | — | km | 20 |
-| Nail cut | weekly | at_least | 2 | — | — |
-| Long run | monthly | at_least | 5 | — | — |
-| Alcohol | weekly | at_most | 2 | — | — |
-| Sugar ≤30 g/day | daily | at_most | — | g | 30 |
+| Example | schedule | direction | notes |
+|---|---|---|---|
+| Brush at night | daily | at_least | every day |
+| Drink 4L water | daily | at_least | measured: 4 L |
+| Gym | weekdays `mon,wed,fri` | at_least | fixed days |
+| Run 3×/week | weekdays (from `--times-per-week 3`) | at_least | spaced → Mon/Wed/Fri |
+| Deep clean | interval `every 15 days` | at_least | from a start date |
+| Pay rent | monthly `the 1st` | at_least | calendar date |
+| No smoking | daily | at_most | a daily check-in cap |
+| Alcohol ≤2/week | weekly (cap) | at_most | cap = 2 |
 
 ## First-run setup
 
@@ -49,14 +62,19 @@ The structured data lives in a fenced ` ```json ` block. Each habit has a **stab
 {
   "created": "2026-06-03",
   "habits": [
-    { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily",  "direction": "at_least", "target_count": 1, "priority": "high",   "archived": false, "notes": "" },
-    { "id": "water",          "name": "Water",          "schedule_type": "daily",  "direction": "at_least", "target_count": null, "unit": "L", "measure_target": 4, "priority": "high", "archived": false, "notes": "" },
-    { "id": "alcohol",        "name": "Alcohol",        "schedule_type": "weekly", "direction": "at_most",  "target_count": 2, "priority": "medium", "archived": false, "notes": "" }
+    { "id": "brush-at-night", "name": "Brush at night", "direction": "at_least",
+      "schedule": { "type": "daily" }, "priority": "high", "archived": false, "notes": "" },
+    { "id": "gym", "name": "Gym", "direction": "at_least",
+      "schedule": { "type": "weekdays", "days": ["mon","wed","fri"] }, "priority": "high", "archived": false },
+    { "id": "water", "name": "Water", "direction": "at_least",
+      "schedule": { "type": "daily" }, "unit": "L", "measure_target": 4, "priority": "high", "archived": false },
+    { "id": "alcohol", "name": "Alcohol", "direction": "at_most",
+      "schedule": { "type": "weekdays", "days": ["mon"] }, "target_count": 2, "priority": "medium", "archived": false }
   ]
 }
 ```
 
-(`unit` + `measure_target` are the optional measure; omit them — or leave `measure_target` null — for a plain yes/no habit.)
+(`unit` + `measure_target` are the optional measure; omit them for a plain yes/no habit. `schedule_type`/`target_count` may also appear — written for compatibility, derived from the `schedule`.)
 
 Don't hand-edit ids — the `add`/`edit`/`archive` subcommands manage them and keep the JSON valid.
 
@@ -99,12 +117,28 @@ You refer to the markdown files; the subcommands that need history (rollup, stat
 Running `/habits` (with a profile in place) syncs your recent files, then shows the **top 20 by priority**, each against its own criteria:
 
 - daily: done today **✅** / not yet **⏳**, plus this-week N/7 and your streak,
-- weekly / monthly: progress like `2/2 this week ✅` or `1/2 this week ⏳`,
+- fixed-schedule (weekdays / interval / monthly): on a due day, done **✅** / not yet **⏳**; on an **off day**, `off today (next <date>)` — never a miss — plus due-day progress like `1/3 this week` and a due-day streak,
+- floating "N times a week/month, any days": progress like `2/2 this week ✅` or `1/2 this week ⏳`,
 - measured: amount-based progress with the unit, like `2.5/4 L today ⏳` or `12/20 km this week`,
 - limit habits: **⚠️ OVER** or `— at cap`,
-- last-done date; a `+N more` line if you track more than 20.
+- the head shows each habit's schedule (e.g. `Gym (Mon/Wed/Fri, high)`); last-done date; a `+N more` line if you track more than 20.
 
 Then it offers to open today's tracker, mark a habit, add/edit/archive one, or show history.
+
+A linked habit (see below) also shows a **🔔 HH:MM** marker.
+
+## Linking to Apple Reminders
+
+**Any habit** can opt into an Apple reminder — build or limit. The reminder is just a **notification and a familiar checkbox** — pbrain still owns the habit data and the score. A linked habit gets **one per-day "one-shot" reminder** (not an Apple-recurring one): pbrain creates the reminder on the days the habit's **schedule** is due, and keeps it in **two-way sync** with the habit.
+
+- **The schedule owns the days.** You don't tell the link which days to fire — the habit's `schedule` does. A daily habit fires every day; a Mon/Wed/Fri habit fires those days; an "every 15 days" habit fires on its cadence. To change the days, edit the habit's schedule, not the reminder.
+- **Two-way sync.** Check the reminder off in the Apple Reminders app → the habit is marked done here. Mark the habit done here (any way) → that day's reminder is completed. Whichever you touch, the other follows.
+- **Opt-in, per habit.** Linking is offered when you first build the profile and when you add a habit; otherwise it happens only when you ask. Say no once and it's recorded — it won't re-ask. The dashboard does **not** nag.
+- **The link is an intent.** The habit stores `{"state":"linked","time":"HH:MM"}` (or `{"state":"declined"}`); the per-day reminder ids live in the DB (`habit_reminders`), not the profile. A linked habit shows `🔔 HH:MM` in the rollup (the days are visible in the schedule shown in its head). The first link triggers the one-time macOS **Reminders** permission (separate from Calendar — granted via `/remind access`).
+- **When reminders get created/synced.** `/plan-my-day` (and `/habits track`) create the day's one-shot for each linked habit *that's due that day* and pull anything you already ticked off; `/end-of-day` runs the sync once more to reconcile the day. A one-shot only exists on days pbrain runs to create it — fine, since the tracker is built every morning.
+- **Archiving** a linked habit offers to cancel its pending reminders too.
+
+Managed by `reminder --id <id> (--link --time HH:MM | --decline | --unlink [--cancel])`, with `reminders-ensure [--date]` (schedule-gated creation) / `reminders-sync [--date]` driving creation and two-way sync. Reminders only — a Calendar event has no "done" state.
 
 ## Subcommands
 
@@ -118,9 +152,10 @@ Then it offers to open today's tracker, mark a habit, add/edit/archive one, or s
 Script-level API (used by the auto-marking, surfacing, and the dashboard's offers):
 `mark --name "X" --date YYYY-MM-DD [--count N] [--amount X] [--note "…"]` (the primary write path → ticks the md; `--amount` for measured habits),
 `track [--date …]`, `sync [--days N] [--date YYYY-MM-DD]` (mirror md → DB; `--date` targets a specific end date for the sync window), `consolidate [--date …]` (sync + prune, run by `/end-of-day`), `refresh [--date …] [--days N]` (recompute the `Progress` column from the DB without touching marks — one day or the last N, oldest→newest; for backfilling history after a formula or data change),
-`add --name "X" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority …] [--notes "…"]`,
-`edit --id <id> [--name …] [--type …] [--direction …] [--target N] [--unit …] [--measure-target N] [--priority …] [--notes …]` (pass `--measure-target ""` to clear a measure),
-`archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive; takes `--amount` too).
+`add --name "X" --direction at_least|at_most --schedule daily|weekdays|interval|monthly [schedule args] [--unit "L"] [--measure-target N] [--target N] [--priority …] [--notes "…"]` — schedule args by kind: `weekdays` → `--days mon,wed,fri` or `--times-per-week N [--start-day mon]`; `interval` → `--every-days N [--start-date YYYY-MM-DD]`; `monthly` → `--days-of-month 1,16` or `--times-per-month N [--start-dom D]`. (Legacy `--type daily|weekly|monthly [--target N]` still works — it maps to a schedule.)
+`edit --id <id> [--name …] [--direction …] [--schedule … + its schedule args] [--target N] [--unit …] [--measure-target N] [--priority …] [--notes …]` (passing any schedule flag rebuilds the schedule; `--measure-target ""` clears a measure),
+`archive --id <id>`, `rollup [--date …]`, `status [--date …]`, `log` (low-level direct-to-DB primitive; takes `--amount` too),
+`reminder --id <id> (--link --time HH:MM | --decline | --unlink [--cancel])` (manage a habit's Apple-Reminder opt-in — the schedule decides the days), `reminders-pending` (undecided habits), `reminders-ensure [--date]` (create that day's one-shot reminders for linked habits due that day, idempotent), `reminders-sync [--date]` (reconcile linked habits ↔ their reminders both directions).
 
 ## Defaults and overrides
 

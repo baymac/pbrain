@@ -12,3 +12,7 @@
 pbrain-notify.app/
 # Promo video raw renders — build artifacts; compressed copy lives in docs/media/
 promo-video/renders/
+
+# Python bytecode cache (lib/habit_schedule.py etc.)
+__pycache__/
+*.pyc

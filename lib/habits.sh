@@ -107,9 +107,18 @@ pbrain_habits_status() {
   profile="$(pbrain_habits_profile_file)"
   db="$PBRAIN_DB_FILE"
   [[ -f "$profile" ]] || { printf '%s\n' "{}"; return 0; }
-  python3 - "$profile" "$db" "$today" <<'PYEOF' 2>/dev/null || printf '%s\n' "{}"
-import json, re, sys, sqlite3, datetime, os
-profile, db, today_s = sys.argv[1], sys.argv[2], sys.argv[3]
+  local libdir; libdir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  python3 - "$profile" "$db" "$today" "$libdir" <<'PYEOF' 2>/dev/null || printf '%s\n' "{}"
+import json, re, sys, sqlite3, datetime, os, calendar
+profile, db, today_s, libdir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, libdir)
+try:
+    from habit_schedule import derive_schedule, is_due, schedule_label
+except Exception:
+    # Degrade gracefully if the engine isn't importable: treat everything daily.
+    def derive_schedule(h): return {"type": "daily"}
+    def is_due(s, d): return True
+    def schedule_label(s): return "daily"
 
 try:
     with open(profile) as fh:
@@ -156,9 +165,35 @@ def norm(h):
     except (TypeError, ValueError):
         mt = None
     measured = mt is not None
+    # Optional Apple-Reminder link — an INTENT, not a stored reminder id. Three
+    # states: "linked" (pbrain creates a per-day one-shot at `time` and keeps it
+    # in two-way sync — the per-day reminder ids live in the DB's habit_reminders
+    # table, NOT here), "declined" (user said no — don't re-offer), or "none"
+    # (absent → undecided). Only daily build (at_least) habits are ever offered a
+    # reminder; the rest read as "none" and are simply never surfaced as pending.
+    rem = h.get("reminder")
+    rstate = "none"; rtime = ""
+    if isinstance(rem, dict):
+        rs = str(rem.get("state", "")).strip().lower()
+        if rs in ("linked", "declined", "none"):
+            rstate = rs
+        rtime = str(rem.get("time", "")).strip()
+        if rstate == "linked" and not rtime:
+            rstate = "none"   # linked with no time → treat as undecided
+    reminder = {"state": rstate, "time": rtime}
+    # Schedule (axis 1) — derived non-destructively from the explicit `schedule`
+    # block or legacy fields. Drives is_due (which days count). Scoring is only
+    # schedule-AWARE when the habit carries an EXPLICIT `schedule` (a fixed plan
+    # of days); a legacy habit with no schedule block stays count-based ("N times
+    # this period, any days"), since a synthesized schedule is just for reminders.
+    sched = derive_schedule(h)
+    has_schedule = bool(isinstance(h.get("schedule"), dict) and h.get("schedule", {}).get("type"))
     return {"id": hid, "name": name, "schedule_type": st, "direction": direction,
             "target_count": tc, "priority": prio, "unit": unit,
             "measure_target": mt, "measured": measured,
+            "schedule": sched, "schedule_label": schedule_label(sched),
+            "has_schedule": has_schedule,
+            "reminder": reminder, "reminder_eligible": True,
             "archived": bool(h.get("archived")), "notes": str(h.get("notes", "")).strip()}
 
 habits = [norm(h) for h in (data.get("habits") or []) if str(h.get("name", "")).strip()]
@@ -168,6 +203,7 @@ today = datetime.date.fromisoformat(today_s)
 week_start = today - datetime.timedelta(days=today.weekday())     # Monday
 week_end = week_start + datetime.timedelta(days=6)
 month_start = today.replace(day=1)
+month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
 lookback = today - datetime.timedelta(days=400)                   # bounds the streak scan
 
 # Single windowed query for every active habit; aggregate per-habit in python.
@@ -193,17 +229,42 @@ def in_range(dates, start, end, idx=0):
     s, e = start.isoformat(), end.isoformat()
     return sum(v[idx] for d, v in dates.items() if s <= d <= e)
 
-def streak(dates):
-    if not dates:
-        return 0
-    cur = today
-    if cur.isoformat() not in dates:        # not done today → streak runs up to yesterday
-        cur = cur - datetime.timedelta(days=1)
-    n = 0
-    while cur.isoformat() in dates:
-        n += 1
-        cur = cur - datetime.timedelta(days=1)
+ONE = datetime.timedelta(days=1)
+
+def due_dates_in(sched, start, end):
+    """ISO dates in [start, end] on which the habit's schedule is due."""
+    out, d = [], start
+    while d <= end:
+        if is_due(sched, d.isoformat()):
+            out.append(d.isoformat())
+        d += ONE
+    return out
+
+def due_streak(sched, dates, today):
+    """Consecutive DUE days (most recent backward) that were done. A non-due day
+    is skipped (never breaks the streak); today being due-but-not-yet-done does
+    not break it either. So a Mon/Wed/Fri habit isn't 'missed' on a Tuesday."""
+    n, d, limit = 0, today, today - datetime.timedelta(days=400)
+    while d >= limit:
+        di = d.isoformat()
+        if is_due(sched, di):
+            if di in dates and dates[di][0] > 0:
+                n += 1
+            elif di == today.isoformat():
+                pass   # today due but not done yet — don't break
+            else:
+                break
+        d -= ONE
     return n
+
+def next_due(sched, today):
+    """The next date (today or later) the schedule is due, or None within a year."""
+    d, limit = today, today + datetime.timedelta(days=370)
+    while d <= limit:
+        if is_due(sched, d.isoformat()):
+            return d.isoformat()
+        d += ONE
+    return None
 
 prio_rank = {"high": 0, "medium": 1, "low": 2}
 out = []
@@ -218,28 +279,61 @@ for h in active:
     month_amount = in_range(dates, month_start, today, 1)
     last = max(dates) if dates else None
     st, tc, direction = h["schedule_type"], h["target_count"], h["direction"]
-    if h["measured"]:
-        # amount-based: progress is the summed measure over the period vs target
-        amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}[st]
-        used, target = amt, h["measure_target"]
-    elif st == "daily":
-        used, target = today_count, (tc if tc else 1)
-    elif st == "weekly":
-        used, target = week_count, tc
-    else:
-        used, target = month_count, tc
+    sched = h["schedule"]
+    sk = sched.get("type", "daily")
+    due_today = bool(is_due(sched, today.isoformat()))
+    nd = today.isoformat() if due_today else next_due(sched, today)
     fulfilled = over = at_cap = False
-    if direction == "at_most":
+    streak_val = 0
+    if h["measured"]:
+        # amount-based: summed measure over the (legacy-period) window vs target
+        amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}.get(st, today_amount)
+        used, target = amt, h["measure_target"]
+        if direction == "at_most":
+            if target is not None:
+                over, at_cap, fulfilled = used > target, used == target, used <= target
+        else:
+            fulfilled = (used >= target) if target is not None else (used > 0)
+            if sk == "daily":
+                streak_val = due_streak(sched, dates, today)
+    elif direction == "at_most":
+        # cap / limit — count ALL lapses in the period (not schedule-filtered)
+        used = {"daily": today_count, "weekly": week_count, "monthly": month_count}.get(st, today_count)
+        target = tc
         if target is not None:
             over, at_cap, fulfilled = used > target, used == target, used <= target
+    elif h["has_schedule"] and sk in ("weekdays", "interval", "monthly"):
+        # build habit with an EXPLICIT fixed schedule → SCHEDULE-AWARE: progress
+        # over DUE occurrences in the period (week for weekdays, month for
+        # interval/monthly). A non-due day is never counted against the habit;
+        # the streak walks due days only (so an off-day never breaks it).
+        p_start, p_end = (month_start, month_end) if sk in ("monthly", "interval") else (week_start, week_end)
+        due_in_period = due_dates_in(sched, p_start, p_end)
+        scheduled = len(due_in_period)
+        done_due = sum(1 for di in due_in_period if (dates.get(di, [0])[0] or 0) > 0)
+        used, target = done_due, (scheduled if scheduled else 1)
+        fulfilled = (done_due >= scheduled) if scheduled else (done_due > 0)
+        streak_val = due_streak(sched, dates, today)
+    elif st == "daily":
+        # daily build (explicit or legacy) → today-based, with a due-day streak
+        used, target = today_count, (tc if tc else 1)
+        fulfilled = (used >= target)
+        streak_val = due_streak(sched, dates, today)
+    elif st == "weekly":
+        # legacy floating "N times a week, any days" → count-based (old behavior)
+        used, target = week_count, tc
+        fulfilled = (used >= target) if target is not None else (used > 0)
     else:
+        # legacy floating "N times a month, any days" → count-based (old behavior)
+        used, target = month_count, tc
         fulfilled = (used >= target) if target is not None else (used > 0)
     row = dict(h)
     row.update({"today_count": today_count, "week_count": week_count,
                 "month_count": month_count, "today_amount": today_amount,
                 "week_amount": week_amount, "month_amount": month_amount,
                 "period_used": used, "period_target": target,
-                "last_done": last, "streak": streak(dates) if st == "daily" else 0,
+                "due_today": due_today, "next_due": nd,
+                "last_done": last, "streak": streak_val,
                 "fulfilled": fulfilled, "over": over, "at_cap": at_cap})
     out.append(row)
 
@@ -280,39 +374,60 @@ def fmt(n):
 
 lines = []
 for h in habits[:LIMIT]:
-    st, direction = h["schedule_type"], h["direction"]
+    direction = h["direction"]
+    st = h["schedule_type"]
+    sk = (h.get("schedule") or {}).get("type", "daily")
     used, target = h["period_used"], h["period_target"]
     tgt = fmt(target) if target is not None else "—"
     tag = "·limit" if direction == "at_most" else ""
-    head = f"- {h['name']} ({st}{tag}, {h['priority']}): "
+    head = f"- {h['name']} ({h.get('schedule_label', 'daily')}{tag}, {h['priority']}): "
     if h["measured"]:
         # amount-based: "2.5/4 L today ✅" — period word per schedule_type
-        period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}[st]
+        period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}.get(st, "today")
         unit = (" " + h["unit"]) if h["unit"] else ""
         if direction == "at_most":
             flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
         else:
             flag = " ✅" if h["fulfilled"] else " ⏳"
         body = f"{fmt(used)}/{tgt}{unit} {period_word}{flag}"
-        if st == "daily" and direction == "at_least" and h["streak"] > 0:
+        if direction == "at_least" and h["streak"] > 0:
+            body += f" · streak {h['streak']}"
+    elif direction == "at_most":
+        # cap / limit — count of lapses vs cap over the period
+        if st == "daily":
+            body = f"{fmt(h['today_count'])} today" + (" — OVER ⚠️" if h["over"] else "")
+        else:
+            period_word = "this week" if st == "weekly" else "this month"
+            flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
+            body = f"{fmt(used)}/{tgt} {period_word}{flag}"
+    elif h.get("has_schedule") and sk in ("weekdays", "interval", "monthly"):
+        # explicit fixed schedule — show today's due-status, then period progress.
+        # On a due day: done/not-yet; on an off day: say so, never a miss.
+        if h["due_today"]:
+            today_line = "done today ✅" if h["today_count"] > 0 else "not yet today ⏳"
+        else:
+            nd = h.get("next_due")
+            today_line = "off today" + (f" (next {nd})" if nd else "")
+        period_word = "this month" if sk in ("monthly", "interval") else "this week"
+        body = today_line + f" · {fmt(used)}/{tgt} {period_word}"
+        if h["streak"] > 0:
             body += f" · streak {h['streak']}"
     elif st == "daily":
-        if direction == "at_most":
-            body = f"{h['today_count']} today" + (" — OVER ⚠️" if h["over"] else "")
-        else:
-            body = ("done today ✅" if h["today_count"] > 0 else "not yet today ⏳")
-            body += f" · {h['week_count']}/7 this week"
-            if h["streak"] > 0:
-                body += f" · streak {h['streak']}"
+        # daily build (legacy or explicit-daily) — today-based with a streak
+        body = ("done today ✅" if h["today_count"] > 0 else "not yet today ⏳")
+        body += f" · {fmt(h['week_count'])}/7 this week"
+        if h["streak"] > 0:
+            body += f" · streak {h['streak']}"
     else:
+        # legacy floating "N times a week/month, any days" — period count
         period_word = "this week" if st == "weekly" else "this month"
-        if direction == "at_most":
-            flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
-        else:
-            flag = " ✅" if h["fulfilled"] else " ⏳"
+        flag = " ✅" if h["fulfilled"] else " ⏳"
         body = f"{fmt(used)}/{tgt} {period_word}{flag}"
     last = h["last_done"]
     body += f" · last {last}" if last else " · never logged"
+    rem = h.get("reminder") or {}
+    if rem.get("state") == "linked":
+        body += f" · 🔔 {rem.get('time') or 'on'}"
     lines.append(head + body)
 if len(habits) > LIMIT:
     lines.append(f"… +{len(habits) - LIMIT} more (showing top {LIMIT} by priority)")
@@ -398,10 +513,12 @@ def load_habits(profile):
             mt = float(mt) if mt not in (None, "") else None
         except (TypeError, ValueError):
             mt = None
+        sc = h.get("scoring")
         out.append({"id": str(h.get("id", "")).strip() or slugify(name), "name": name,
                     "schedule_type": st, "direction": direction, "target_count": tc,
                     "priority": str(h.get("priority", "medium")).strip().lower(),
                     "unit": unit, "measure_target": mt, "measured": mt is not None,
+                    "scoring": sc if isinstance(sc, dict) else None,
                     "archived": bool(h.get("archived"))})
     return out
 
@@ -410,6 +527,47 @@ def fmtnum(n):
     if isinstance(n, float) and n.is_integer():
         return str(int(n))
     return str(n)
+
+def _to_int(s):
+    """Parse an optional integer arg; '' / None / junk -> None."""
+    try:
+        s = str(s).strip()
+        return int(float(s)) if s != "" else None
+    except (TypeError, ValueError):
+        return None
+
+def score_from_spec(spec, good=None, bad=None, slips=None):
+    """Generic, deterministic habit-score evaluator. The habit's profile owns the
+    rule (spec); the caller supplies only raw classification counts. Returns a
+    float score, or None when the spec is unusable / no inputs were given.
+
+    Supported spec type "slip_ladder":
+      slips = given --slips, else max(bad, good_target - good)  (clamped >= 0)
+      score = ladder[min(slips, len(ladder)-1)]
+    'good_target' is optional (0 = no good-count requirement -> pure bad ladder).
+    Nothing here is habit-specific: what counts as a good/bad unit is the
+    caller's (model's) classification, not the code's."""
+    if not isinstance(spec, dict):
+        return None
+    if str(spec.get("type", "slip_ladder")).strip() != "slip_ladder":
+        return None
+    ladder = spec.get("ladder")
+    if not isinstance(ladder, list) or not ladder:
+        return None
+    if slips is not None:
+        n = slips
+    elif good is None and bad is None:
+        return None  # no inputs -> caller falls back to its normal path
+    else:
+        gt = _to_int(spec.get("good_target")) or 0
+        deficit = max(0, gt - (good or 0)) if gt else 0
+        n = max(bad or 0, deficit)
+    n = max(0, int(n))
+    idx = min(n, len(ladder) - 1)
+    try:
+        return float(ladder[idx])
+    except (TypeError, ValueError, IndexError):
+        return None
 
 def criteria_str(h):
     st = h["schedule_type"]
@@ -591,6 +749,10 @@ if op == "init":
 
 elif op == "mark":
     profile, db, f, date, name, count, note, amount, now = sys.argv[2:11]
+    # Optional trailing classification inputs for scored habits (backward-compatible).
+    good  = sys.argv[11] if len(sys.argv) > 11 else ""
+    bad   = sys.argv[12] if len(sys.argv) > 12 else ""
+    slips = sys.argv[13] if len(sys.argv) > 13 else ""
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -598,6 +760,13 @@ elif op == "mark":
     if not h:
         print(f"not a tracked habit: {name.strip()} — add it with /habits (not marked)")
         sys.exit(0)
+    # Scored habit: when the caller supplied classification counts, the score is
+    # computed from the habit's profile rule — the caller never picks the number.
+    g, b, sl = _to_int(good), _to_int(bad), _to_int(slips)
+    if h.get("scoring") and (g is not None or b is not None or sl is not None):
+        val = score_from_spec(h["scoring"], good=g, bad=b, slips=sl)
+        if val is not None:
+            amount = fmtnum(val)  # feed the measured-amount path below
     con = sqlite3.connect(db) if os.path.exists(db) else None
     if not os.path.exists(f):
         open(f, "w").write(front(date) + "\n".join([HEADER, SEP] + [
@@ -644,6 +813,22 @@ elif op == "mark":
         con.close()
     open(f, "w").write(render(pre, rows, post))
     print(f"marked: {h['name']} on {date}")
+
+elif op == "score":
+    # Pure deterministic evaluator — compute a habit's score from its profile
+    # rule + caller-supplied classification counts. No DB / md write. Prints the
+    # numeric score (blank if the habit has no usable scoring spec).
+    profile, name = sys.argv[2:4]
+    good  = sys.argv[4] if len(sys.argv) > 4 else ""
+    bad   = sys.argv[5] if len(sys.argv) > 5 else ""
+    slips = sys.argv[6] if len(sys.argv) > 6 else ""
+    habits = load_habits(profile)
+    active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
+    byid = {h["id"]: h for h in habits if not h["archived"]}
+    h = active.get(name.strip().lower()) or byid.get(name.strip().lower())
+    val = score_from_spec(h.get("scoring"), good=_to_int(good), bad=_to_int(bad),
+                          slips=_to_int(slips)) if h else None
+    print(fmtnum(val) if val is not None else "")
 
 elif op == "sync":
     profile, db, trackdir, end_date, days, now = sys.argv[2:8]
@@ -721,14 +906,23 @@ pbrain_habit_track_init() {
 # Mark a habit done in the date's tracking file (creating it if needed). Rejects
 # names that aren't a tracked habit. count/note/amount optional. For a measured
 # habit (one with a unit + target) the amount is what's recorded.
-pbrain_habit_mark() {  # <date> <name> [count] [note] [amount]
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips]
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   file="$(pbrain_habit_track_file "$date")"
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
-    "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')"
+    "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')" \
+    "${6:-}" "${7:-}" "${8:-}"
+}
+
+# Compute (without writing) a scored habit's score from its profile rule + raw
+# classification counts. Echoes the numeric score, or "" if not a scored habit.
+pbrain_habit_score() {  # <name> [good] [bad] [slips]
+  [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
+  _pbrain_habit_track_py score "$(pbrain_habits_profile_file)" \
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by
@@ -892,12 +1086,13 @@ for h in data.get("habits") or []:
         direction = "at_most" if str(h.get("kind", "")).strip().lower() == "limit" else "at_least"
     kind = "limit" if direction == "at_most" else "build"
     mt = h.get("measure_target")
+    tags = [kind]
     if mt not in (None, ""):
         unit = str(h.get("unit", "")).strip()
-        tag = "measured: " + str(mt) + ((" " + unit) if unit else "")
-        out.append(f"{n} [{kind}, {tag}]")
-    else:
-        out.append(f"{n} [{kind}]")
+        tags.append("measured: " + str(mt) + ((" " + unit) if unit else ""))
+    if isinstance(h.get("scoring"), dict):
+        tags.append("scored")
+    out.append(f"{n} [" + ", ".join(tags) + "]")
 print(" | ".join(out))
 ' 2>/dev/null || true)"
   [[ -n "$names" ]] || return 0
@@ -916,6 +1111,14 @@ print(" | ".join(out))
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact habit name>\" --date $today [--count N] [--amount X] [--note \"...\"]"
   printf '%s\n' "For a habit tagged [measured: …] above, pass the quantity with --amount (e.g."
   printf '%s\n' "--amount 2.5 for 2.5 L of water); plain habits need no count/amount at all."
+  printf '%s\n' ""
+  printf '%s\n' "For a habit tagged [scored] above, DO NOT choose the amount/score yourself —"
+  printf '%s\n' "the number is computed deterministically from the habit's rule in your"
+  printf '%s\n' "profile. Your ONLY job is to classify and pass the raw counts:"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today --good <N> --bad <N> [--note \"...\"]"
+  printf '%s\n' "where --good = qualifying units (e.g. clean home-cooked meals) and --bad ="
+  printf '%s\n' "slip units (e.g. outside/junk meals). habits.sh applies the profile formula."
+  printf '%s\n' "(If you've already reduced it to one slip count, pass --slips <N> instead.)"
   printf '%s\n' ""
   printf '%s\n' "[limit] habits work INVERSELY — they are caps on something to avoid (e.g. No"
   printf '%s\n' "smoking, No drinking, No masturbation, TV under 1hr). MARK a [limit] habit"

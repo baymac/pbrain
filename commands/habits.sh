@@ -37,9 +37,36 @@ set -euo pipefail
 #   habits.sh list                   list configured habits
 #   habits.sh track [--date YYYY-MM-DD]  init today's tracking md from profile
 #   habits.sh mark --name "X" [--date YYYY-MM-DD] [--count N] [--amount N] [--note "..."]
+#                  [--good N] [--bad N] [--slips N]   (scored habits: pass raw counts,
+#                  the score is computed from the habit's profile rule — see `score`)
+#   habits.sh score --name "X" (--good N --bad N | --slips N)   compute (no write) a
+#                  scored habit's score from its profile rule + classification counts
 #   habits.sh sync [--days N] [--date YYYY-MM-DD]  mirror md → DB (default 7 days)
 #   habits.sh consolidate [--date YYYY-MM-DD]  sync md → DB then prune unchecked rows
 #   habits.sh refresh [--date YYYY-MM-DD] [--days N]  recompute Progress column from DB
+#   habits.sh reminder --id <id> (--link --time HH:MM [--days mon,wed,fri] | --decline | --unlink [--cancel])
+#                  link a build habit to a per-day Apple Reminder (--days = fixed weekdays)
+#   habits.sh reminders-pending          daily build habits with no reminder decision yet
+#   habits.sh reminders-ensure [--date]  create today's one-shot reminders for linked habits (idempotent)
+#   habits.sh reminders-sync   [--date]  reconcile linked habits ↔ their one-shots, both directions
+#
+# A build (at_least) habit can be LINKED to Apple Reminders (/remind). The link
+# is an INTENT stored on the habit in the profile JSON as
+#   "reminder": {"state": "linked", "time": "07:00"}                     (daily)
+#   "reminder": {"state": "linked", "time": "07:00", "days": ["mon","wed","fri"]}
+#                                                              (fixed weekdays)
+# or {"state": "declined"} when the user said no (absent = undecided → offered).
+# pbrain owns the habit data; the reminder is just a notification + a familiar
+# checkbox. A linked habit gets ONE one-shot reminder per scheduled day (not an
+# Apple-recurring one) — created by reminders-ensure (day-gated by `days`), kept
+# in TWO-WAY sync by reminders-sync (tick it in Reminders → habit marked; mark
+# the habit → reminder completed). Per-day reminder ids live in the DB
+# (habit_reminders), not the profile. `days` gates reminder CREATION only — it
+# does NOT change how the habit is scored. Eligibility: build habits only; a
+# daily habit links with no days, a weekly/monthly habit only WITH --days (no
+# fixed day of its own otherwise); limit habits never. Linking is opt-in per
+# habit, offered at first-run setup and on add (or when the user asks).
+# Reminders only — Calendar has no done-state.
 #
 # Default profile:  $VAULT_DIR/life/Habits Profile.md
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
@@ -165,18 +192,30 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "add" ]]; then
   shift || true
-  A_NAME=""; A_TYPE="daily"; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
+  A_NAME=""; A_TYPE=""; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
   A_UNIT=""; A_MEASURE=""
+  # Schedule (axis 1): kind + its params. Frequency forms resolve to spaced days.
+  A_SCHED=""; A_DAYS=""; A_TPW=""; A_START_DAY=""; A_EVERY=""; A_START_DATE=""
+  A_DOM=""; A_TPM=""; A_START_DOM=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name)           A_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --type)           A_TYPE="${2:-daily}"; shift 2 2>/dev/null || shift ;;
-      --direction)      A_DIR="${2:-at_least}"; shift 2 2>/dev/null || shift ;;
-      --target)         A_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --priority)       A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
-      --unit)           A_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --measure-target) A_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --notes)          A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name)            A_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)            A_TYPE="${2:-}"; shift 2 2>/dev/null || shift ;;          # legacy → mapped to --schedule
+      --direction)       A_DIR="${2:-at_least}"; shift 2 2>/dev/null || shift ;;
+      --target)          A_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;        # legacy
+      --priority)        A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
+      --unit)            A_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --measure-target)  A_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --notes)           A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --schedule)        A_SCHED="${2:-}"; shift 2 2>/dev/null || shift ;;         # daily|weekdays|interval|monthly
+      --days)            A_DAYS="${2:-}"; shift 2 2>/dev/null || shift ;;          # weekdays: mon,wed,fri
+      --times-per-week)  A_TPW="${2:-}"; shift 2 2>/dev/null || shift ;;           # weekdays: N (spaced from --start-day)
+      --start-day)       A_START_DAY="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --every-days)      A_EVERY="${2:-}"; shift 2 2>/dev/null || shift ;;         # interval: every N days
+      --start-date)      A_START_DATE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --days-of-month)   A_DOM="${2:-}"; shift 2 2>/dev/null || shift ;;           # monthly: 1,16
+      --times-per-month) A_TPM="${2:-}"; shift 2 2>/dev/null || shift ;;           # monthly: N (spaced from --start-dom)
+      --start-dom)       A_START_DOM="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -184,9 +223,20 @@ if [[ "$SUB" == "add" ]]; then
     echo "habits: add requires --name" >&2
     exit 1
   fi
-  case "$A_TYPE" in daily|weekly|monthly) ;; *) echo "habits: --type must be daily|weekly|monthly" >&2; exit 1 ;; esac
   case "$A_DIR" in at_least|at_most) ;; *) echo "habits: --direction must be at_least|at_most" >&2; exit 1 ;; esac
   case "$A_PRIO" in low|medium|high) ;; *) A_PRIO="medium" ;; esac
+  # Legacy --type maps into a schedule kind when no explicit --schedule was given
+  # (a weekly/monthly --target N becomes an N-per-period spacing). schedule_type
+  # and target_count are still set from --type/--target below (the scoring axis),
+  # so this is purely additive — it does not change existing scoring behavior.
+  if [[ -z "${A_SCHED//[[:space:]]/}" && -n "${A_TYPE//[[:space:]]/}" ]]; then
+    case "$A_TYPE" in
+      daily)   A_SCHED="daily" ;;
+      weekly)  A_SCHED="weekdays"; [[ -n "${A_TPW//[[:space:]]/}$A_DAYS" ]] || A_TPW="${A_TARGET:-1}" ;;
+      monthly) A_SCHED="monthly";  [[ -n "${A_TPM//[[:space:]]/}$A_DOM" ]]  || A_TPM="${A_TARGET:-1}" ;;
+      *) echo "habits: --type must be daily|weekly|monthly" >&2; exit 1 ;;
+    esac
+  fi
 
   # Ensure the profile exists with a json block before appending.
   if [[ ! -f "$PROFILE_FILE" ]]; then
@@ -202,8 +252,9 @@ tags: []
 
 The habits /habits tracks. Edit names/notes freely; structure lives in the JSON
 block below. Each habit has a stable \`id\` — don't change it (history is keyed
-to it). \`schedule_type\` = daily|weekly|monthly; \`direction\` = at_least (build)
-or at_most (limit); \`target_count\` = times per period.
+to it). \`schedule\` = when it occurs (daily | weekdays | interval | monthly);
+\`direction\` = at_least (build) or at_most (limit) — a SCORING axis, separate
+from the schedule.
 
 \`\`\`json
 {
@@ -226,19 +277,36 @@ print("\n".join(str(h.get("id","")).strip() for h in (d.get("habits") or []) if 
 ' 2>/dev/null || true)"
   NEW_ID="$(pbrain_habit_slug "$A_NAME" "$EXISTING_IDS")"
 
-  python3 - "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_TYPE" "$A_DIR" "$A_TARGET" "$A_PRIO" "$A_NOTES" "$A_UNIT" "$A_MEASURE" <<'PYEOF'
-import json, re, sys
-path, hid, name, st, direction, target, priority, notes, unit, measure = sys.argv[1:11]
+  PBH_KIND="$A_SCHED" PBH_DAYS="$A_DAYS" PBH_TPW="$A_TPW" PBH_START_DAY="$A_START_DAY" \
+  PBH_EVERY="$A_EVERY" PBH_START_DATE="$A_START_DATE" PBH_DOM="$A_DOM" PBH_TPM="$A_TPM" \
+  PBH_START_DOM="$A_START_DOM" PBH_TODAY="$TODAY" PBH_TARGET="$A_TARGET" \
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_DIR" "$A_PRIO" "$A_NOTES" "$A_UNIT" "$A_MEASURE" <<'PYEOF'
+import json, os, re, sys
+libdir, path, hid, name, direction, priority, notes, unit, measure = sys.argv[1:10]
+sys.path.insert(0, libdir)
+from habit_schedule import build_schedule, legacy_fields, schedule_label
 with open(path) as fh:
     text = fh.read()
 m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
 data = json.loads(m.group(2)) if m else {"habits": []}
 habits = data.setdefault("habits", [])
-try:
-    tv = int(target) if str(target).strip() else None
-except (TypeError, ValueError):
-    tv = None
-# Optional measure: a unit + numeric target makes the habit amount-based.
+sched = build_schedule({
+    "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
+    "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
+    "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
+    "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
+    "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
+})
+# schedule_type / target_count are the legacy SCORING fields the current evaluator
+# still reads: derive from the schedule, but an explicit --target always wins (it
+# is the cap for a limit habit, or the per-period count for a build habit).
+st, tv = legacy_fields(sched)
+target_env = (os.environ.get("PBH_TARGET") or "").strip()
+if target_env:
+    try:
+        tv = int(target_env)
+    except ValueError:
+        pass
 try:
     mv = float(measure) if str(measure).strip() else None
     if mv is not None and mv.is_integer():
@@ -246,9 +314,10 @@ try:
 except (TypeError, ValueError):
     mv = None
 habits.append({
-    "id": hid, "name": name.strip(), "schedule_type": st, "direction": direction,
-    "target_count": tv, "priority": priority, "unit": unit.strip(),
-    "measure_target": mv, "archived": False, "notes": notes.strip(),
+    "id": hid, "name": name.strip(), "direction": direction,
+    "schedule": sched, "schedule_type": st, "target_count": tv,
+    "priority": priority, "unit": unit.strip(), "measure_target": mv,
+    "archived": False, "notes": notes.strip(),
 })
 new_json = json.dumps(data, indent=2)
 if m:
@@ -258,7 +327,7 @@ else:
 with open(path, "w") as fh:
     fh.write(text)
 measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
-print(f"added: {name.strip()} [{hid}] ({st}, {direction}, target {tv}, {priority}{measure_note})")
+print(f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note})")
 PYEOF
   exit 0
 fi
@@ -270,17 +339,29 @@ if [[ "$SUB" == "edit" ]]; then
   shift || true
   E_ID=""; E_NAME="__keep__"; E_TYPE="__keep__"; E_DIR="__keep__"; E_TARGET="__keep__"; E_PRIO="__keep__"; E_NOTES="__keep__"
   E_UNIT="__keep__"; E_MEASURE="__keep__"
+  # Schedule edit flags — passing ANY of these rebuilds the habit's schedule.
+  E_SCHED=""; E_DAYS=""; E_TPW=""; E_START_DAY=""; E_EVERY=""; E_START_DATE=""
+  E_DOM=""; E_TPM=""; E_START_DOM=""; E_SCHED_TOUCHED=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --id)             E_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --name)           E_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --type)           E_TYPE="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --direction)      E_DIR="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --target)         E_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --priority)       E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --unit)           E_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --measure-target) E_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --notes)          E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --id)              E_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --name)            E_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --type)            E_TYPE="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --direction)       E_DIR="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --target)          E_TARGET="${2:-}"; shift 2 2>/dev/null || shift ;;   # scoring (cap/count); does NOT rebuild schedule on its own
+      --priority)        E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --unit)            E_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --measure-target)  E_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --notes)           E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --schedule)        E_SCHED="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --days)            E_DAYS="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --times-per-week)  E_TPW="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --start-day)       E_START_DAY="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --every-days)      E_EVERY="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --start-date)      E_START_DATE="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --days-of-month)   E_DOM="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --times-per-month) E_TPM="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
+      --start-dom)       E_START_DOM="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -288,9 +369,22 @@ if [[ "$SUB" == "edit" ]]; then
     echo "habits: edit requires --id and an existing profile" >&2
     exit 1
   fi
-  python3 - "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_TYPE" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" <<'PYEOF'
-import json, re, sys
-path, hid, name, st, direction, target, priority, notes, unit, measure = sys.argv[1:11]
+  # Legacy --type maps to a schedule kind (mirrors add).
+  if [[ -z "${E_SCHED//[[:space:]]/}" && "$E_TYPE" != "__keep__" && -n "${E_TYPE//[[:space:]]/}" ]]; then
+    case "$E_TYPE" in
+      daily)   E_SCHED="daily" ;;
+      weekly)  E_SCHED="weekdays"; [[ -n "${E_TPW//[[:space:]]/}$E_DAYS" ]] || { [[ "$E_TARGET" != "__keep__" ]] && E_TPW="$E_TARGET" || E_TPW="1"; } ;;
+      monthly) E_SCHED="monthly";  [[ -n "${E_TPM//[[:space:]]/}$E_DOM" ]]  || { [[ "$E_TARGET" != "__keep__" ]] && E_TPM="$E_TARGET" || E_TPM="1"; } ;;
+    esac
+  fi
+  PBH_TOUCHED="$E_SCHED_TOUCHED" PBH_KIND="$E_SCHED" PBH_DAYS="$E_DAYS" PBH_TPW="$E_TPW" \
+  PBH_START_DAY="$E_START_DAY" PBH_EVERY="$E_EVERY" PBH_START_DATE="$E_START_DATE" \
+  PBH_DOM="$E_DOM" PBH_TPM="$E_TPM" PBH_START_DOM="$E_START_DOM" PBH_TODAY="$TODAY" \
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" <<'PYEOF'
+import json, os, re, sys
+libdir, path, hid, name, direction, target, priority, notes, unit, measure = sys.argv[1:11]
+sys.path.insert(0, libdir)
+from habit_schedule import build_schedule, legacy_fields
 KEEP = "__keep__"
 with open(path) as fh:
     text = fh.read()
@@ -307,21 +401,13 @@ if found is None:
     print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
 if name != KEEP and name.strip():
     found["name"] = name.strip()
-if st != KEEP and st in ("daily", "weekly", "monthly"):
-    found["schedule_type"] = st
 if direction != KEEP and direction in ("at_least", "at_most"):
     found["direction"] = direction
-if target != KEEP:
-    try:
-        found["target_count"] = int(target) if str(target).strip() else None
-    except (TypeError, ValueError):
-        found["target_count"] = None
 if priority != KEEP and priority in ("low", "medium", "high"):
     found["priority"] = priority
 if unit != KEEP:
     found["unit"] = unit.strip()
 if measure != KEEP:
-    # empty string clears the measure (back to occurrence-based); a number sets it
     if str(measure).strip():
         try:
             mv = float(measure)
@@ -332,6 +418,26 @@ if measure != KEEP:
         found["measure_target"] = None
 if notes != KEEP:
     found["notes"] = notes.strip()
+# Rebuild the schedule only when a schedule-affecting flag was passed.
+if os.environ.get("PBH_TOUCHED") == "1":
+    sched = build_schedule({
+        "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
+        "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
+        "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
+        "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
+        "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
+    })
+    found["schedule"] = sched
+    st, tv = legacy_fields(sched)
+    found["schedule_type"] = st
+    found["target_count"] = tv
+# An explicit --target always wins (scoring axis: a limit cap / a build count),
+# applied after any schedule rebuild so it is never clobbered by the derivation.
+if target != KEEP:
+    try:
+        found["target_count"] = int(target) if str(target).strip() else None
+    except (TypeError, ValueError):
+        found["target_count"] = None
 new_json = json.dumps(data, indent=2)
 text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
 with open(path, "w") as fh:
@@ -379,6 +485,11 @@ text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end
 with open(path, "w") as fh:
     fh.write(text)
 print(f"archived: {found.get('name')} [{hid}] (history kept)")
+rem = found.get("reminder") if isinstance(found.get("reminder"), dict) else {}
+if rem.get("state") == "linked":
+    # Was linked → its per-day one-shots (ids live in the DB) may still be
+    # pending; signal /habits to offer cancelling them via reminder --unlink.
+    print("LINKED_REMINDER")
 PYEOF
   exit 0
 fi
@@ -504,6 +615,9 @@ if [[ "$SUB" == "track" || "$SUB" == "track-init" ]]; then
     exit 1
   fi
   FILE="$(pbrain_habit_track_init "$T_DATE")"
+  # Best-effort: ensure linked habits have their per-day one-shot reminder for
+  # this date (idempotent; degrades silently without Reminders access).
+  bash "$_SCRIPT_DIR/habits.sh" reminders-ensure --date "$T_DATE" >/dev/null 2>&1 || true
   echo "HABITS_TRACK_FILE"
   echo "file: $FILE"
   echo "date: $T_DATE"
@@ -519,12 +633,16 @@ fi
 if [[ "$SUB" == "mark" ]]; then
   shift || true
   M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
+  M_GOOD=""; M_BAD=""; M_SLIPS=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
       --date)   M_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
       --count)  M_COUNT="${2:-1}"; shift 2 2>/dev/null || shift ;;
       --amount) M_AMOUNT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --good)   M_GOOD="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --bad)    M_BAD="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --slips)  M_SLIPS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
@@ -537,7 +655,38 @@ if [[ "$SUB" == "mark" ]]; then
     echo "not a tracked habit: $M_NAME — add it with /habits (not marked)"
     exit 0
   fi
-  pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT"
+  pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT" \
+    "$M_GOOD" "$M_BAD" "$M_SLIPS"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# score — deterministically compute a scored habit's score from its profile
+# rule + raw classification counts, WITHOUT writing anything. Prints the number.
+#   habits.sh score --name "Eat clean" --good 3 --bad 0
+#   habits.sh score --name "Eat clean" --slips 2
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "score" ]]; then
+  shift || true
+  SC_NAME=""; SC_GOOD=""; SC_BAD=""; SC_SLIPS=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name|--id) SC_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --good)  SC_GOOD="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --bad)   SC_BAD="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --slips) SC_SLIPS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${SC_NAME//[[:space:]]/}" ]]; then
+    echo "habits: score requires --name" >&2
+    exit 1
+  fi
+  if [[ ! -f "$PROFILE_FILE" ]]; then
+    echo "no habits profile" >&2
+    exit 1
+  fi
+  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS"
   exit 0
 fi
 
@@ -633,6 +782,370 @@ if [[ "$SUB" == "suggest-seen" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# reminder — manage a habit's link to Apple Reminders (/remind). ANY habit can
+# opt in (build or limit) — linking creates a per-day ONE-SHOT reminder at `time`
+# on the days the habit's SCHEDULE is due, and keeps it in two-way sync (see
+# reminders-ensure / reminders-sync). The Apple reminder is purely a notification
+# + a familiar checkbox — pbrain owns the habit data and the score. The link is
+# an INTENT on the habit: {"state":"linked","time":"07:00"}; which DAYS it fires
+# comes from the habit's `schedule` (NOT from the reminder), and the per-day
+# reminder ids live in the DB (habit_reminders). Exactly one action:
+#   --link --time HH:MM     enable per-day one-shot reminders on the habit's schedule
+#   --decline               record "no reminder" so it's never re-offered
+#   --unlink [--cancel]     drop the link; --cancel also cancels today's + future
+#                           pending one-shots in Reminders
+# Reminder ops go through the shared /remind EventKit helper (pbrain_reminders_run,
+# in scope via lib/reminders.sh) — the first one triggers the one-time macOS
+# Reminders access prompt, separate from Calendar.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminder" ]]; then
+  shift || true
+  RM_ID=""; RM_ACTION=""; RM_TIME=""; RM_CANCEL=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id)      RM_ID="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --link|--create|--enable) RM_ACTION="link"; shift ;;
+      --decline) RM_ACTION="decline"; shift ;;
+      --unlink)  RM_ACTION="unlink"; shift ;;
+      --time)    RM_TIME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --cancel)  RM_CANCEL=1; shift ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -z "${RM_ID//[[:space:]]/}" || ! -f "$PROFILE_FILE" ]]; then
+    echo "habits: reminder requires --id and an existing profile" >&2; exit 1
+  fi
+  [[ -n "$RM_ACTION" ]] || { echo "habits: reminder needs one of --link --time HH:MM | --decline | --unlink" >&2; exit 1; }
+
+  # Habit facts for the id: NAME<TAB>schedule-label (empty line = no such id).
+  HINFO="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$RM_ID" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+libdir, path, hid = sys.argv[1:4]
+sys.path.insert(0, libdir)
+try:
+    from habit_schedule import derive_schedule, schedule_label
+except Exception:
+    schedule_label = lambda s: "daily"; derive_schedule = lambda h: {"type": "daily"}
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(path).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    sys.exit(0)
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip() != hid:
+        continue
+    print("%s\t%s" % (str(h.get("name", "")).strip(), schedule_label(derive_schedule(h))))
+    break
+PYEOF
+)"
+  if [[ -z "${HINFO//[[:space:]]/}" ]]; then
+    echo "habits: no habit with id $RM_ID" >&2; exit 1
+  fi
+  RM_NAME="$(printf '%s' "$HINFO" | cut -f1)"
+  RM_SCHED_LABEL="$(printf '%s' "$HINFO" | cut -f2)"
+
+  _rm_valid_time() { [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+  _rm_write() {  # <linked|declined|clear> [<time>]
+    python3 - "$PROFILE_FILE" "$RM_ID" "$1" "${2:-}" <<'PYEOF'
+import json, re, sys
+path, hid, state, rtime = sys.argv[1:5]
+text = open(path).read()
+m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+if not m:
+    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+data = json.loads(m.group(2))
+found = None
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip() == hid:
+        found = h; break
+if found is None:
+    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+if state == "clear":
+    found.pop("reminder", None)
+elif state == "declined":
+    found["reminder"] = {"state": "declined"}
+else:
+    found["reminder"] = {"state": "linked", "time": rtime}
+new_json = json.dumps(data, indent=2)
+text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+open(path, "w").write(text)
+PYEOF
+  }
+
+  case "$RM_ACTION" in
+    decline)
+      _rm_write declined || { echo "habits: failed to update profile" >&2; exit 1; }
+      echo "reminder: '$RM_NAME' set to no reminder (won't re-offer)" ;;
+    unlink)
+      # --cancel deletes today's + future PENDING one-shots from Reminders and
+      # marks their rows cancelled; past/done rows are history and left alone.
+      if [[ "$RM_CANCEL" -eq 1 ]]; then
+        RIDS="$(python3 - "$PBRAIN_DB_FILE" "$RM_ID" "$TODAY" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, hid, today = sys.argv[1:4]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for (rid,) in con.execute("SELECT reminder_id FROM habit_reminders WHERE habit_id=? AND occurred_on>=? AND status='pending'", (hid, today)).fetchall():
+        print(rid)
+    con.close()
+except Exception:
+    pass
+PYEOF
+)"
+        while IFS= read -r rid; do
+          [[ -n "${rid//[[:space:]]/}" ]] || continue
+          pbrain_reminders_run delete --id "$rid" >/dev/null 2>&1 || true
+        done <<< "$RIDS"
+        python3 - "$PBRAIN_DB_FILE" "$RM_ID" "$TODAY" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, hid, today, now = sys.argv[1:5]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("UPDATE habit_reminders SET status='cancelled', resolved_at=? WHERE habit_id=? AND occurred_on>=? AND status='pending'", (now, hid, today))
+    con.commit(); con.close()
+except Exception:
+    pass
+PYEOF
+      fi
+      _rm_write clear || { echo "habits: failed to update profile" >&2; exit 1; }
+      if [[ "$RM_CANCEL" -eq 1 ]]; then echo "reminder: unlinked '$RM_NAME' (today's + future reminders cancelled)"; else echo "reminder: unlinked '$RM_NAME'"; fi ;;
+    link)
+      # Any habit can opt in — its SCHEDULE decides which days fire.
+      _rm_valid_time "$RM_TIME" || { echo "habits: --link needs --time HH:MM (24h)" >&2; exit 1; }
+      _rm_write linked "$RM_TIME" || { echo "habits: failed to update profile" >&2; exit 1; }
+      # Best-effort: create today's one-shot now (if due today) so the user sees
+      # it immediately. (reminders-ensure is idempotent and degrades silently.)
+      ENS="$(bash "$_SCRIPT_DIR/habits.sh" reminders-ensure --date "$TODAY" 2>/dev/null || true)"
+      echo "reminder: linked '$RM_NAME' — $RM_TIME on its schedule (${RM_SCHED_LABEL:-daily}), kept in two-way sync with the habit"
+      case "$ENS" in
+        *ACCESS_DENIED*) echo "  (Reminders access isn't granted yet — run \`/remind access\` once; reminders appear after you approve.)" ;;
+        *UNAVAILABLE*)   echo "  (the Reminders helper needs swiftc — \`xcode-select --install\`; the link is saved and reminders start once it's available.)" ;;
+      esac ;;
+  esac
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-pending — habits with NO reminder decision yet (state absent/none).
+# Reminders are an opt-in ANY habit can take, so this lists every undecided
+# non-archived habit (the agent offers case by case — it does not auto-nag).
+# One "id<TAB>name" line each; empty when none / not set up.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-pending" ]]; then
+  [[ -f "$PROFILE_FILE" ]] || exit 0
+  pbrain_habits_status "$TODAY" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for h in d.get("habits") or []:
+    if (h.get("reminder") or {}).get("state") == "none":
+        print("%s\t%s" % (h.get("id", ""), h.get("name", "")))
+' 2>/dev/null || true
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-ensure [--date] — make sure each LINKED habit scheduled on <date>
+# has its per-day one-shot Apple Reminder. Idempotent: the (habit_id, date) PK in
+# habit_reminders guards against duplicates, so re-running creates nothing new.
+# Creates a timed one-shot (no Apple recurrence) at the habit's linked time, with
+# an at-due alarm, and records the reminder id in the DB. Degrades silently when
+# Reminders access/helper is missing (echoes ACCESS_DENIED|UNAVAILABLE and stops,
+# leaving the link in place to retry next run). Echoes "ENSURED <n>" otherwise.
+# Schedule-gated via the habit_schedule engine: a linked habit fires only on the
+# days its schedule is_due — daily (every day), weekdays (mon/wed/fri), interval
+# (every N days from a start), or monthly (the Nth) — so off-days create nothing.
+# Run by track / plan-my-day.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-ensure" ]]; then
+  shift || true
+  RE_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) RE_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -f "$PROFILE_FILE" ]] || exit 0
+  TODO="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RE_DATE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+libdir, profile, db, date = sys.argv[1:5]
+sys.path.insert(0, libdir)
+try:
+    from habit_schedule import derive_schedule, is_due
+except Exception:
+    sys.exit(0)
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    sys.exit(0)
+have = set()
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for (hid,) in con.execute("SELECT habit_id FROM habit_reminders WHERE occurred_on=?", (date,)).fetchall():
+        have.add(hid)
+    con.close()
+except Exception:
+    pass
+for h in (data.get("habits") or []):
+    if h.get("archived"):
+        continue
+    rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+    if str(rem.get("state", "")).strip().lower() != "linked" or not str(rem.get("time", "")).strip():
+        continue
+    if str(h.get("id", "")).strip() in have:
+        continue
+    if not is_due(derive_schedule(h), date):
+        continue   # not scheduled on this date → no one-shot
+    print("%s\t%s\t%s" % (str(h.get("id", "")).strip(), str(h.get("name", "")).strip(), str(rem.get("time")).strip()))
+PYEOF
+)"
+  if [[ -z "${TODO//[[:space:]]/}" ]]; then echo "ENSURED 0"; exit 0; fi
+  CREATED=0
+  while IFS=$'\t' read -r hid name htime; do
+    [[ -n "${hid//[[:space:]]/}" && -n "${htime//[[:space:]]/}" ]] || continue
+    RES="$(pbrain_reminders_run add --title "$name" --due "$RE_DATE $htime" --alarms "0" 2>/dev/null || true)"
+    case "$RES" in
+      ADDED\ *)
+        rid="${RES#ADDED }"; rid="${rid%% *}"
+        python3 - "$PBRAIN_DB_FILE" "$hid" "$RE_DATE" "$rid" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, hid, date, rid, now = sys.argv[1:6]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("INSERT OR IGNORE INTO habit_reminders (habit_id, occurred_on, reminder_id, status, created_at) VALUES (?,?,?,?,?)",
+                (hid, date, rid, 'pending', now))
+    con.commit(); con.close()
+except Exception:
+    pass
+PYEOF
+        CREATED=$((CREATED + 1)) ;;
+      ACCESS_DENIED) echo "ACCESS_DENIED"; exit 0 ;;
+      UNAVAILABLE)   echo "UNAVAILABLE"; exit 0 ;;
+      *) : ;;  # transient error — leave it, retry next run
+    esac
+  done <<< "$TODO"
+  echo "ENSURED $CREATED"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-sync [--date] — reconcile a day's linked habits with their per-day
+# one-shot reminders, BOTH directions:
+#   PULL  reminder → habit: a pending one-shot the user checked off in the Apple
+#         Reminders app (status DONE) marks the habit done that day (md + DB) and
+#         closes the row; a MISSING (deleted) one-shot just closes the row.
+#   PUSH  habit → reminder: a habit already done that day whose one-shot is still
+#         pending gets its reminder completed, then the row closed.
+# PULL runs first so PUSH never double-handles a row. Degrades silently without
+# Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
+# "SYNCED pulled=<n> pushed=<n>". Run by plan-my-day (morning) + end-of-day.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-sync" ]]; then
+  shift || true
+  RS_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) RS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -f "$PROFILE_FILE" ]] || exit 0
+
+  _hr_name_for_id() {  # <habit_id> → display name (or empty)
+    python3 - "$PROFILE_FILE" "$1" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+path, hid = sys.argv[1], sys.argv[2]
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(path).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip() == hid:
+        print(str(h.get("name", "")).strip()); break
+PYEOF
+  }
+  _hr_set_status() {  # <habit_id> <date> <status>
+    python3 - "$PBRAIN_DB_FILE" "$1" "$2" "$3" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, hid, date, status, now = sys.argv[1:6]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("UPDATE habit_reminders SET status=?, resolved_at=? WHERE habit_id=? AND occurred_on=?",
+                (status, now, hid, date))
+    con.commit(); con.close()
+except Exception:
+    pass
+PYEOF
+  }
+
+  # PULL: reminder → habit
+  PULLED=0
+  PEND="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, date = sys.argv[1:3]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for hid, rid in con.execute("SELECT habit_id, reminder_id FROM habit_reminders WHERE occurred_on=? AND status='pending'", (date,)).fetchall():
+        print("%s\t%s" % (hid, rid))
+    con.close()
+except Exception:
+    pass
+PYEOF
+)"
+  while IFS=$'\t' read -r hid rid; do
+    [[ -n "${rid//[[:space:]]/}" ]] || continue
+    ST="$(pbrain_reminders_run status --id "$rid" 2>/dev/null || true)"
+    case "$ST" in
+      DONE*)
+        nm="$(_hr_name_for_id "$hid")"
+        [[ -n "${nm//[[:space:]]/}" ]] && bash "$_SCRIPT_DIR/habits.sh" mark --name "$nm" --date "$RS_DATE" >/dev/null 2>&1 || true
+        _hr_set_status "$hid" "$RS_DATE" done
+        PULLED=$((PULLED + 1)) ;;
+      MISSING) _hr_set_status "$hid" "$RS_DATE" cancelled ;;
+      *) : ;;  # PENDING / UNAVAILABLE / ACCESS_DENIED — leave the row
+    esac
+  done <<< "$PEND"
+
+  # PUSH: habit → reminder
+  PUSHED=0
+  PUSH="$(pbrain_habits_status "$RS_DATE" | python3 - "$PBRAIN_DB_FILE" "$RS_DATE" <<'PYEOF' 2>/dev/null || true
+import json, sys, sqlite3
+db, date = sys.argv[1:3]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+done_ids = set()
+for h in d.get("habits") or []:
+    if (h.get("today_count") or 0) > 0 or (h.get("today_amount") or 0) > 0:
+        done_ids.add(h.get("id"))
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for hid, rid in con.execute("SELECT habit_id, reminder_id FROM habit_reminders WHERE occurred_on=? AND status='pending'", (date,)).fetchall():
+        if hid in done_ids:
+            print("%s\t%s" % (hid, rid))
+    con.close()
+except Exception:
+    pass
+PYEOF
+)"
+  while IFS=$'\t' read -r hid rid; do
+    [[ -n "${rid//[[:space:]]/}" ]] || continue
+    pbrain_reminders_run complete --id "$rid" >/dev/null 2>&1 || true
+    _hr_set_status "$hid" "$RS_DATE" done
+    PUSHED=$((PUSHED + 1))
+  done <<< "$PUSH"
+
+  echo "SYNCED pulled=$PULLED pushed=$PUSHED"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # PHASE 0 — first-run setup (no profile yet).
 # ---------------------------------------------------------------------------
 if [[ ! -f "$PROFILE_FILE" ]]; then
@@ -640,7 +1153,14 @@ if [[ ! -f "$PROFILE_FILE" ]]; then
 HABITS_SETUP_PROFILE
 profile_file: $PROFILE_FILE
 seed_dirs: ${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking} | ${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning} | ${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking} | ${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}
-add_cmd: bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
+add_cmd: bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --direction at_least|at_most --schedule daily|weekdays|interval|monthly [schedule args] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
+  schedule args by kind:
+    daily     : (none)
+    weekdays  : --days mon,wed,fri   OR   --times-per-week N [--start-day mon]   (N spaced from the start day)
+    interval  : --every-days N [--start-date YYYY-MM-DD]                          (defaults to today)
+    monthly   : --days-of-month 1,16 OR   --times-per-month N [--start-dom D]
+  (legacy still works: --type daily|weekly|monthly [--target N] maps to a schedule)
+reminder_cmd: bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> (--link --time HH:MM | --decline)
 
 INSTRUCTIONS — first-time habits setup. Don't log anything yet. You're helping
 the user define the habits they want to track. Ask ONE question at a time; wait
@@ -664,14 +1184,23 @@ STEP 2b — IF "I'll specify":
   - Ask for the habits one at a time. After each habit name, immediately gather
     that habit's criteria (Step 3) before moving to the next habit.
 
-STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time:
-  - schedule_type: is this DAILY (every day, e.g. brush at night, 4L water),
-    WEEKLY (N times a week, e.g. nail cut twice), or MONTHLY (N times a month,
-    e.g. a long run 5x)?
-  - direction: are you trying to DO it (at_least) or KEEP IT UNDER a limit
-    (at_most, e.g. alcohol)?
-  - target_count: how many times per period? (For a plain daily habit this is
-    just 1 — every day. Ask only if not obvious.)
+STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time.
+  A habit has two SEPARATE axes — ask about both:
+  - SCHEDULE (when it happens — axis 1). Map the user's answer to a --schedule:
+      • every day → daily
+      • specific weekdays (e.g. gym Mon/Wed/Fri) → weekdays --days mon,wed,fri
+      • N times a week, no fixed days (e.g. gym 4×) → weekdays --times-per-week N
+        [--start-day <their usual start>] (pbrain spaces them out across the week)
+      • every N days (e.g. every 15 days) → interval --every-days N [--start-date]
+      • on a calendar date / N times a month → monthly --days-of-month D[,D]
+        OR --times-per-month N [--start-dom D]
+    Every habit gets a concrete schedule — there is no vague "sometimes". If the
+    user truly can't name days/frequency, default to daily and note it.
+  - direction (the SCORING axis — axis 2): are you trying to DO it (at_least,
+    e.g. eat clean) or KEEP IT UNDER a limit (at_most, e.g. no smoking, alcohol)?
+    This is independent of the schedule.
+  - cap/count (--target): for a LIMIT habit, the cap (e.g. ≤2). Ask only if it
+    isn't obviously 1.
   - measure (optional): does this habit have a NATURAL AMOUNT you'd rather track
     than a yes/no? (e.g. "4L water", "30 min meditation", "20 km/week running").
     If so, capture a unit (--unit "L") and the per-period target (--measure-target
@@ -682,6 +1211,26 @@ STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time
   - notes: optional short note (e.g. "10 min morning", "weekends only").
   Then create it immediately by running the add_cmd above with those values.
   The command mints a stable id and writes valid JSON — never hand-edit the file.
+
+STEP 3.5 — REMINDER (offer ONLY for a build habit you're trying to DO — i.e.
+  direction at_least; never for limit/at_most habits). Right after creating such
+  a habit, ask once:
+    "Want an Apple reminder for <name> you can check off? If so, what time —
+     every day, or on specific days?"
+  - If yes + a time (HH:MM): link it (pbrain creates a per-day reminder and keeps
+    it in two-way sync — checking it off in the Reminders app marks the habit,
+    and vice-versa). A plain DAILY habit needs no days:
+      bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> --link --time HH:MM
+    A habit on FIXED WEEKDAYS (e.g. gym Mon/Wed/Fri) — including a weekly/monthly
+    habit — pins those days with --days:
+      bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> --link --time HH:MM --days mon,wed,fri
+  - If no: record the decision so it's never re-offered:
+      bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> --decline
+  The first link triggers the one-time macOS Reminders access prompt (separate
+  from Calendar). If it reports access isn't granted, tell the user to run
+  /remind access once and approve it, then retry. A weekly/monthly habit with NO
+  fixed days (e.g. "gym 4×/week, any days") can't get a reminder — leave it
+  unlinked. Never offer one for a limit habit.
 
 STEP 4 — When done, run \`bash "$_SCRIPT_DIR/habits.sh"\` once more to show the
 dashboard, and confirm: "Habits profile saved. I'll log these from your journals
@@ -772,12 +1321,32 @@ Use these commands — never hand-edit the profile JSON or the tracking table di
   - TRACK today: bash "$_SCRIPT_DIR/habits.sh" track --date $TODAY   (create/refresh today's checklist md)
   - MARK done:   bash "$_SCRIPT_DIR/habits.sh" mark --name "<exact name>" --date $TODAY [--count N] [--amount X] [--note "..."]
                  (for a measured habit — one with a unit — pass --amount, e.g. --amount 2.5)
-  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
-  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--type ...] [--direction ...] [--target N] [--unit ...] [--measure-target N] [--priority ...] [--notes ...]
+  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --direction at_least|at_most --schedule daily|weekdays|interval|monthly [--days mon,wed,fri | --times-per-week N [--start-day mon] | --every-days N [--start-date YYYY-MM-DD] | --days-of-month 1,16 | --times-per-month N [--start-dom D]] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
+  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--direction ...] [--schedule ... + its schedule args] [--target N] [--unit ...] [--measure-target N] [--priority ...] [--notes ...]   (passing any schedule flag rebuilds the schedule)
   - ARCHIVE:     bash "$_SCRIPT_DIR/habits.sh" archive --id <id>   (removes it from the dashboard, keeps history)
   - HISTORY:     bash "$_SCRIPT_DIR/habits.sh" history --name "<X>"
+  - REMINDER:    bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> (--link --time HH:MM [--days mon,wed,fri] | --decline | --unlink [--cancel])
   For add/edit/archive, show the user what you'll run and get an explicit yes first.
   The user can also just open today's track_file in Obsidian and tick cells by hand.
+
+Step 2.5 — REMINDERS (opt-in, per habit — do NOT proactively nag). A linked
+build habit gets a per-day Apple reminder it can be checked off from, kept in
+two-way sync; it shows "🔔 HH:MM" (or "🔔 Mon/Wed/Fri HH:MM") in the rollup,
+unlinked ones show nothing. Only act here when the USER asks to set up / change a
+habit's reminder (or asks which habits could have one). To list daily candidates
+on request:
+  bash "$_SCRIPT_DIR/habits.sh" reminders-pending   ("id<TAB>name" — daily build, undecided)
+For a habit the user wants linked: ask the time (and whether it's every day or
+specific weekdays), then run — daily:
+  bash "$_SCRIPT_DIR/habits.sh" reminder --id <hid> --link --time HH:MM
+fixed weekdays (e.g. gym Mon/Wed/Fri — works for a weekly/monthly habit too):
+  bash "$_SCRIPT_DIR/habits.sh" reminder --id <hid> --link --time HH:MM --days mon,wed,fri
+(pbrain creates the reminder + keeps it in sync — no need to find an existing
+one). To turn it off:  reminder --id <hid> --decline. A weekly/monthly habit with
+no fixed days can't be linked. If a reminder op reports Reminders access isn't
+granted, tell the user to run /remind access once, then move on. When ARCHIVE
+prints a "LINKED_REMINDER" line, the habit was linked — offer to cancel its
+reminders too: reminder --id <id> --unlink --cancel.
 
 Step 3 — Keep it brief. This is a dashboard, not a coaching session.
 

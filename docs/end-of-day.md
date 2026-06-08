@@ -16,8 +16,8 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
   - **Fitness file:** flips `status: planned` → `completed` (or `skipped`), preserves the sets the user already logged, appends an `## Other movement today` section for walks / ring closes / extra cardio if mentioned.
   - **Journal file:** untouched (it's the user's raw voice from earlier).
   - **Declutter:** if the plan has an unchecked `## Declutter` item, asks whether you got to it and ticks the checkbox (`- [ ]` → `- [x]`). Skipped if there's no item or your prefs turned the declutter prompt off.
-  - **Reminders:** surfaces anything overdue / due today (already fired as notifications), lets you mark off what you handled, and offers once to set a reminder for anything worth carrying into tomorrow.
   - **Habits:** logs any tracked habits you evidenced today and notes standouts (a limit habit over cap, a high-priority build habit that lagged). Silent if you haven't set up `/habits` (nudges once).
+  - **Reminders:** once your habits are consolidated, a **two-way sync** runs (`habits reminders-sync`) for any habit linked to an Apple Reminder (`/remind`): a reminder you ticked off in the Reminders app marks the habit done here, and a habit you closed today completes its per-day reminder. Surfaced as a one-line summary only if something moved, never asked. No proactive "want to link these?" nag — linking is opt-in, per habit, only when you ask (or at `/habits` add/setup). Reminders only — a Calendar event has no "done" state. Silent when nothing's linked or the Reminders helper isn't built / lacks access.
   - Bookkeeping only — the close never invents new analysis or new prescriptions.
 
 **Tone rules baked into the prompt:**
