@@ -147,7 +147,18 @@ Step 2 — Ask, ONE question at a time. Wait for each answer before asking the n
   2) "What got dropped, and was that the right call?"
   3) "Energy curve — morning / afternoon / evening? (1–10 each, or a word each)"
   4) "One thing to carry into tomorrow."
-  5) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
+  5) DIET — ask ALWAYS if diet_file exists: "Anything to add to today's diet
+     log — dinner, evening snack, anything not in there yet? (Skip if it's
+     all logged.)" Use the answer in Step 4a. If the user says nothing /
+     skip / already done, note that and proceed without asking again.
+  6) HABITS — ask ONLY IF habits_setup_needed == no: From the HABITS block
+     above, collect (a) today's due BUILD habits — those marked "⏳" or
+     "not yet today" — and (b) today's LIMIT habits. Ask in ONE message:
+     "Habits check — {comma-separated due build habits}: which did you do?
+     And {limit habits}: anything to flag on those?"
+     Wait for the answer. Use ONLY this explicit answer in Step 4e — do
+     NOT infer habits from any other part of the conversation.
+  7) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
      unchecked item ("- [ ]"): "Did you get to the declutter task — {item}?"
      SKIP this question entirely if there's no declutter item, it's already
      ticked ("- [x]"), or the user's preferences (top of session) say not to ask
@@ -236,10 +247,11 @@ without re-asking. Use the Edit tool on each file.
       nag) — "You haven't set up habit tracking yet — /habits picks a few habits
       to build or cap. Worth a look." Don't block the close.
     - If a rollup is present: note standouts in one line (a limit habit over
-      cap, a high-priority build habit that lagged). Marking today's habits in
-      the tracking md is handled by the HABIT EXTRACTION block below — do that
-      FIRST (mark everything the day's PLAN/JOURNAL/FITNESS/DIET above shows the
-      user did), THEN consolidate the day:
+      cap, a high-priority build habit that lagged). Marking today's habits
+      uses the HABIT EXTRACTION block below — but use ONLY the user's explicit
+      answer from Step 2 Q6 (not auto-inference from the rest of the
+      conversation). Mark what they confirmed; leave everything else unmarked.
+      THEN consolidate:
         bash "$HABITS_CMD" consolidate --date $TODAY
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
       analysis DB and prunes the habits you didn't do from the day's entry, so

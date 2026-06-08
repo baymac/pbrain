@@ -13,8 +13,9 @@ The script emits `END_OF_DAY_SESSION` with today's plan, journal, fitness, and d
 
 - Ask the four questions **one at a time**. Wait for each answer before asking the next.
 - Fill the plan file **in-place** using the Edit tool. No sibling close files.
-- Propagate actuals to the diet and fitness files **silently** as bookkeeping — surface a one-line summary per file touched at the end, not mid-session.
-- After consolidating habits, **offer once** to mark the matching Apple Reminders done for any habit you closed today (Reminders only — Calendar has no "done" state). Skip silently when no habit was done, no reminder matches, or the Reminders helper isn't available.
+- Ask about unlogged meals (dinner, snacks) as Q5 before closing the diet file. Propagate fitness actuals silently.
+- Ask explicitly which habits the user did today as Q6 (one question listing all due habits). Do NOT auto-infer habits from conversation evidence.
+- Reminders sync runs silently after consolidate; surface one line only if something moved.
 - One closing line. No paragraphs of reflection. The user already reflected — your job is to record.
 - Do NOT call the day a "win" or a "loss." Neutral language only.
 - Do NOT prescribe action items, accountability frameworks, or pep talks.
