@@ -61,6 +61,34 @@ Deferred from the `/habits` criteria-model redesign (eng review 2026-06-03).
 
 ---
 
+## Laptop-tracking follow-ups
+
+Deferred from the `/laptop-tracking` design + eng review (2026-06-07). The core
+ships a Swift launchd daemon → `~/.config/pbrain/tracker.db` (active-only
+segments: app + raw browser host + attribution reason) → an end-of-day-rendered
+`life/laptop-tracking/<date>.md`. These are the named future consumers.
+
+- [ ] **Dashboard consumer on `tracker.db`** — a visual dashboard reading the
+  granular segments: the deferred Approach B (self-refreshing local HTML: day
+  timeline + top apps/domains + active-vs-away) or Approach C (always-on
+  NSStatusItem menubar popover). **Why:** it's the entire justification for storing
+  extensive granular data now — instrument richly once, render many views later.
+  **Pros:** the data is already captured; this is pure read-side work (same
+  normalize + aggregate as the daily-md renderer). **Cons:** may never be built
+  (flagged speculative in the outside-voice plan review). **Depends on:** the core
+  daemon + `tracker.db` schema shipping first. *(Approaches B/C, deferred in the design.)*
+
+- [ ] **`tracker.db` retention / vacuum policy** — a retention knob (e.g.
+  `PBRAIN_TRACKER_RETAIN_DAYS`) + periodic `VACUUM`, since active segments
+  accumulate permanently. **Why:** forever-retention was flagged in review; at a
+  few hundred active rows/day the DB stays small for years, but unbounded growth
+  deserves a documented escape hatch. **Pros:** cheap insurance; bundles naturally
+  with the end-of-day finalize job. **Cons:** genuinely YAGNI for v1 — not needed
+  for a long time. **Depends on:** schema + end-of-day finalize shipping. *(scope
+  deferred in the eng review.)*
+
+---
+
 ## Explicit non-goals
 
 Document opinions, not just todos. These patterns exist in the adjacent tools but **pbrain deliberately does not adopt them.**

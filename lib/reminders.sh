@@ -19,6 +19,16 @@
 # Like the other lib/ helpers, this NEVER exits non-zero — it is sourced into
 # commands under `set -euo pipefail`.
 
+# The build helpers below delegate to pbrain_swift_build (lib/launchd.sh). vault.sh
+# sources launchd.sh first, but reminders.sh is also sourced directly (e.g. by
+# tests), so pull launchd.sh in if it isn't already loaded.
+if ! declare -F pbrain_swift_build >/dev/null 2>&1; then
+  _PBRAIN_RM_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || true
+  [[ -n "${_PBRAIN_RM_LIB_DIR:-}" && -f "$_PBRAIN_RM_LIB_DIR/launchd.sh" ]] \
+    && source "$_PBRAIN_RM_LIB_DIR/launchd.sh" || true
+  unset _PBRAIN_RM_LIB_DIR
+fi
+
 # Where the compiled notifier app lives. It's a per-machine build artifact (like
 # the DB), NOT in the vault or the source tree — it sits beside the configs in
 # ~/.config/pbrain. Override with PBRAIN_NOTIFY_APP.
@@ -30,50 +40,16 @@ export PBRAIN_NOTIFY_APP
 # notifications fire reliably even from the launchd poller, where osascript gets
 # silently dropped (no trusted calling app). See lib/pbrain-notify.swift.
 #
-# Idempotent + best-effort: rebuilds only when the binary is missing or older than
-# the source; a missing swiftc or a compile failure just leaves the app absent and
-# pbrain_notify falls back to osascript. Never exits non-zero, never prints.
+# Delegates to the shared pbrain_swift_build (source-hash cached). The runtime
+# notification identity is set by the binary itself (it impersonates
+# com.apple.Terminal); CFBundleIdentifier here only gives the bundle a clean
+# structure. Idempotent + best-effort; never exits non-zero, never prints.
 pbrain_notify_build() {
-  command -v swiftc >/dev/null 2>&1 || return 0
-  local lib_dir src bin
+  local lib_dir
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
-  src="$lib_dir/pbrain-notify.swift"
-  [[ -f "$src" ]] || return 0
-  bin="$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify"
-  # Up to date? binary exists and is at least as new as the source.
-  [[ -x "$bin" && ! "$src" -nt "$bin" ]] && return 0
-  mkdir -p "$PBRAIN_NOTIFY_APP/Contents/MacOS" 2>/dev/null || return 0
-  # Static bundle metadata — written once. The runtime identity is set by the
-  # binary itself (it impersonates com.apple.Terminal); CFBundleIdentifier here
-  # only gives the bundle a clean structure and keeps the UN path open later.
-  if [[ ! -f "$PBRAIN_NOTIFY_APP/Contents/Info.plist" ]]; then
-    cat > "$PBRAIN_NOTIFY_APP/Contents/Info.plist" 2>/dev/null <<'PLIST' || return 0
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key><string>com.pbrain.notify</string>
-  <key>CFBundleName</key><string>pbrain-notify</string>
-  <key>CFBundleExecutable</key><string>pbrain-notify</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSUIElement</key><true/>
-  <key>NSUserNotificationAlertStyle</key><string>alert</string>
-</dict>
-</plist>
-PLIST
-  fi
-  # Compile to a temp path in the same dir, then atomic-rename into place so a
-  # concurrent poller never executes a half-written binary.
-  local tmp="$bin.tmp.$$"
-  if swiftc -suppress-warnings "$src" -o "$tmp" >/dev/null 2>&1; then
-    mv -f "$tmp" "$bin" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
-  else
-    rm -f "$tmp" 2>/dev/null || true
-  fi
-  return 0
+  pbrain_swift_build "$PBRAIN_NOTIFY_APP" "$lib_dir/pbrain-notify.swift" "com.pbrain.notify" \
+    --plist-extra '  <key>LSUIElement</key><true/>
+  <key>NSUserNotificationAlertStyle</key><string>alert</string>'
 }
 
 # Fire a macOS notification (best-effort). Title + message reach the notifier as
@@ -120,44 +96,14 @@ PBRAIN_OVERLAY_APP="${PBRAIN_OVERLAY_APP:-${XDG_CONFIG_HOME:-$HOME/.config}/pbra
 export PBRAIN_OVERLAY_APP
 
 # Build (or rebuild) pbrain-overlay.app from the checked-in Swift source.
-# Idempotent + best-effort, mirroring pbrain_notify_build: rebuilds only when the
-# binary is missing or older than the source; a missing swiftc or a compile
-# failure just leaves the app absent and pbrain_overlay_show falls back to a
-# plain notification. Never exits non-zero, never prints.
+# Delegates to the shared pbrain_swift_build (source-hash cached). A missing
+# swiftc or a compile failure just leaves the app absent and pbrain_overlay_show
+# falls back to a plain notification. Never exits non-zero, never prints.
 pbrain_overlay_build() {
-  command -v swiftc >/dev/null 2>&1 || return 0
-  local lib_dir src bin
+  local lib_dir
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
-  src="$lib_dir/pbrain-overlay.swift"
-  [[ -f "$src" ]] || return 0
-  bin="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
-  [[ -x "$bin" && ! "$src" -nt "$bin" ]] && return 0
-  mkdir -p "$PBRAIN_OVERLAY_APP/Contents/MacOS" 2>/dev/null || return 0
-  if [[ ! -f "$PBRAIN_OVERLAY_APP/Contents/Info.plist" ]]; then
-    cat > "$PBRAIN_OVERLAY_APP/Contents/Info.plist" 2>/dev/null <<'PLIST' || return 0
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key><string>com.pbrain.overlay</string>
-  <key>CFBundleName</key><string>pbrain-overlay</string>
-  <key>CFBundleExecutable</key><string>pbrain-overlay</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSUIElement</key><true/>
-</dict>
-</plist>
-PLIST
-  fi
-  local tmp="$bin.tmp.$$"
-  if swiftc -suppress-warnings "$src" -o "$tmp" >/dev/null 2>&1; then
-    mv -f "$tmp" "$bin" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
-  else
-    rm -f "$tmp" 2>/dev/null || true
-  fi
-  return 0
+  pbrain_swift_build "$PBRAIN_OVERLAY_APP" "$lib_dir/pbrain-overlay.swift" "com.pbrain.overlay" \
+    --plist-extra '  <key>LSUIElement</key><true/>'
 }
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
@@ -220,49 +166,21 @@ PBRAIN_REMINDERS_APP="${PBRAIN_REMINDERS_APP:-${XDG_CONFIG_HOME:-$HOME/.config}/
 export PBRAIN_REMINDERS_APP
 
 # Build (or rebuild) pbrain-reminders.app from the checked-in Swift source.
-# Idempotent + best-effort: rebuilds only when the binary is missing or older
-# than the source; a missing swiftc or a compile failure leaves the app absent
-# and pbrain_reminders_run returns UNAVAILABLE. The Info.plist carries the
-# Reminders usage strings (required for the access prompt) and LSUIElement (no
-# Dock icon). Ad-hoc signs the bundle so TCC keeps a stable identity across runs.
-# Never exits non-zero, never prints.
+# Delegates to the shared pbrain_swift_build (source-hash cached, ad-hoc signed).
+# The source-hash cache is load-bearing here: TCC keys Automation/Reminders
+# consent partly on the signature, so we must rebuild only when the source
+# actually changed — not on every mtime touch — or the grant churns. The
+# Info.plist carries the Reminders usage strings (required for the access prompt)
+# and LSUIElement (no Dock icon). A missing swiftc / compile failure leaves the
+# app absent and pbrain_reminders_run returns UNAVAILABLE. Never exits non-zero.
 pbrain_reminders_app_build() {
-  command -v swiftc >/dev/null 2>&1 || return 0
-  local lib_dir src bin
+  local lib_dir
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
-  src="$lib_dir/pbrain-reminders.swift"
-  [[ -f "$src" ]] || return 0
-  bin="$PBRAIN_REMINDERS_APP/Contents/MacOS/pbrain-reminders"
-  [[ -x "$bin" && ! "$src" -nt "$bin" ]] && return 0
-  mkdir -p "$PBRAIN_REMINDERS_APP/Contents/MacOS" 2>/dev/null || return 0
-  if [[ ! -f "$PBRAIN_REMINDERS_APP/Contents/Info.plist" ]]; then
-    cat > "$PBRAIN_REMINDERS_APP/Contents/Info.plist" 2>/dev/null <<'PLIST' || return 0
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key><string>com.pbrain.reminders</string>
-  <key>CFBundleName</key><string>pbrain-reminders</string>
-  <key>CFBundleExecutable</key><string>pbrain-reminders</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSUIElement</key><true/>
+  pbrain_swift_build "$PBRAIN_REMINDERS_APP" "$lib_dir/pbrain-reminders.swift" "com.pbrain.reminders" \
+    --sign \
+    --plist-extra '  <key>LSUIElement</key><true/>
   <key>NSRemindersUsageDescription</key><string>pbrain manages your /remind reminders in Reminders, including creating, editing, and removing them.</string>
-  <key>NSRemindersFullAccessUsageDescription</key><string>pbrain manages your /remind reminders in Reminders, including creating, editing, and removing them.</string>
-</dict>
-</plist>
-PLIST
-  fi
-  local tmp="$bin.tmp.$$"
-  if swiftc -suppress-warnings "$src" -o "$tmp" >/dev/null 2>&1; then
-    mv -f "$tmp" "$bin" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
-    command -v codesign >/dev/null 2>&1 && codesign --force --sign - "$PBRAIN_REMINDERS_APP" >/dev/null 2>&1 || true
-  else
-    rm -f "$tmp" 2>/dev/null || true
-  fi
-  return 0
+  <key>NSRemindersFullAccessUsageDescription</key><string>pbrain manages your /remind reminders in Reminders, including creating, editing, and removing them.</string>'
 }
 
 # _pbrain_rem_app_run <op-args...> — launch the EventKit app via `open` and echo

@@ -382,50 +382,21 @@ PYEOF
     # Pre-build the overlay app so the first background tick can fire instantly
     # (best-effort; if swiftc is missing a blocking reminder degrades to a notification).
     pbrain_overlay_build || true
-    mkdir -p "$HOME/Library/LaunchAgents"
     LOG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/.logs"
-    mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/reminders.log"
-    # XML-escape path metacharacters (&, <, >) before interpolating into the
-    # plist — otherwise a path containing them yields malformed XML that
-    # launchctl silently rejects while we report success.
-    _xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-    SELF_X="$(_xml_escape "$SELF")"
-    DBF_X="$(_xml_escape "$PBRAIN_DB_FILE")"
-    LOG_X="$(_xml_escape "$LOG_FILE")"
-    cat > "$PLIST" <<PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.pbrain.reminders</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>$SELF_X</string>
-    <string>tick</string>
-  </array>
-  <key>EnvironmentVariables</key>
+    # EnvironmentVariables block — the only caller-specific plist keys. The DB
+    # path is XML-escaped (the shared installer escapes Label / ProgramArguments /
+    # log path itself). The poller ticks every ~60s and runs at load.
+    DBF_X="$(_pbrain_xml_escape "$PBRAIN_DB_FILE")"
+    REMIND_EXTRA="  <key>EnvironmentVariables</key>
   <dict>
     <key>PBRAIN_DB_FILE</key><string>$DBF_X</string>
   </dict>
   <key>StartInterval</key><integer>60</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$LOG_X</string>
-  <key>StandardErrorPath</key><string>$LOG_X</string>
-</dict>
-</plist>
-PLISTEOF
-    UID_NUM="$(id -u)"
-    # Reload cleanly whether or not it was already loaded.
-    launchctl bootout "gui/$UID_NUM/com.pbrain.reminders" 2>/dev/null || true
-    if launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null; then
-      echo "Installed background blocking-reminders poller (fires every ~1 min)."
-    else
-      launchctl unload "$PLIST" 2>/dev/null || true
-      launchctl load "$PLIST" 2>/dev/null || true
-      echo "Installed background blocking-reminders poller (via load)."
-    fi
+  <key>RunAtLoad</key><true/>"
+    pbrain_launchagent_install "com.pbrain.reminders" "$PLIST" "$LOG_FILE" "$REMIND_EXTRA" \
+      -- /bin/bash "$SELF" tick
+    echo "Installed background blocking-reminders poller (fires every ~1 min)."
     if [[ -x "$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay" ]]; then
       echo "Overlay: pbrain-overlay.app built — reliable background overlays."
     else
@@ -435,13 +406,11 @@ PLISTEOF
     echo "Log:   $LOG_FILE"
     ;;
   uninstall)
-    UID_NUM="$(id -u)"
-    launchctl bootout "gui/$UID_NUM/com.pbrain.reminders" 2>/dev/null || \
-      launchctl unload "$PLIST" 2>/dev/null || true
     if [[ -f "$PLIST" ]]; then
-      rm -f "$PLIST"
+      pbrain_launchagent_uninstall "com.pbrain.reminders" "$PLIST"
       echo "Removed background blocking-reminders poller."
     else
+      pbrain_launchagent_uninstall "com.pbrain.reminders" "$PLIST"
       echo "Background blocking-reminders poller was not installed."
     fi
     ;;
