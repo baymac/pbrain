@@ -1100,6 +1100,27 @@ print(" | ".join(out))
   today="$(date +%Y-%m-%d)"
   cmd_path="$(pbrain_habits_cmd)"
 
+  # Collect classification rules for scored habits (their profile notes), so the
+  # model has exact good/bad definitions inline — not buried in the profile.
+  local scored_rules
+  scored_rules="$(printf '%s' "$json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+out = []
+for h in data.get("habits") or []:
+    if h.get("archived"):
+        continue
+    if isinstance(h.get("scoring"), dict):
+        n = str(h.get("name", "")).strip()
+        notes = str(h.get("notes", "")).strip()
+        if n and notes:
+            out.append(f"  {n}: {notes}")
+print("\n".join(out))
+' 2>/dev/null || true)"
+
   printf '%s\n' ""
   printf '%s\n' "--- HABIT EXTRACTION ($cmd) ---"
   printf '%s\n' "Run this AFTER the command's main work, silently. Tracked habits:"
@@ -1119,6 +1140,11 @@ print(" | ".join(out))
   printf '%s\n' "where --good = qualifying units (e.g. clean home-cooked meals) and --bad ="
   printf '%s\n' "slip units (e.g. outside/junk meals). habits.sh applies the profile formula."
   printf '%s\n' "(If you've already reduced it to one slip count, pass --slips <N> instead.)"
+  if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
+    printf '%s\n' "Classification rules per scored habit — use EXACTLY these definitions to count"
+    printf '%s\n' "good/bad units; every eating occasion counts (snacks included), not just mains:"
+    printf '%s\n' "$scored_rules"
+  fi
   printf '%s\n' ""
   printf '%s\n' "[limit] habits work INVERSELY — they are caps on something to avoid (e.g. No"
   printf '%s\n' "smoking, No drinking, No masturbation, TV under 1hr). MARK a [limit] habit"
