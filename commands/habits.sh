@@ -847,28 +847,31 @@ PYEOF
   _rm_valid_time() { [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; }
   _rm_write() {  # <linked|declined|clear> [<time>]
     python3 - "$PROFILE_FILE" "$RM_ID" "$1" "${2:-}" <<'PYEOF'
-import json, re, sys
+import json, re, sys, fcntl, os
 path, hid, state, rtime = sys.argv[1:5]
-text = open(path).read()
-m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
-if not m:
-    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
-data = json.loads(m.group(2))
-found = None
-for h in (data.get("habits") or []):
-    if str(h.get("id", "")).strip() == hid:
-        found = h; break
-if found is None:
-    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
-if state == "clear":
-    found.pop("reminder", None)
-elif state == "declined":
-    found["reminder"] = {"state": "declined"}
-else:
-    found["reminder"] = {"state": "linked", "time": rtime}
-new_json = json.dumps(data, indent=2)
-text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
-open(path, "w").write(text)
+lock_path = path + ".lock"
+with open(lock_path, 'w') as lf:
+    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    text = open(path).read()
+    m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+    if not m:
+        print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+    data = json.loads(m.group(2))
+    found = None
+    for h in (data.get("habits") or []):
+        if str(h.get("id", "")).strip() == hid:
+            found = h; break
+    if found is None:
+        print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+    if state == "clear":
+        found.pop("reminder", None)
+    elif state == "declined":
+        found["reminder"] = {"state": "declined"}
+    else:
+        found["reminder"] = {"state": "linked", "time": rtime}
+    new_json = json.dumps(data, indent=2)
+    text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+    open(path, "w").write(text)
 PYEOF
   }
 
@@ -969,6 +972,15 @@ if [[ "$SUB" == "reminders-ensure" ]]; then
     esac
   done
   [[ -f "$PROFILE_FILE" ]] || exit 0
+  # Atomic mkdir lock prevents parallel ensure calls from each creating their own
+  # Apple Reminders before any can INSERT into the DB (TOCTOU race on the have-set).
+  # A concurrent caller sees the dir exists and exits immediately — idempotent since
+  # the first caller will create all reminders for this date.
+  _ENSURE_LOCK="${PBRAIN_DB_FILE%.db}.ensure.lock.d"
+  if ! mkdir "$_ENSURE_LOCK" 2>/dev/null; then
+    echo "ENSURED 0"; exit 0
+  fi
+  trap "rm -rf '$_ENSURE_LOCK' 2>/dev/null || true" EXIT INT TERM
   TODO="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RE_DATE" <<'PYEOF' 2>/dev/null || true
 import json, re, sys, sqlite3
 libdir, profile, db, date = sys.argv[1:5]
