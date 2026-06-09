@@ -24,8 +24,12 @@
 //        → EDITED | NOT_FOUND
 //   --op complete --id ID [--result F]      → COMPLETED | NOT_FOUND
 //   --op delete   --id ID [--result F]      → DELETED   | NOT_FOUND
+//   --op status   --id ID [--result F]      → DONE [<completion-date>] | PENDING | MISSING
+//        (fetch one reminder by id and report its completion state — used by
+//         /habits to sync a per-day one-shot's done-state back to the habit;
+//         `list` can't, since it returns only INCOMPLETE reminders)
 // Status tokens: OK | ADDED <id> | EDITED | COMPLETED | DELETED | NOT_FOUND |
-//                ACCESS_DENIED | ERROR:<message>
+//                DONE [<date>] | PENDING | MISSING | ACCESS_DENIED | ERROR:<message>
 //
 // The --rrule is a small iCalendar subset: FREQ=DAILY|WEEKLY|MONTHLY|YEARLY,
 // INTERVAL=N, BYDAY=MO,TU,1MO,-1FR, BYMONTHDAY=1,15, BYMONTH=1,6,
@@ -359,6 +363,24 @@ case "complete":
     r.isCompleted = true
     do { try store.save(r, commit: true); emit("COMPLETED") }
     catch { emit("ERROR:\(error.localizedDescription)"); exit(1) }
+    exit(0)
+
+case "status":
+    // Fetch a single reminder by id and report whether it's been completed.
+    // Unlike `list` (incomplete-only), this resolves the item regardless of
+    // completion state, so a per-day one-shot ticked off in the Reminders app
+    // is detectable. MISSING = the id no longer exists (deleted, or never was).
+    guard let id = arg("--id") else { emit("MISSING"); exit(0) }
+    guard let r = store.calendarItem(withIdentifier: id) as? EKReminder
+    else { emit("MISSING"); exit(0) }
+    if r.isCompleted {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm"
+        if let cd = r.completionDate { emit("DONE \(df.string(from: cd))") }
+        else { emit("DONE") }
+    } else {
+        emit("PENDING")
+    }
     exit(0)
 
 case "delete":

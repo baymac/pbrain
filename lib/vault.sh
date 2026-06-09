@@ -83,8 +83,11 @@ _PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 [[ -f "$_PBRAIN_LIB_DIR/profile.sh" ]] && source "$_PBRAIN_LIB_DIR/profile.sh" || true
 # Shared SQLite store + the habits / reminders helpers built on it. Order
 # matters: db.sh first (defines PBRAIN_DB_FILE), then habits.sh (needs
-# pbrain_profile_json from profile.sh and the DB) and reminders.sh.
+# pbrain_profile_json from profile.sh and the DB) and reminders.sh. launchd.sh
+# (shared swiftc-build + LaunchAgent helpers) is sourced before reminders.sh,
+# which calls pbrain_swift_build.
 [[ -f "$_PBRAIN_LIB_DIR/db.sh" ]] && source "$_PBRAIN_LIB_DIR/db.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/launchd.sh" ]] && source "$_PBRAIN_LIB_DIR/launchd.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/habits.sh" ]] && source "$_PBRAIN_LIB_DIR/habits.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/reminders.sh" ]] && source "$_PBRAIN_LIB_DIR/reminders.sh" || true
 unset _PBRAIN_LIB_DIR

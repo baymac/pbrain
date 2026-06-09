@@ -148,6 +148,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/thoughts [<text>]` | Explode and log a timestamped thought mid-day; on-demand, any time | `$VAULT/life/thought-tracking/` |
 | `/remind <text>` | Real Apple Reminders (EKReminder) — timed due date, cron-based recurrence, priority, early alarms; create/list/edit/done/cancel. Reminders + iCloud fire and sync. NOT a calendar anchor for `/plan-my-day` | Apple Reminders (no vault file, no DB) |
 | `/remind-blocking <text>` | Reminders that fire as a full-screen blocking overlay ("Take a break"; hold Control to skip / Return to mark done); cron-flexible schedules, fires via its own background poller | local SQLite DB (no vault file) |
+| `/laptop-tracking` | Resident macOS daemon: which app + for how long, and browser DOMAIN, excluding locked/idle/asleep time (a playing video still counts). `start \| access \| status \| report \| stop` | `$VAULT/life/laptop-tracking/YYYY-MM-DD.md` (domain-level; granular DB is local-only, never synced) |
 | `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
@@ -170,7 +171,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
 
-`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/habits`, `/remind <text>`, `/remind-blocking <text>`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
+`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/habits`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -194,6 +195,10 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_NOTIFY_IDENTITY` | `/remind-blocking` (bundle id the notifier delivers under; `""` = no impersonation) | unset → `com.apple.Terminal` |
 | `PBRAIN_OVERLAY_APP` | `/remind-blocking` (cached build of pbrain's full-screen overlay app) | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | `/remind-blocking` (default overlay background colour, hex) | unset → slate |
+| `PBRAIN_TRACKER_DB_FILE` | `/laptop-tracking` (its OWN local SQLite DB — segments; never synced to the vault) | `~/.config/pbrain/tracker.db` |
+| `PBRAIN_TRACKER_APP` | `/laptop-tracking` (cached build of the resident tracker daemon app) | `~/.config/pbrain/pbrain-tracker.app` |
+| `PBRAIN_TRACKER_DIR` | `/laptop-tracking` (daily report write dir) | `$VAULT/life/laptop-tracking` |
+| `PBRAIN_TRACKER_POLL` / `PBRAIN_TRACKER_IDLE` | `/laptop-tracking` (daemon poll interval / idle-away threshold, seconds) | `10` / `300` |
 | `PBRAIN_THOUGHTS_DIR` | `/thoughts` | `$VAULT/life/thought-tracking` |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |

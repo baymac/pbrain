@@ -46,11 +46,11 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [[ "$output" == *"5"* ]]
 }
 
-@test "add without --duration defaults to 0 (stays until skipped)" {
+@test "add without --duration defaults to 0 block + 5 hold (stays until skipped)" {
   _run_cmd add --text "Stand up" --due "2099-01-02 10:00"
   [ "$status" -eq 0 ]
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select block_seconds,hold_seconds from reminders').fetchone())" "$PBRAIN_DB_FILE"
-  [ "$output" = "(0, 3)" ]
+  [ "$output" = "(0, 5)" ]   # block_seconds defaults to 0 (until-skipped); hold defaults to 5
 }
 
 @test "add requires --text" {

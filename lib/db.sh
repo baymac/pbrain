@@ -27,7 +27,16 @@
 PBRAIN_DB_FILE="${PBRAIN_DB_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/pbrain.db}"
 export PBRAIN_DB_FILE
 
+# /laptop-tracking gets its OWN database (Decision 1A), isolated from the shared
+# pbrain.db that habits/reminders use. The tracker daemon is the only resident,
+# high-churn writer in pbrain (a heartbeat UPDATE every ~10s while active); giving
+# it a separate file means its WAL traffic and any corruption blast radius never
+# touch the habits/reminders store. It is local-only and never synced to the vault.
+PBRAIN_TRACKER_DB_FILE="${PBRAIN_TRACKER_DB_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/tracker.db}"
+export PBRAIN_TRACKER_DB_FILE
+
 pbrain_db_file() { printf '%s\n' "$PBRAIN_DB_FILE"; }
+pbrain_tracker_db_file() { printf '%s\n' "$PBRAIN_TRACKER_DB_FILE"; }
 
 # Create the schema if it doesn't exist yet. Idempotent: re-running on an
 # existing DB is a no-op. Safe to call at the top of any command that touches
@@ -63,6 +72,24 @@ try:
     );
     CREATE INDEX IF NOT EXISTS idx_habit_events_habit ON habit_events(habit);
     CREATE INDEX IF NOT EXISTS idx_habit_events_date  ON habit_events(occurred_on);
+
+    -- habit_reminders is the per-day map between a linked habit and the Apple
+    -- Reminder that notifies it. A linked habit gets ONE one-shot reminder per
+    -- scheduled day (not a recurring Apple reminder): the reminder is purely a
+    -- notification + a familiar checkbox surface — pbrain owns the habit data.
+    -- One row per (habit_id, date): reminder_id is the EKReminder for that day,
+    -- status tracks our side of the sync. The PK is the idempotency guard for
+    -- "create today's reminder if it's not already there".
+    CREATE TABLE IF NOT EXISTS habit_reminders (
+        habit_id    TEXT NOT NULL,                 -- stable habit slug (profile id)
+        occurred_on TEXT NOT NULL,                 -- YYYY-MM-DD (local) the reminder is for
+        reminder_id TEXT NOT NULL,                 -- EKReminder calendarItemIdentifier (the one-shot)
+        status      TEXT NOT NULL DEFAULT 'pending',-- pending | done | cancelled
+        created_at  TEXT NOT NULL,
+        resolved_at TEXT,                          -- when it reached done/cancelled
+        PRIMARY KEY (habit_id, occurred_on)
+    );
+    CREATE INDEX IF NOT EXISTS idx_habit_reminders_date ON habit_reminders(occurred_on);
 
     -- /remind-blocking is the SOLE owner of these tables (/remind is Apple
     -- Calendar-only and never touches the DB). The model is split in two:
@@ -253,6 +280,54 @@ try:
     CREATE INDEX IF NOT EXISTS idx_reminders_sched ON reminders(schedule_id);
     """)
 
+    con.commit()
+    con.close()
+except Exception:
+    pass
+PYEOF
+  return 0
+}
+
+# Create the laptop-tracking schema in its OWN database (Decision 1A). Idempotent
+# CREATE TABLE IF NOT EXISTS; safe to call at the top of any tracker codepath and
+# from the daemon's startup. WAL + busy_timeout=5000 on the connection, matching
+# the shared store — two processes touch tracker.db (the resident Swift writer and
+# the brief python renderer), so both must agree on the journal mode and timeout.
+# Returns 0 even if python3 is missing or the DB can't be opened.
+#
+# tracker_segments holds ONE row per (app, host) ACTIVE span (Decision T1: only
+# active time is persisted; away/idle/locked/asleep is the ABSENCE of a row and is
+# derived from the gap between segments at render time). The daemon stores RAW
+# signals (Decision 3A) — raw_host straight from AppleScript, no normalization;
+# the python renderer normalizes the domain and classifies active/away. The
+# attribution enum (Decision T2) explains any browser row whose domain is NULL.
+pbrain_tracker_db_init() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  local db="${1:-$PBRAIN_TRACKER_DB_FILE}"
+  mkdir -p "$(dirname "$db")" 2>/dev/null || true
+  python3 - "$db" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db = sys.argv[1]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS tracker_segments (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at    INTEGER NOT NULL,   -- epoch seconds, UTC
+        ended_at      INTEGER,            -- epoch seconds, UTC; NULL = currently-open active row
+        occurred_on   TEXT NOT NULL,      -- YYYY-MM-DD (LOCAL day-bucket key; midnight-split)
+        app_bundle_id TEXT,               -- raw bundle id (e.g. com.google.Chrome); NULL if none
+        app_name      TEXT,               -- raw localized display-name snapshot
+        raw_host      TEXT,               -- raw URL host from AppleScript; NULL if not applicable
+        attribution   TEXT NOT NULL DEFAULT 'ok'  -- ok|tcc_denied|timeout|non_web|not_browser
+    );
+    -- Day-bucket reads (the renderer queries one occurred_on at a time).
+    CREATE INDEX IF NOT EXISTS idx_tracker_seg_day ON tracker_segments(occurred_on);
+    -- Startup sweep finds the (at most one) dangling open row fast.
+    CREATE INDEX IF NOT EXISTS idx_tracker_seg_open ON tracker_segments(ended_at);
+    """)
     con.commit()
     con.close()
 except Exception:

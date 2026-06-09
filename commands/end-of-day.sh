@@ -89,6 +89,17 @@ if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else H
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || true)"
 
+# Laptop-tracking finalize: render today's usage md deterministically here so the
+# close has the day's numbers. No-op (and silent) unless /laptop-tracking was set
+# up (its DB exists). The render never clobbers an existing report on a read
+# failure. We grep the "Wrote <path>" line out of the subcommand's other output.
+LAPTOP_CMD="$_SCRIPT_DIR/laptop-tracking.sh"
+LAPTOP_REPORT_FILE=""
+if [[ -n "${PBRAIN_TRACKER_DB_FILE:-}" && -f "$PBRAIN_TRACKER_DB_FILE" && -f "$LAPTOP_CMD" ]]; then
+  _lt_out="$(PBRAIN_SELF_IMPROVE=off bash "$LAPTOP_CMD" report "$TODAY" 2>/dev/null | grep -E '^Wrote ' || true)"
+  [[ -n "$_lt_out" ]] && LAPTOP_REPORT_FILE="${_lt_out#Wrote }"
+fi
+
 cat <<PROMPT
 END_OF_DAY_SESSION
 date: $TODAY ($DOW)
@@ -97,6 +108,7 @@ journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
 fitness_file: $FITNESS_FILE (exists: $(exists "$FITNESS_FILE"))
 diet_file: $DIET_FILE (exists: $(exists "$DIET_FILE"))
 habits_setup_needed: $HABITS_SETUP_NEEDED
+laptop_report_file: ${LAPTOP_REPORT_FILE:-(none)}
 
 --- PLAN ---
 $(read_or_missing "$PLAN_FILE")
@@ -135,7 +147,18 @@ Step 2 — Ask, ONE question at a time. Wait for each answer before asking the n
   2) "What got dropped, and was that the right call?"
   3) "Energy curve — morning / afternoon / evening? (1–10 each, or a word each)"
   4) "One thing to carry into tomorrow."
-  5) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
+  5) DIET — ask ALWAYS if diet_file exists: "Anything to add to today's diet
+     log — dinner, evening snack, anything not in there yet? (Skip if it's
+     all logged.)" Use the answer in Step 4a. If the user says nothing /
+     skip / already done, note that and proceed without asking again.
+  6) HABITS — ask ONLY IF habits_setup_needed == no: From the HABITS block
+     above, collect (a) today's due BUILD habits — those marked "⏳" or
+     "not yet today" — and (b) today's LIMIT habits. Ask in ONE message:
+     "Habits check — {comma-separated due build habits}: which did you do?
+     And {limit habits}: anything to flag on those?"
+     Wait for the answer. Use ONLY this explicit answer in Step 4e — do
+     NOT infer habits from any other part of the conversation.
+  7) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
      unchecked item ("- [ ]"): "Did you get to the declutter task — {item}?"
      SKIP this question entirely if there's no declutter item, it's already
      ticked ("- [x]"), or the user's preferences (top of session) say not to ask
@@ -224,14 +247,41 @@ without re-asking. Use the Edit tool on each file.
       nag) — "You haven't set up habit tracking yet — /habits picks a few habits
       to build or cap. Worth a look." Don't block the close.
     - If a rollup is present: note standouts in one line (a limit habit over
-      cap, a high-priority build habit that lagged). Marking today's habits in
-      the tracking md is handled by the HABIT EXTRACTION block below — do that
-      FIRST (mark everything the day's PLAN/JOURNAL/FITNESS/DIET above shows the
-      user did), THEN consolidate the day:
+      cap, a high-priority build habit that lagged). Marking today's habits
+      uses the HABIT EXTRACTION block below — but use ONLY the user's explicit
+      answer from Step 2 Q6 (not auto-inference from the rest of the
+      conversation). Mark what they confirmed; leave everything else unmarked.
+      THEN consolidate:
         bash "$HABITS_CMD" consolidate --date $TODAY
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
       analysis DB and prunes the habits you didn't do from the day's entry, so
       weekly/monthly reviews have accurate data. Run it once, after marking.
+
+4f) REMINDERS — a daily build habit can be LINKED to a per-day Apple Reminder
+    that pbrain keeps in TWO-WAY sync (the reminder is just a notification +
+    checkbox; pbrain owns the data). Run this AFTER 4e's consolidate. No-op when
+    no habits profile exists — don't mention reminders then.
+    SYNC (silent bookkeeping — do NOT ask): run
+         bash "$HABITS_CMD" reminders-sync --date $TODAY
+       It reconciles today's linked habits with their one-shot reminders both
+       ways: a reminder you ticked off in the Apple Reminders app marks the habit
+       done here, and a habit you closed today completes its reminder. It prints
+       "SYNCED pulled=<n> pushed=<n>". Surface ONE line only if something moved
+       (e.g. "Synced 2 habit reminders."); stay silent on "pulled=0 pushed=0" or
+       when reminders aren't set up.
+    Do NOT proactively offer to set up new reminder links here — linking is
+    opt-in, per habit, only when the user asks (or at /habits add/setup). If the
+    user does ask, use: bash "$HABITS_CMD" reminder --id <hid> --link --time HH:MM
+    (or --decline). If a reminder op reports Reminders access isn't granted, tell
+    the user to run /remind access once, then move on.
+    Reminders ONLY — a Calendar event has no "done" state, so never touch
+    calendar items here.
+
+4g) LAPTOP USAGE — if \`laptop_report_file\` is a path (not "(none)"), today's
+    laptop-usage report was already rendered to that file. Read it and weave ONE
+    grounded line into the close (e.g. "5h 12m active, mostly Chrome — 2h on
+    github.com"). Don't paste the whole table. If it's "(none)", say nothing
+    about laptop usage (the tracker isn't set up).
 
 Do these silently as part of writing the close — surface one short summary
 line per file you touched in your final message. Do NOT skip 4a/4b because
