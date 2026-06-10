@@ -422,6 +422,16 @@ final class Controller: NSObject {
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
                             object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
+        // Re-grab focus after an unlock so keyboard shortcuts work without
+        // requiring a click first. The overlay window is at maximumWindow level
+        // but the OS returns key-app status to Finder (or the previous app) after
+        // unlocking, which breaks the local key monitor.
+        distributedObservers.append(
+            dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
+                            object: nil, queue: .main) { [weak self] _ in
+                NSApp.activate(ignoringOtherApps: true)
+                self?.windows.forEach { $0.makeKeyAndOrderFront(nil) }
+            })
     }
 
     private func handle(_ ev: NSEvent) {
