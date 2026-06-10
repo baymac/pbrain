@@ -588,7 +588,8 @@ Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
 
   HOW TO RUN IT:
   - OPEN with the morning, always first: "Before we plan — what time did you wake up,
-    and what have you got done since?" Wait. This anchors the plan to the real day.
+    and what time did you go to bed last night? Also, what have you got done since waking?"
+    Wait. This anchors the plan to the real day and gives you the sleep window.
   - THEN let it flow adaptively. Read each answer and ask the natural next thing. If an
     answer already covers a later topic (e.g. they mention "I've got a 4pm call" or "no
     energy today"), DON'T re-ask it — note it and move on. Skip anything already answered
@@ -600,6 +601,10 @@ Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
   through the conversation in whatever order fits, not as a fixed script). Referenced
   later as q1–q9:
   - q1 — wake time today.
+  - q1b — bed time last night (collected in the same opening turn as q1). Compute sleep
+    duration (bed → wake, adding 24h if bed > wake for the midnight crossing). If sleep
+    < 7h OR working_style.day_wreckers contains "sleep" (case-insensitive), flag it in
+    your reply: "You got Xh of sleep — that's one to watch today."
   - q2 — what they've already done since waking (the important parts: work, meals,
     exercise, errands). You'll backfill these as already-done (✓) rows.
   - q3 — energy/mood right now (1–10 + a word).
@@ -622,9 +627,10 @@ Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
   - q8 — mood for creative work (yes / maybe / not today).
   - q9 — anything to declutter or tidy (inbox, desk, files, tabs — or none).
 
-  q1 and q2 anchor the plan to the real day: use q1 as the table's start time (overriding
-  the profile/inferred wake time if it differs), and log each important thing from q2 as
-  a ✓ row in the "Today at a glance" table. These q-labels carry through to Steps 3–4.
+  q1/q1b and q2 anchor the plan to the real day: use q1 as the table's start time
+  (overriding the profile/inferred wake time if it differs), and log each important thing
+  from q2 as a ✓ row in the "Today at a glance" table. Sleep duration (q1b → q1) feeds
+  the coaching note and Notes section if short. These q-labels carry through to Steps 3–4.
 
   Don't belabor it — if the user gives a lot up front, a couple of follow-ups is enough;
   don't ask all nine just to complete the set. Once you have what you need to build a
@@ -676,13 +682,14 @@ Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet)
   day_of_week: $DOW
   status: planned
   energy: {1-10 from q3}
+  sleep_hours: {computed from q1b and q1, e.g. 7.5 — omit if q1b not given}
   focus_today: [{current_focus goal names that any of the q4 blocks tie back to — empty array if none}]
   tags: []
   ---
 
   # Day Plan — $TODAY ($DOW)
 
-  > {one short coaching note tuned to today's energy, top 3 picks, and fitness intent. 1-2 sentences. No platitudes. Tie back to a goal if natural.}
+  > {one short coaching note tuned to today's energy, top 3 picks, fitness intent, and sleep if short (< 7h). 1-2 sentences. No platitudes. Tie back to a goal if natural.}
 
   ## Today at a glance
 

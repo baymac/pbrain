@@ -50,6 +50,7 @@
 //                  [--background "#1e3a5f"] # solid bg colour (hex); default slate
 //                  [--subtext "..."]        # optional smaller line under the message
 //                  [--mark-done]            # enable Option-hold + "Mark Done" button (no countdown)
+//                  [--warning-seconds 10]   # show a small non-kiosk warning panel first (default 10, 0 = skip)
 //                  [--id <instance_id>] [--db <path>]
 //
 // Build: `swiftc -suppress-warnings pbrain-overlay.swift`
@@ -73,6 +74,7 @@ let subtext      = argValue("--subtext")
 let totalSeconds = max(0, Int(argValue("--seconds") ?? "0") ?? 0)   // 0 = no countdown
 let holdSeconds  = max(0.5, Double(argValue("--hold") ?? "3") ?? 3.0)
 let markDone     = CommandLine.arguments.contains("--mark-done")
+let warningSeconds = max(0, Int(argValue("--warning-seconds") ?? "10") ?? 10)
 
 let reminderID: Int32?   = argValue("--id").flatMap { Int32($0) }
 let dbPath: String?      = { let p = argValue("--db"); return (p?.isEmpty == false) ? p : nil }()
@@ -289,13 +291,25 @@ final class Controller: NSObject {
     private var distributedObservers: [NSObjectProtocol] = []
     private var isDismissing = false
 
+    // Warning phase (shown before the full kiosk overlay)
+    private let warningSeconds: Int
+    private var warningWindow: NSWindow?
+    private var warningCountdownLabel: NSTextField?
+    private var warningTimer: Timer?
+    private var warningEnd: Date?
+
+    // Lock/unlock state — hide the overlay while locked, restore on unlock
+    private var isLocked = false
+    private var lockStartTime: Date?
+
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
     private let doneColor = NSColor(calibratedRed: 0.3,  green: 0.85, blue: 0.45, alpha: 0.95)
 
-    init(seconds: Int, hold: Double, markDone: Bool) {
+    init(seconds: Int, hold: Double, markDone: Bool, warning: Int) {
         self.totalSeconds = seconds
         self.holdSeconds = hold
         self.markDone = markDone
+        self.warningSeconds = warning
     }
 
     private func mmss(_ s: Int) -> String { String(format: "%d:%02d", s / 60, s % 60) }
@@ -396,13 +410,7 @@ final class Controller: NSObject {
     func start() {
         if totalSeconds > 0 {
             countdownEnd = Date().addingTimeInterval(Double(totalSeconds))
-            countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-                guard let s = self, let end = s.countdownEnd else { return }
-                let left = Int(ceil(end.timeIntervalSinceNow))
-                if left <= 0 { s.resolve("done"); return }   // waited out the break → done
-                s.countdownLabel?.stringValue = s.mmss(left)
-            }
-            if let t = countdownTimer { RunLoop.main.add(t, forMode: .common) }
+            startCountdownTimer()
         }
         // Control fires .flagsChanged (a modifier); Return fires .keyDown/.keyUp.
         // Swallow all ordinary keys so nothing leaks past the overlay.
@@ -410,10 +418,8 @@ final class Controller: NSObject {
             self?.handle(ev)
             return nil
         }
-        // Dismiss and exit when the machine sleeps or the screen locks so the
-        // process doesn't accumulate invisibly in memory overnight. System/display
-        // sleep arrives on the workspace centre; screen-lock is delivered as a
-        // distributed notification ("com.apple.screenIsLocked"), not via NSWorkspace.
+        // Machine sleep → missed (process won't survive sleep anyway).
+        // Screen lock → hide and restore on unlock (TODO 3: overlay persists across lock/unlock).
         let wsnc = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(
             wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
@@ -421,17 +427,10 @@ final class Controller: NSObject {
         let dnc = DistributedNotificationCenter.default()
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
-                            object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
-        // Re-grab focus after an unlock so keyboard shortcuts work without
-        // requiring a click first. The overlay window is at maximumWindow level
-        // but the OS returns key-app status to Finder (or the previous app) after
-        // unlocking, which breaks the local key monitor.
+                            object: nil, queue: .main) { [weak self] _ in self?.hideLocked() })
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
-                            object: nil, queue: .main) { [weak self] _ in
-                NSApp.activate(ignoringOtherApps: true)
-                self?.windows.forEach { $0.makeKeyAndOrderFront(nil) }
-            })
+                            object: nil, queue: .main) { [weak self] _ in self?.showUnlocked() })
     }
 
     private func handle(_ ev: NSEvent) {
@@ -518,6 +517,8 @@ final class Controller: NSObject {
         // NSEvent.removeMonitor on an already-removed token (undefined behaviour).
         guard !isDismissing else { return }
         isDismissing = true
+        warningTimer?.invalidate(); warningTimer = nil
+        warningWindow?.close(); warningWindow = nil
         countdownTimer?.invalidate()
         holdTimer?.invalidate()
         doneHoldTimer?.invalidate()
@@ -531,6 +532,172 @@ final class Controller: NSObject {
         for w in windows { w.orderOut(nil) }
         NSApp.terminate(nil)
     }
+
+    // Extract countdown start so it can be called from both start() and showUnlocked().
+    private func startCountdownTimer() {
+        guard totalSeconds > 0 else { return }
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let s = self, let end = s.countdownEnd else { return }
+            let left = Int(ceil(end.timeIntervalSinceNow))
+            if left <= 0 { s.resolve("done"); return }
+            s.countdownLabel?.stringValue = s.mmss(left)
+        }
+        if let t = countdownTimer { RunLoop.main.add(t, forMode: .common) }
+    }
+
+    // Hide windows on lock (don't resolve — the overlay persists for when the user unlocks).
+    private func hideLocked() {
+        guard !isLocked else { return }
+        isLocked = true
+        lockStartTime = Date()
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        for w in windows { w.orderOut(nil) }
+    }
+
+    // Restore windows after unlock, adjusting the countdown end time by the locked duration.
+    private func showUnlocked() {
+        guard isLocked, !isDismissing else { return }
+        isLocked = false
+        if let locked = lockStartTime, totalSeconds > 0, let end = countdownEnd {
+            countdownEnd = end.addingTimeInterval(Date().timeIntervalSince(locked))
+        }
+        lockStartTime = nil
+        for w in windows { w.orderFrontRegardless() }
+        (windows.first(where: { $0.contentView != nil }) ?? windows.first)?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        if totalSeconds > 0 {
+            countdownTimer?.invalidate(); countdownTimer = nil
+            startCountdownTimer()
+        }
+    }
+
+    // Show a small non-kiosk warning panel before the full overlay fires.
+    // On Skip → resolve("skipped"). On timer end → enterFullOverlay().
+    func startWarning() {
+        guard !isDismissing else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            enterFullOverlay(); return
+        }
+        let ww: CGFloat = 460, wh: CGFloat = 64
+        let ox = screen.visibleFrame.maxX - ww - 24
+        let oy = screen.visibleFrame.maxY - wh - 24
+        let wnd = NSPanel(
+            contentRect: NSRect(x: ox, y: oy, width: ww, height: wh),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+        wnd.level = .statusBar
+        wnd.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 0.90)
+        wnd.isOpaque = false
+        wnd.hasShadow = true
+        wnd.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        wnd.alphaValue = 0.0
+
+        let v = NSView(frame: NSRect(origin: .zero, size: CGSize(width: ww, height: wh)))
+        v.wantsLayer = true
+
+        let iconLbl = NSTextField(labelWithString: "⏱")
+        iconLbl.font = NSFont.systemFont(ofSize: 18)
+        iconLbl.textColor = .white
+        iconLbl.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(iconLbl)
+
+        let msgLbl = NSTextField(labelWithString: message)
+        msgLbl.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        msgLbl.textColor = .white
+        msgLbl.lineBreakMode = .byTruncatingTail
+        msgLbl.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(msgLbl)
+
+        let inLbl = NSTextField(labelWithString: "in")
+        inLbl.font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        inLbl.textColor = NSColor.white.withAlphaComponent(0.60)
+        inLbl.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(inLbl)
+
+        let cdLbl = NSTextField(labelWithString: mmss(warningSeconds))
+        cdLbl.font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        cdLbl.textColor = NSColor.white.withAlphaComponent(0.90)
+        cdLbl.translatesAutoresizingMaskIntoConstraints = false
+        warningCountdownLabel = cdLbl
+        v.addSubview(cdLbl)
+
+        let skipBtn = NSButton(title: "Skip", target: self, action: #selector(skipWarning))
+        skipBtn.bezelStyle = .rounded
+        skipBtn.font = NSFont.systemFont(ofSize: 13)
+        skipBtn.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(skipBtn)
+
+        NSLayoutConstraint.activate([
+            iconLbl.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 16),
+            iconLbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            msgLbl.leadingAnchor.constraint(equalTo: iconLbl.trailingAnchor, constant: 8),
+            msgLbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            msgLbl.widthAnchor.constraint(lessThanOrEqualToConstant: 180),
+            inLbl.leadingAnchor.constraint(equalTo: msgLbl.trailingAnchor, constant: 8),
+            inLbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            cdLbl.leadingAnchor.constraint(equalTo: inLbl.trailingAnchor, constant: 6),
+            cdLbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            skipBtn.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -14),
+            skipBtn.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+        ])
+        wnd.contentView = v
+
+        wnd.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            wnd.animator().alphaValue = 1.0
+        })
+        warningWindow = wnd
+
+        // During warning phase: sleep or lock → missed (full overlay never fired yet)
+        let wsnc = NSWorkspace.shared.notificationCenter
+        workspaceObservers.append(
+            wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
+                             object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
+        let dnc = DistributedNotificationCenter.default()
+        distributedObservers.append(
+            dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
+                            object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
+
+        warningEnd = Date().addingTimeInterval(Double(warningSeconds))
+        warningTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let s = self, let end = s.warningEnd else { return }
+            let left = Int(ceil(end.timeIntervalSinceNow))
+            if left <= 0 {
+                s.warningTimer?.invalidate(); s.warningTimer = nil
+                s.enterFullOverlay()
+                return
+            }
+            s.warningCountdownLabel?.stringValue = s.mmss(left)
+        }
+        if let t = warningTimer { RunLoop.main.add(t, forMode: .common) }
+    }
+
+    @objc private func skipWarning() { resolve("skipped") }
+
+    // Transition from warning phase to full kiosk overlay.
+    func enterFullOverlay() {
+        guard !isDismissing else { return }
+        // Clear warning-phase observers before registering full-overlay ones in start()
+        let wsnc = NSWorkspace.shared.notificationCenter
+        for tok in workspaceObservers { wsnc.removeObserver(tok) }
+        workspaceObservers.removeAll()
+        let dnc = DistributedNotificationCenter.default()
+        for tok in distributedObservers { dnc.removeObserver(tok) }
+        distributedObservers.removeAll()
+        warningTimer?.invalidate(); warningTimer = nil
+        warningWindow?.close(); warningWindow = nil
+        NSApp.presentationOptions = [
+            .hideDock, .hideMenuBar,
+            .disableProcessSwitching, .disableForceQuit,
+            .disableSessionTermination, .disableHideApplication,
+            .disableAppleMenu,
+        ]
+        NSApp.activate(ignoringOtherApps: true)
+        build()
+        start()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,21 +708,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     init(_ c: Controller) { controller = c }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        NSApp.presentationOptions = [
-            .hideDock, .hideMenuBar,
-            .disableProcessSwitching, .disableForceQuit,
-            .disableSessionTermination, .disableHideApplication,
-            .disableAppleMenu,
-        ]
-        NSApp.activate(ignoringOtherApps: true)
-        controller.build()
-        controller.start()
+        if warningSeconds > 0 {
+            controller.startWarning()
+        } else {
+            NSApp.presentationOptions = [
+                .hideDock, .hideMenuBar,
+                .disableProcessSwitching, .disableForceQuit,
+                .disableSessionTermination, .disableHideApplication,
+                .disableAppleMenu,
+            ]
+            NSApp.activate(ignoringOtherApps: true)
+            controller.build()
+            controller.start()
+        }
     }
 }
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // no Dock icon; still shows windows + takes key events
-let controller = Controller(seconds: totalSeconds, hold: holdSeconds, markDone: markDone)
+let controller = Controller(seconds: totalSeconds, hold: holdSeconds, markDone: markDone, warning: warningSeconds)
 let delegate = AppDelegate(controller)
 app.delegate = delegate
 app.run()

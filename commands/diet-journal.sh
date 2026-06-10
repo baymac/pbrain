@@ -513,16 +513,19 @@ for a training day — the suggested dinner closes that gap.").
 
 Step 5 — Confirm: "Updated → $OUT_FILE"
 
-Step 6 — FOOD LIBRARY upkeep (only if a new staple came up this session):
-  If the user logged a named item that looks like a recurring food and it's not
-  already in the FOOD LIBRARY, offer once: "Want me to save '<item>' to your
-  food library so you can just say the name next time?" On a yes, append a row
-  to $FOOD_LIBRARY_FILE under the right section — **Home / regular foods** for
-  things they make/eat normally, **Junk / outside food** for takeout / treats /
-  restaurant items — with a brief description (enough to estimate macros), a
-  serving, Cals/P/C/F/Fiber, and a **Meal type** value. Meal type values:
-  breakfast, lunch, dinner, snack, post-workout, any — use comma-separated for
-  items that fit multiple slots (e.g. "breakfast, snack"). Keep columns aligned.
+Step 6 — FOOD LIBRARY upkeep:
+  Scan ALL food items currently in today's meal table (not just what was
+  described in this message — include items from prior runs of this command
+  that are already in the file). For each item that looks like a recurring
+  staple and is NOT already in the FOOD LIBRARY, offer once per item:
+  "Want me to save '<item>' to your food library so you can just say the name
+  next time?" On a yes, append a row to $FOOD_LIBRARY_FILE under the right
+  section — **Home / regular foods** for things they make/eat normally,
+  **Junk / outside food** for takeout / treats / restaurant items — with a brief
+  description (enough to estimate macros), a serving, Cals/P/C/F/Fiber, and a
+  **Meal type** value. Meal type values: breakfast, lunch, dinner, snack,
+  post-workout, any — use comma-separated for items that fit multiple slots
+  (e.g. "breakfast, snack"). Keep columns aligned.
   Don't add one-off meals; only genuine repeat items. Never write without a yes.
 
   Supplements: if the user took a NEW regular supplement not in the FOOD
@@ -577,9 +580,12 @@ Step 2 — Log whatever the user described. Add each item as an "eaten" row,
 estimate macros (reuse FOOD LIBRARY values for named items). Recompute totals.
 Pre-populate the ## Supplements section from the FOOD LIBRARY Supplements list
 (the user's regular regimen) as "planned" rows, and mark any the user says they
-took today as "taken". If that library section is still empty but the DIET
-PROFILE lists "supplements", seed the library Supplements section from the
-profile first (one row each, estimating dose/timing/values), then use it.
+took today as "taken". IMPORTANT: only include supplements where `active: true`
+in the Food Library — supplements with `active: false` are optional and must
+NOT be pre-populated; only add them if the user explicitly says they took one
+today. If that library section is still empty but the DIET PROFILE lists
+"supplements", seed the library Supplements section from the profile first (one
+row each, estimating dose/timing/values), then use it.
 Calorie-bearing supplements (protein powder) also get a Meals row; micronutrient
 supplements do not affect macro totals.
 
@@ -659,13 +665,15 @@ Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
   |---|---|---|---|---|
   | {name} | {dose, e.g. 2000 IU} | {morning / with-meal / post-workout / bedtime} | taken / planned / skipped | {brief, optional} |
 
-  {Pull each row from the FOOD LIBRARY Supplements section — reuse the saved
-  dose + timing for any supplement named there. List the user's regular regimen
-  even if not yet taken today (status "planned"), so the section doubles as a
-  checklist. If the user takes none and the library has no supplements, write
-  "(none)". Supplements with meaningful calories (protein powder) ALSO get a row
-  in the Meals table so their macros count toward totals — micronutrient
-  supplements (vitamins, creatine, omega-3) do NOT affect the macro totals.}
+  {Pull only `active: true` rows from the FOOD LIBRARY Supplements section —
+  reuse the saved dose + timing. List these as "planned" so the section doubles
+  as a checklist; mark "taken" for any the user confirms today. NEVER include
+  supplements with `active: false` — they are optional and must only appear if
+  the user explicitly says they took one. If the user takes none and the library
+  has no active supplements, write "(none)". Supplements with meaningful calories
+  (protein powder) ALSO get a row in the Meals table so their macros count
+  toward totals — micronutrient supplements (vitamins, creatine, omega-3) do NOT
+  affect the macro totals.}
 
   ---
 
@@ -704,13 +712,15 @@ Step 5 — Write the entry to $OUT_FILE in EXACTLY this format:
   at 110/150 g by lunch, you're on track for post-football refuel" — not
   "eat healthier".}
 
-Step 6 — FOOD LIBRARY upkeep (only if a recurring item came up this session):
-  If the user described a named item that looks like a repeat staple and it's
-  not already in the FOOD LIBRARY, offer once: "Want me to save '<item>' to your
-  food library so you can just say the name next time?" On a yes, append a row
-  to $FOOD_LIBRARY_FILE under **Home / regular foods** (things they make/eat
-  normally) or **Junk / outside food** (takeout / treats / restaurant), with a
-  brief description, serving, Cals/P/C/F/Fiber, and a **Meal type** value.
+Step 6 — FOOD LIBRARY upkeep:
+  Scan ALL food items currently in today's meal table (not just what was
+  described in this message — include items already in the file from prior runs
+  of this command). For each item that looks like a recurring staple and is NOT
+  already in the FOOD LIBRARY, offer once per item: "Want me to save '<item>'
+  to your food library so you can just say the name next time?" On a yes, append
+  a row to $FOOD_LIBRARY_FILE under **Home / regular foods** (things they
+  make/eat normally) or **Junk / outside food** (takeout / treats / restaurant),
+  with a brief description, serving, Cals/P/C/F/Fiber, and a **Meal type** value.
   Meal type values: breakfast, lunch, dinner, snack, post-workout, any — use
   comma-separated for items that fit multiple slots (e.g. "breakfast, snack").
   Only genuine repeat items, never one-offs. Never write without a yes.
