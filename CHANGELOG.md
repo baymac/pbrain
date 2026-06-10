@@ -12,7 +12,7 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 - **`/habits reminders-reschedule` — align a habit's Apple Reminder to its planned time.** When `/plan-my-day` places a habit at a specific time in the plan table, it now silently reschedules the habit's one-shot reminder to match. Returns `RESCHEDULED`, `NOT_LINKED`, `NOT_FOUND`, or `UNAVAILABLE` — never blocks or fails loudly.
 - **`/habits reminders-sync --sweep` — end-of-day cleanup.** Running `reminders-sync` with `--sweep` now cancels any pending one-shot reminders for habits that weren't completed today, keeping the Apple Reminders list clean after EOD.
 - **`/end-of-day --date YYYY-MM-DD` — close a past day.** Pass a date (or a bare YYYY-MM-DD positional arg) to fill in the "How it went" section for a previous day. The habit rollup and laptop report key off the given date, not today.
-- **`lib/profile_lock.py` — atomic profile writes.** `habits add/edit/archive` now use an exclusive file lock + tempfile-then-rename write path, preventing profile corruption under concurrent invocations or disk-full failures.
+- **`lib/profile_lock.py` — corruption-safe profile writes.** `habits add/edit/archive` now hold an exclusive file lock and write via tempfile-then-rename, so a concurrent run or a disk-full failure can no longer leave `Habits Profile.md` in a half-written state.
 
 ### Changed
 

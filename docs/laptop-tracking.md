@@ -43,12 +43,14 @@ The tracker is **off by default** — nothing runs until you enable it. `/plan-m
 
 ## The daily report
 
+**Past days** (day is complete) show a full 00:00 → 24:00 window, so away time includes any untracked tail (laptop off or asleep before midnight). **Today's report** (in progress) shows "so far" with the actual last activity as the endpoint — no inflated away time on a live day.
+
 ```markdown
 # Laptop usage — 2026-06-07
 
 - **Active time:** 5h 12m
-- **Tracked window:** 09:14 → 18:40 (9h 26m)
-- **Active vs away:** 5h 12m active · 4h 14m away (55% active)
+- **Day window:** 00:00 → 24:00 (full day)       ← past day; "Tracked window: … so far" for today
+- **Active vs away:** 5h 12m active · 18h 48m away (22% active)
 
 ## Top apps
 | App | Active time | % |
@@ -58,13 +60,23 @@ The tracker is **off by default** — nothing runs until you enable it. `/plan-m
 ## Top browser domains
 | Domain | Active time | % |
 | github.com | 1h 30m | 56% |
+| youtube.com/watch?v=dQw4w9WgXcQ | 45m | 28% |   ← per-video row (YouTube only)
 | ...
 
 ## Browser attribution
-- permission not granted: 12m (4%)   ← only shown when some browser time wasn't cleanly attributed
+
+Browser time with no recorded domain, by reason:
+
+| Reason | Active time |
+|--------|------------|
+| permission not granted | 12m |   ← only shown when some browser time wasn't cleanly attributed
 ```
 
-The **attribution** section appears only when some browser time couldn't be turned into a domain, so unattributable time is *explained* (permission not granted / browser timed out / no web page), never silently dropped.
+Three report features worth knowing:
+
+- **Full-day window for past days.** Away time is the gap from day-start to next midnight, so "time offline" (laptop closed before midnight) is included. Today's report uses the last recorded activity as the endpoint instead, labeled "so far".
+- **Per-video YouTube tracking.** Watch time on `youtube.com/watch`, `m.youtube.com`, and `music.youtube.com` now breaks out per video ID (`?v=`) in the Top pages table, so each video gets its own row. All other query parameters are still dropped (tokens, search terms, etc.).
+- **Browser attribution table.** When Chrome or Safari time has no recorded domain, a `## Browser attribution` table explains why — permission not granted, tab lookup timed out, or non-web window. Unaccounted browser time is visible, not silently dropped.
 
 ## Requirements & permissions
 
@@ -103,5 +115,5 @@ The bash + Python read/render path is covered by `tests/tracker.bats` (schema, g
 
 - **No live/periodic markdown updates** — the md renders at end-of-day (and on demand), so iCloud isn't churned all day.
 - **No HTML / menubar dashboard yet** — the granular DB is built so those can be layered on later without re-instrumenting (see TODOS).
-- **No query strings** — the captured URL keeps host **and path** (so `github.com/anthropics/claude-code` is distinct from `github.com/settings`), but the `?query=…` is dropped at capture: that's where tokens, search terms, and session secrets live. The path stays local-only in `tracker.db` and renders into a **Top pages** table; only the per-day md (host+path) travels with the vault.
+- **No query strings (with one allowlisted exception)** — the captured URL keeps host **and path** (so `github.com/anthropics/claude-code` is distinct from `github.com/settings`), but the `?query=…` is dropped at capture: that's where tokens, search terms, and session secrets live. The **one exception** is YouTube's `v=` video ID — it identifies content, not a secret, so it's kept to give per-video rows in the Top pages table. All other query params, including `&list=`, `&t=`, and any search terms, are still dropped. The path (and the `?v=` ID for YouTube) stays local-only in `tracker.db` and renders into the **Top pages** table; only the per-day md travels with the vault.
 - **No cross-machine DB sync** — `tracker.db` is per-machine local state; only the derived md travels with the vault.
