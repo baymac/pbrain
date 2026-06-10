@@ -75,7 +75,7 @@ PY
   run pbrain_tracker_db_init
   [ "$status" -eq 0 ]
   [ -f "$PBRAIN_TRACKER_DB_FILE" ]
-  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols=[r[1] for r in c.execute('PRAGMA table_info(tracker_segments)')]; assert cols==['id','started_at','ended_at','occurred_on','app_bundle_id','app_name','raw_host','raw_path','attribution'], cols" "$PBRAIN_TRACKER_DB_FILE"
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols=[r[1] for r in c.execute('PRAGMA table_info(tracker_segments)')]; assert cols==['id','started_at','ended_at','occurred_on','app_bundle_id','app_name','raw_host','raw_path','attribution','kind'], cols" "$PBRAIN_TRACKER_DB_FILE"
   [ "$status" -eq 0 ]
 }
 
@@ -168,6 +168,54 @@ PY
   run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
   [[ "$output" == *"Browser attribution"* ]]
   [[ "$output" == *"permission not granted"* ]]
+}
+
+@test "background media renders in its own section and is excluded from active time" {
+  source "$REPO_ROOT/lib/db.sh"; pbrain_tracker_db_init
+  python3 - "$PBRAIN_TRACKER_DB_FILE" "2026-06-07" <<'PY'
+import sqlite3, sys, time, datetime
+db, day = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+base = int(time.mktime(datetime.datetime.strptime(day,"%Y-%m-%d").timetuple())) + 9*3600
+rows = [
+    # 1h foreground work in an editor
+    (base, base+3600, "com.microsoft.VSCode","Code",None,None,"ok","foreground"),
+    # 30m Spotify playing concurrently in the background → separate ledger
+    (base, base+1800, "com.spotify.client","Spotify",None,None,"ok","bg_media"),
+]
+for s,e,bid,name,host,path,attr,kind in rows:
+    c.execute("INSERT INTO tracker_segments(started_at,ended_at,occurred_on,app_bundle_id,app_name,raw_host,raw_path,attribution,kind) "
+              "VALUES(?,?,?,?,?,?,?,?,?)",(s,e,day,bid,name,host,path,attr,kind))
+c.commit(); c.close()
+PY
+  bash "$SH" report 2026-06-07
+  run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
+  # foreground active counts ONLY the editor's 1h — bg Spotify is NOT added in
+  [[ "$output" == *"Active time:** 1h 00m"* ]]
+  # bg media shows in its own section with its own time
+  [[ "$output" == *"## Background media"* ]]
+  [[ "$output" == *"| Spotify | 30m |"* ]]
+  [[ "$output" == *"| Code |"* ]]
+}
+
+@test "a background-media-only day (e.g. locked screen, audio playing) still renders the bg section" {
+  source "$REPO_ROOT/lib/db.sh"; pbrain_tracker_db_init
+  python3 - "$PBRAIN_TRACKER_DB_FILE" "2026-06-07" <<'PY'
+import sqlite3, sys, time, datetime
+db, day = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+base = int(time.mktime(datetime.datetime.strptime(day,"%Y-%m-%d").timetuple())) + 9*3600
+c.execute("INSERT INTO tracker_segments(started_at,ended_at,occurred_on,app_bundle_id,app_name,raw_host,raw_path,attribution,kind) "
+          "VALUES(?,?,?,?,?,?,?,?,?)",(base,base+1800,day,"com.spotify.client","Spotify",None,None,"ok","bg_media"))
+c.commit(); c.close()
+PY
+  bash "$SH" report 2026-06-07
+  run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
+  [[ "$output" == *"background media only"* ]]
+  [[ "$output" == *"## Background media"* ]]
+  [[ "$output" == *"| Spotify | 30m |"* ]]
+  # no foreground activity → no active-time line
+  [[ "$output" != *"Active time:"* ]]
 }
 
 @test "report on an empty day writes a clear 'no active time' file" {

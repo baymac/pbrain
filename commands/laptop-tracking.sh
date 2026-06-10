@@ -88,14 +88,14 @@ db, day, outpath, topn, today_real = sys.argv[1], sys.argv[2], sys.argv[3], int(
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("PRAGMA busy_timeout=5000")
-    # raw_path may be absent on a DB written by an older daemon; COALESCE so the
-    # query works either way (it just yields NULL paths → no page-level rows).
-    has_path = any(r[1] == "raw_path" for r in
-                   con.execute("PRAGMA table_info(tracker_segments)").fetchall())
-    path_col = "raw_path" if has_path else "NULL"
+    # raw_path / kind may be absent on a DB written by an older daemon; substitute
+    # safe literals so the query works either way (no page rows / all foreground).
+    _cols = {r[1] for r in con.execute("PRAGMA table_info(tracker_segments)").fetchall()}
+    path_col = "raw_path" if "raw_path" in _cols else "NULL"
+    kind_col = "kind" if "kind" in _cols else "'foreground'"
     rows = con.execute(
-        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s "
-        "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % path_col, (day,)
+        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s, %s "
+        "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % (kind_col, path_col), (day,)
     ).fetchall()
     con.close()
 except Exception as e:
@@ -145,12 +145,18 @@ ATTR_LABEL = {
 }
 
 active = 0
-app_secs, dom_secs, page_secs, attr_secs = {}, {}, {}, {}
+app_secs, dom_secs, page_secs, attr_secs, bg_secs = {}, {}, {}, {}, {}
 segs = []
-for s, e, bid, name, host, attr, path in rows:
+for s, e, bid, name, host, attr, kind, path in rows:
     dur = (e - s) if (e is not None and s is not None and e >= s) else 0
-    active += dur
     app = name or bid or "(unknown)"
+    # Background media is its own ledger — NOT foreground active time, NOT part of
+    # the active/away window. Aggregate it per app and skip the rest.
+    if kind == "bg_media":
+        if dur > 0:
+            bg_secs[app] = bg_secs.get(app, 0) + dur
+        continue
+    active += dur
     app_secs[app] = app_secs.get(app, 0) + dur
     d = norm(host)
     if d:
@@ -187,8 +193,10 @@ else:
 L = []
 L.append("# Laptop usage — %s" % day)
 L.append("")
-if not segs:
+if not segs and not bg_secs:
     L.append("_No active laptop time recorded for this day._")
+elif not segs:
+    L.append("_No foreground activity — background media only (see below)._")
 else:
     pct = (100 * active // window) if window else 0
     L.append("- **Active time:** %s" % hm(active))
@@ -238,6 +246,19 @@ else:
         L.append("|--------|------------|")
         for attr, secs in sorted(attr_secs.items(), key=lambda x: -x[1]):
             L.append("| %s | %s |" % (ATTR_LABEL[attr], hm(secs)))
+# Background media — its own ledger (audio/video playing in another app, PiP, or
+# while the screen was locked). Shown whether or not there was foreground activity,
+# and never folded into Active time / away above.
+if bg_secs:
+    L.append("")
+    L.append("## Background media")
+    L.append("")
+    L.append("Audio/video playing in the background or PiP — tracked separately, not counted as active time:")
+    L.append("")
+    L.append("| App | Background time |")
+    L.append("|-----|----------------|")
+    for app, secs in sorted(bg_secs.items(), key=lambda x: -x[1])[:topn]:
+        L.append("| %s | %s |" % (app, hm(secs)))
 content = "\n".join(L) + "\n"
 
 # WRITE only after content is fully built (never empty). Atomic temp + rename.

@@ -322,7 +322,8 @@ try:
         app_name      TEXT,               -- raw localized display-name snapshot
         raw_host      TEXT,               -- raw URL host from AppleScript; NULL if not applicable
         raw_path      TEXT,               -- raw "host/path[?v=…]" for page-level rollup; NULL if not applicable
-        attribution   TEXT NOT NULL DEFAULT 'ok'  -- ok|tcc_denied|timeout|non_web|not_browser
+        attribution   TEXT NOT NULL DEFAULT 'ok', -- ok|tcc_denied|timeout|non_web|not_browser
+        kind          TEXT NOT NULL DEFAULT 'foreground'  -- foreground | bg_media (audio/video playing in background or PiP; a separate ledger, never counted as foreground active time)
     );
     -- Day-bucket reads (the renderer queries one occurred_on at a time).
     CREATE INDEX IF NOT EXISTS idx_tracker_seg_day ON tracker_segments(occurred_on);
