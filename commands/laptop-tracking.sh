@@ -127,7 +127,11 @@ def norm_path(hostpath):
 
 def hm(sec):
     sec = int(sec); h = sec // 3600; m = (sec % 3600) // 60
-    return ("%dh %02dm" % (h, m)) if h else ("%dm" % m)
+    if h:
+        return "%dh %02dm" % (h, m)
+    if sec >= 60:
+        return "%dm" % m
+    return "<1m" if sec > 0 else "0m"
 
 def hhmm(ep):
     return datetime.datetime.fromtimestamp(ep).strftime("%H:%M")
@@ -236,7 +240,10 @@ else:
         for pg, secs in sorted(paged.items(), key=lambda x: -x[1])[:topn]:
             p = (100 * secs // ptot) if ptot else 0
             L.append("| %s | %s | %d%% |" % (pg, hm(secs), p))
-    if attr_secs:
+    # Only explain attribution gaps that are worth explaining — sub-minute slivers
+    # (a flash of a new-tab page, a momentary lookup) are noise, not a story.
+    attr_rows = [(a, s) for a, s in sorted(attr_secs.items(), key=lambda x: -x[1]) if s >= 60]
+    if attr_rows:
         L.append("")
         L.append("## Browser attribution")
         L.append("")
@@ -244,7 +251,7 @@ else:
         L.append("")
         L.append("| Reason | Active time |")
         L.append("|--------|------------|")
-        for attr, secs in sorted(attr_secs.items(), key=lambda x: -x[1]):
+        for attr, secs in attr_rows:
             L.append("| %s | %s |" % (ATTR_LABEL[attr], hm(secs)))
 # Background media — its own ledger (audio/video playing in another app, PiP, or
 # while the screen was locked). Shown whether or not there was foreground activity,

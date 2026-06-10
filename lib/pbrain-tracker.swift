@@ -416,36 +416,67 @@ final class Tracker {
     // so we can tell WHICH app is asserting: the frontmost one (you're watching it)
     // vs a background one (bg media). Helper/renderer child PIDs resolve to their
     // own bundle id (e.g. com.google.Chrome.helper); mediaBase() folds them back.
-    private func assertingBundleIds() -> Set<String> {
+    // Scan IOKit power assertions ONCE per tick and return two bundle-id sets:
+    //   all   — every app RESPONSIBLE for a PreventUserIdle* assertion (call /
+    //           presentation / download / media). Keeps the FOREGROUND active past
+    //           the idle threshold when the frontmost app is in it.
+    //   media — apps actively playing MEDIA, by two reliable signals:
+    //     (1) AUDIO: coreaudiod holds the assertion ON BEHALF OF an app
+    //         (AssertionOnBehalfOfPID). coreaudiod only asserts during real audio
+    //         playback, for ANY app — no allowlist needed (catches rekordbox,
+    //         Spotify, browser PiP/bg audio, VLC, …). Detected via Process Name
+    //         "coreaudiod" / AssertName "com.apple.audio…" / ResourcesUsed audio-out.
+    //     (2) VIDEO: an allowlisted media app (browser/player) holding the assertion
+    //         directly — video keeping the Mac awake, possibly muted. Allowlisted
+    //         to avoid false positives from non-media holders.
+    private func scanAssertions() -> (all: Set<String>, media: Set<String>) {
         var byProc: Unmanaged<CFDictionary>?
         guard IOPMCopyAssertionsByProcess(&byProc) == kIOReturnSuccess,
               let dict = byProc?.takeRetainedValue() as? [AnyHashable: Any] else {
-            return []
+            return ([], [])
         }
-        var out: Set<String> = []
+        func bundle(forPid pid: pid_t) -> String? {
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        }
+        var all: Set<String> = []
+        var media: Set<String> = []
         for (pidKey, val) in dict {
             guard let assertions = val as? [[String: Any]] else { continue }
-            let holds = assertions.contains { a in
-                guard let t = a[kIOPMAssertionTypeKey as String] as? String else { return false }
-                return t == "PreventUserIdleDisplaySleep" || t == "PreventUserIdleSystemSleep"
-            }
-            guard holds, let n = pidKey as? NSNumber else { continue }
-            if let app = NSRunningApplication(processIdentifier: pid_t(truncating: n)),
-               let bid = app.bundleIdentifier {
-                out.insert(bid)
+            let ownerPid = (pidKey as? NSNumber)?.int32Value ?? -1
+            for a in assertions {
+                let type = (a["AssertType"] as? String) ?? ""
+                guard type == "PreventUserIdleDisplaySleep" || type == "PreventUserIdleSystemSleep"
+                else { continue }
+                let onBehalf = (a["AssertionOnBehalfOfPID"] as? NSNumber)?.int32Value ?? -1
+                // Responsible app = the on-behalf-of app if present, else the owner.
+                let respBundle = (onBehalf > 0 ? bundle(forPid: onBehalf) : nil) ?? (ownerPid > 0 ? bundle(forPid: ownerPid) : nil)
+                if let rb = respBundle { all.insert(rb) }
+                // (1) Audio playback: owner is the audio daemon, on behalf of an app.
+                let proc = (a["Process Name"] as? String) ?? ""
+                let aname = (a["AssertName"] as? String) ?? ""
+                let resources = ((a["ResourcesUsed"] as? [Any])?.map { "\($0)" } ?? []).joined(separator: ",")
+                let isAudio = proc == "coreaudiod" || aname.contains("com.apple.audio") || resources.contains("audio-out")
+                if isAudio, onBehalf > 0, let b = bundle(forPid: onBehalf) {
+                    media.insert(b)
+                } else if let rb = respBundle, mediaBase(of: rb) != nil {
+                    // (2) Video by an allowlisted media app.
+                    media.insert(rb)
+                }
             }
         }
-        return out
+        return (all, media)
     }
 
-    // Does the FRONTMOST app (or one of its helper children) hold an assertion?
-    // This is what keeps the foreground active past the idle threshold — you're
-    // watching a video / on a call / presenting IN FRONT. A purely background
-    // assertion does NOT qualify (that's handled as bg media instead).
-    private func frontmostAsserting(_ frontBundle: String?, _ asserting: Set<String>) -> Bool {
+    // Does the FRONTMOST app (or a helper child / same media base) hold an
+    // assertion? Keeps the foreground active past the idle threshold — you're
+    // watching / on a call / presenting IN FRONT. A purely background assertion
+    // does NOT qualify (that's handled as bg media instead).
+    private func matchesFrontmost(_ frontBundle: String?, _ set: Set<String>) -> Bool {
         guard let fb = frontBundle else { return false }
-        if asserting.contains(fb) { return true }
-        return asserting.contains { $0.hasPrefix(fb + ".") }   // browser audio helper child
+        if set.contains(fb) { return true }
+        if set.contains(where: { $0.hasPrefix(fb + ".") }) { return true }   // helper child
+        let fbBase = mediaBase(of: fb)
+        return fbBase != nil && set.contains { mediaBase(of: $0) == fbBase }
     }
 
     // active = unlocked AND not screensaver AND not asleep AND
@@ -453,7 +484,7 @@ final class Tracker {
     private func foregroundActive(frontBundle: String?, asserting: Set<String>) -> Bool {
         if asleep || screensaverOn || isLocked() { return false }
         if idleTime() < idleThreshold { return true }
-        return frontmostAsserting(frontBundle, asserting)
+        return matchesFrontmost(frontBundle, asserting)
     }
 
     // Live query for screen-lock via the private CGSSessionScreenIsLocked symbol,
@@ -471,33 +502,39 @@ final class Tracker {
         return screenLocked
     }
 
-    // Update the BACKGROUND-media ledger for this tick. bgBases = media apps
-    // asserting right now, MINUS the one (if any) you're watching in front (that's
-    // foreground active time, tracked with its URL elsewhere). Open a row per new
-    // bg app, heartbeat existing ones, close any that stopped. App-level only —
-    // a background/PiP tab's URL isn't reachable. Independent of lock/idle: this
+    // Update the BACKGROUND-media ledger for this tick. `media` = apps playing
+    // media right now (audio via coreaudiod, or allowlisted video), MINUS the one
+    // (if any) you're watching in FRONT (that's foreground active time, tracked
+    // with its URL elsewhere). Open a row per new bg app, heartbeat existing ones,
+    // close any that stopped. App-level only — a background/PiP tab's URL (and, on
+    // macOS 15.4+, the Now Playing title) isn't reachable. Independent of lock/idle:
     // runs every tick regardless of foreground state.
     private func updateBackgroundMedia(now: Int64, today: String,
-                                       asserting: Set<String>, fgActiveBase: String?) {
-        var bgBases = Set(asserting.compactMap { mediaBase(of: $0) })
-        if let f = fgActiveBase { bgBases.remove(f) }
-        for base in bgBases where liveBg[base] == nil {
-            let name = NSWorkspace.shared.runningApplications
-                .first { $0.bundleIdentifier == base }?.localizedName ?? base
-            let row = db.insertSegment(start: now, occurredOn: today, bundleId: base,
-                                       appName: name, host: nil, path: nil,
-                                       attribution: "ok", kind: "bg_media")
-            if row != 0 { liveBg[base] = row }
-        }
-        var toRemove: [String] = []
-        for (base, row) in liveBg {
-            if bgBases.contains(base) {
-                db.touchEnded(rowId: row, end: now)   // still playing → heartbeat
-            } else {
-                toRemove.append(base)                   // stopped → ended_at stays at last heartbeat
+                                       media: Set<String>, frontWatching: String?) {
+        var bgBundles = media
+        if let f = frontWatching {
+            let fBase = mediaBase(of: f)
+            bgBundles = bgBundles.filter { b in
+                b != f && !b.hasPrefix(f + ".") && !(fBase != nil && mediaBase(of: b) == fBase)
             }
         }
-        for base in toRemove { liveBg.removeValue(forKey: base) }
+        for b in bgBundles where liveBg[b] == nil {
+            let name = NSWorkspace.shared.runningApplications
+                .first { $0.bundleIdentifier == b }?.localizedName ?? b
+            let row = db.insertSegment(start: now, occurredOn: today, bundleId: b,
+                                       appName: name, host: nil, path: nil,
+                                       attribution: "ok", kind: "bg_media")
+            if row != 0 { liveBg[b] = row }
+        }
+        var toRemove: [String] = []
+        for (b, row) in liveBg {
+            if bgBundles.contains(b) {
+                db.touchEnded(rowId: row, end: now)   // still playing → heartbeat
+            } else {
+                toRemove.append(b)                      // stopped → ended_at stays at last heartbeat
+            }
+        }
+        for b in toRemove { liveBg.removeValue(forKey: b) }
     }
 
     // Drop all live bg rows without extending them (sleep / day-rollover): the
@@ -575,17 +612,17 @@ final class Tracker {
         }
         liveDay = today
 
-        // Shared per-tick signals. asserting = every app holding a prevent-idle
-        // assertion (computed once; reused for foreground grace + bg media). No
-        // media exists while the system is asleep.
+        // Shared per-tick signals, computed once. `all` = every app holding a
+        // prevent-idle assertion (foreground grace); `media` = apps actually
+        // playing media (bg ledger). Nothing plays while the system is asleep.
         let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let asserting = asleep ? [] : assertingBundleIds()
-        let fgActive = foregroundActive(frontBundle: frontBundle, asserting: asserting)
-        // The media app you're watching IN FRONT (if any) is foreground, not bg —
-        // exclude it from the bg ledger so we never double-count it.
-        let fgActiveBase = fgActive ? mediaBase(of: frontBundle) : nil
-        updateBackgroundMedia(now: nowEpoch, today: today, asserting: asserting,
-                              fgActiveBase: fgActiveBase)
+        let scan = asleep ? (all: Set<String>(), media: Set<String>()) : scanAssertions()
+        let fgActive = foregroundActive(frontBundle: frontBundle, asserting: scan.all)
+        // If the frontmost app is itself the media you're consuming, that's
+        // foreground — exclude it from the bg ledger so it's never double-counted.
+        let frontWatching = (fgActive && matchesFrontmost(frontBundle, scan.media)) ? frontBundle : nil
+        updateBackgroundMedia(now: nowEpoch, today: today, media: scan.media,
+                              frontWatching: frontWatching)
 
         guard fgActive else {
             closeLive(at: now)

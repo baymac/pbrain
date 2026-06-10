@@ -311,45 +311,6 @@ print("\n".join(lines))
 PYEOF
 )"
 
-TIMING_SIGNAL="$(python3 - "$PLAN_DIR" <<'PYEOF'
-import os, glob, re, sys, collections
-plan_dir = sys.argv[1]
-files = sorted(glob.glob(os.path.join(plan_dir, "*.md")))[-21:]
-categories = {
-    "workout": [r"\b(gym|workout|fitness|apple fitness|lower body|upper body|push|pull|legs|cardio|football)\b"],
-    "lunch": [r"\blunch\b"],
-    "dinner": [r"\bdinner\b"],
-    "walk": [r"\b(outdoor walk|night walk|evening walk|morning walk)\b"],
-    "wind_down": [r"\b(wind-down|low-light close|hygiene, bed|bed)\b"],
-}
-times = collections.defaultdict(list)
-for f in files:
-    try:
-        fh = open(f)
-        text = fh.read()
-        fh.close()
-    except Exception:
-        continue
-    for m in re.finditer(r"\|\s*(\d{1,2}):(\d{2})[^|]*\|([^|]+)\|", text):
-        start_h, start_m, action = m.group(1), m.group(2), m.group(3).lower()
-        start_min = int(start_h) * 60 + int(start_m)
-        for cat, patterns in categories.items():
-            if any(re.search(p, action) for p in patterns):
-                times[cat].append(start_min)
-                break
-def fmt(cat):
-    lst = times.get(cat, [])
-    if not lst:
-        return "unknown"
-    avg = sum(lst) / len(lst)
-    h = int(avg) // 60
-    m_val = int(avg) % 60
-    spread = (max(lst) - min(lst)) // 60 if len(lst) > 1 else 0
-    return "%02d:%02d (+/-%dh from %d plans)" % (h, m_val, spread, len(lst))
-for cat in ["workout", "lunch", "dinner", "walk", "wind_down"]:
-    print("- %s: %s" % (cat, fmt(cat)))
-PYEOF
-)"
 
 # Weekly-review nudge: Mondays only. Measures the calendar span since the last
 # weekly review covered through (parsed from the review's "Dates: X → Y" line,
@@ -494,9 +455,6 @@ $FITNESS_TODAY
 === TODAY'S DAILY JOURNAL ===
 $DAILY_TODAY
 
-=== TIMING SIGNAL (learned anchor times from last 21 plans) ===
-$TIMING_SIGNAL
-
 === CADENCE SIGNAL (last 30 plans) ===
 $CADENCE_SIGNAL
 
@@ -564,21 +522,36 @@ Step 1 — Show the user their lens, briefly:
      • Learn jazz piano (this week: 4×30 min practice)"
 
 Step 1.5 — Anchor confirmation (its own message, before Step 2):
-  Read the profile JSON for a "daily_anchors" block. If present, use those values as defaults (label them "(profile)").
-  If absent, use the TIMING SIGNAL averages above as inferred defaults (label them "(inferred from past plans)").
-  Only include anchors that have a real value — skip any that are "unknown".
-  Present a compact pre-filled list:
+  Build anchor times from these sources in priority order — use the first source
+  that gives a real value for each anchor; skip an anchor entirely if no source
+  has a concrete value for it:
+
+  1. TODAY'S CALENDAR block — hard time-bound events (zero variance, never shift).
+  2. TODAY'S FITNESS JOURNAL — the workout time + duration from the fitness session.
+  3. Profile "daily_anchors" block (if present) — explicit saved defaults (label "(profile)").
+  4. Profile prefs / user preferences — e.g. cook schedule driving dinner time.
+  5. HABITS block 🔔 times — SOFT only. A habit reminder time is only surfaced as
+     an anchor if its window does not overlap with any already-placed harder anchor
+     (fitness session, calendar event, etc.). If it conflicts, drop it silently —
+     do NOT show it. Walk in particular: if a fitness session overlaps the habit's
+     reminder window, omit walk from the anchor list for today.
+
+  Do NOT use historical averages or "inferred from past plans" — those are removed.
+  Only include anchors that have a concrete source. Skip any with no real value.
+
+  Present a compact pre-filled list, showing only the anchors you have:
 
     "Here are your anchor times for today — all good, or anything different?
-     • Workout: {time} {(profile) or (inferred)}
+     • Workout: {time} (fitness journal)
      • Lunch: {time} {source}
      • Dinner: {time} {source}
-     • Walk: {time or 'none'} {source}
+     • Walk: {time} (habit reminder) — or omit this line if conflicted/no source
      • Bed: {time} {source}
     (Say what's different, e.g. 'dinner at 11:30pm, no walk today' — or 'all good'.)"
 
   Wait for their reply. Store the confirmed anchor times as the fixed skeleton for Step 4.
-  Track which anchors differ from the profile's daily_anchors (or that the profile has no daily_anchors yet) — Step 5 will offer to save any changes.
+  Track which anchors differ from the profile's daily_anchors (or that the profile has no
+  daily_anchors yet) — Step 5 will offer to save any changes.
 
 Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
   list of questions in one message. Instead, have a short back-and-forth: lead with
