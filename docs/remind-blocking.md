@@ -1,8 +1,9 @@
 # /remind-blocking
 
-Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, an opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown. Each occurrence resolves to exactly one outcome:
+Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, a **10-second warning panel** appears top-right first: small, non-intrusive, with a **Skip** button so you can dismiss it before the overlay takes over. If you don't skip, the opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown. Each occurrence resolves to exactly one outcome:
 
-- **Hold Control (⌃)** for a few seconds → **skipped** (a deliberate hold, so it can't be hit by accident)
+- **Click Skip in the warning panel** → dismissed before the overlay fires (same result as skipped)
+- **Hold Control (⌃)** for a few seconds on the overlay → **skipped** (a deliberate hold, so it can't be hit by accident)
 - **Let the countdown run out** → **done** — you waited out the full break. *This is the only way to get a "done".*
 - **The Mac sleeps or the screen locks** while it's up, or it comes due while you're away past a grace window → **missed**
 
@@ -80,7 +81,7 @@ The overlay is drawn by **pbrain's own tiny app** (`pbrain-overlay.app`), compil
 
 The overlay sets macOS kiosk options while it's up — it hides the Dock and menu bar and disables Cmd-Tab, force-quit, and Hide. This is *friction, not a prison*: it makes skipping deliberate, not impossible. Hold Control to skip (or finish the countdown for a "done") and it tears down instantly, writing the outcome straight to that occurrence's row via SQLite.
 
-**Sleep / lock safety.** An overlay must never linger invisibly behind the lock screen or across a sleep — that's how a stack of them piles up overnight and eats memory. Three guards prevent it: the poller **won't fire** a new overlay while the screen is locked (leaving it pending so it pops once you're back, or marking it `missed` if it ages past the grace window); a live overlay **dismisses itself** (resolving to `missed`) the moment the Mac sleeps or the screen locks; and the grace window stops anything from firing hours late on wake. Set `PBRAIN_SCREEN_LOCKED=1` to force the poller to treat the screen as locked (a manual "don't interrupt me" switch); `0` forces unlocked.
+**Sleep / lock safety — with lock-persist.** A live overlay now **hides on screen lock and re-appears on unlock**, with the countdown adjusted for the locked duration — so a break you were mid-way through isn't silently lost. Sleep is treated differently: if the Mac sleeps (not just locks), the overlay dismisses itself and resolves to `missed` (it can't meaningfully resume across a sleep). Three guards prevent orphaned overlays: the poller **won't fire** a new overlay while the screen is locked (leaving it pending so it pops once you're back, or marking it `missed` if it ages past the grace window); a live overlay **dismisses itself** if sleep fires during the warning phase; and the grace window stops anything from firing hours late on wake. Set `PBRAIN_SCREEN_LOCKED=1` to force the poller to treat the screen as locked (a manual "don't interrupt me" switch); `0` forces unlocked.
 
 ## Defaults and overrides
 

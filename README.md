@@ -147,8 +147,8 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/habits` | Track habits, each with its own criteria (daily / N-per-week / N-per-month, build or cap); day-to-day log in dated `life/habit-tracking/<date>.md` files (DB synced from them for analysis); progress vs each, top 20 by priority; auto-marked from your journals | `$VAULT/life/Habits Profile.md` + `$VAULT/life/habit-tracking/` + local DB |
 | `/thoughts [<text>]` | Explode and log a timestamped thought mid-day; on-demand, any time | `$VAULT/life/thought-tracking/` |
 | `/remind <text>` | Real Apple Reminders (EKReminder) — timed due date, cron-based recurrence, priority, early alarms; create/list/edit/done/cancel. Reminders + iCloud fire and sync. NOT a calendar anchor for `/plan-my-day` | Apple Reminders (no vault file, no DB) |
-| `/remind-blocking <text>` | Reminders that fire as a full-screen blocking overlay ("Take a break"; hold Control to skip / Return to mark done); cron-flexible schedules, fires via its own background poller | local SQLite DB (no vault file) |
-| `/laptop-tracking` | Resident macOS daemon: which app + for how long, and browser DOMAIN (+ per-video YouTube rows), excluding locked/idle/asleep time (a playing video still counts). `report` shows the full 00:00→24:00 window for past days, a browser attribution table for unresolved domain time, and per-video YouTube rows. `start \| access \| status \| report \| stop` | `$VAULT/life/laptop-tracking/YYYY-MM-DD.md` (domain-level; granular DB is local-only, never synced) |
+| `/remind-blocking <text>` | Reminders that fire as a full-screen blocking overlay ("Take a break"; hold Control to skip / let countdown run for done); cron-flexible schedules, fires via its own background poller. 10s warning panel before the overlay drops; overlay persists across screen lock/unlock (re-appears with countdown adjusted) | local SQLite DB (no vault file) |
+| `/laptop-tracking` | Resident macOS daemon: which app + for how long, and browser DOMAIN (+ per-video YouTube rows), excluding locked/idle/asleep time (a playing video still counts). Background audio/video (music, PiP) tracked separately as `bg_media` — excluded from focus time, shown in its own section. `report` shows the full 00:00→24:00 window for past days, a browser attribution table for unresolved domain time, and per-video YouTube rows. `start \| access \| status \| report \| stop` | `$VAULT/life/laptop-tracking/YYYY-MM-DD.md` (domain-level; granular DB is local-only, never synced) |
 | `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
@@ -304,10 +304,14 @@ pbrain/
 │   ├── profile.sh                      ← goals-profile JSON extractor
 │   ├── db.sh                           ← shared SQLite store (habit events + reminders)
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
+│   ├── habit_schedule.py               ← habit schedule engine (is_due, derive_schedule, spacing helpers)
+│   ├── profile_lock.py                 ← atomic read-modify-write for Habits Profile.md (flock + tempfile-rename)
+│   ├── launchd.sh                      ← shared native-helper build + LaunchAgent helpers (pbrain_swift_build, pbrain_launchagent_install)
 │   ├── reminders.sh                    ← Apple Reminders helpers + cron→recurrence mapper (/remind); blocking overlay/tick/cron (/remind-blocking); Calendar read for plan-my-day
 │   ├── pbrain-reminders.swift          ← source for the EventKit Reminders helper app (/remind)
 │   ├── pbrain-notify.swift             ← source for pbrain's macOS notifier app
-│   └── pbrain-overlay.swift            ← source for pbrain's full-screen blocking overlay app
+│   ├── pbrain-overlay.swift            ← source for pbrain's full-screen blocking overlay app (warning panel + lock-persist)
+│   └── pbrain-tracker.swift            ← source for the laptop-tracking daemon (foreground + bg_media tracking)
 ├── scripts/
 │   ├── install-commands.sh             ← symlink commands into ~/.claude/commands/
 │   └── uninstall-commands.sh           ← reverse of install

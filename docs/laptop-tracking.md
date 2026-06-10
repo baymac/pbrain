@@ -10,11 +10,15 @@ The honesty is the point. A naive "frontmost app" logger lies twice: it counts a
 
 ```
 NSWorkspace app-switch  ─┐
-~10s poll timer         ─┴─►  active?  ──►  one row per (app, domain) ACTIVE span
+~10s poll timer         ─┴─►  active?  ──►  kind=foreground: one row per (app, domain) ACTIVE span
                               = unlocked & not screensaver & not asleep            │
-                              & (input idle < 5m OR a prevent-idle assertion held) ▼
+                              & (input idle < 5m OR a prevent-idle assertion held) │
+                                                                                   │
+                         background media? ──► kind=bg_media: audio/video in bg,  │
+                              = IOKit prevent-idle held without frontmost focus     │
+                                                                                   ▼
                                                           ~/.config/pbrain/tracker.db
-                                                          (active segments, forever)
+                                                          (active segments: foreground + bg_media)
                                                                       │ render (end of day / on demand)
                                                                       ▼
                                                   vault/life/laptop-tracking/<date>.md
@@ -70,6 +74,14 @@ Browser time with no recorded domain, by reason:
 | Reason | Active time |
 |--------|------------|
 | permission not granted | 12m |   ← only shown when some browser time wasn't cleanly attributed
+
+## Background media
+
+Audio/video playing in the background (excluded from active/away accounting):
+
+| App | Background time |
+|-----|----------------|
+| Spotify | 1h 20m |
 ```
 
 Three report features worth knowing:
@@ -77,6 +89,7 @@ Three report features worth knowing:
 - **Full-day window for past days.** Away time is the gap from day-start to next midnight, so "time offline" (laptop closed before midnight) is included. Today's report uses the last recorded activity as the endpoint instead, labeled "so far".
 - **Per-video YouTube tracking.** Watch time on `youtube.com/watch`, `m.youtube.com`, and `music.youtube.com` now breaks out per video ID (`?v=`) in the Top pages table, so each video gets its own row. All other query parameters are still dropped (tokens, search terms, etc.).
 - **Browser attribution table.** When Chrome or Safari time has no recorded domain, a `## Browser attribution` table explains why — permission not granted, tab lookup timed out, or non-web window. Unaccounted browser time is visible, not silently dropped.
+- **Background media section.** Audio or video playing in the background (music, PiP video) is tracked separately as `kind = bg_media` — it is **never counted toward your foreground active time or focus blocks**. It appears in its own `## Background media` section at the bottom of the report, so you can see background listening without it polluting your focus stats.
 
 ## Requirements & permissions
 

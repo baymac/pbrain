@@ -35,7 +35,7 @@ Just describe what you ate. No upfront mode selection — the command opens with
 Every entry includes:
 
 - Meal-by-meal macros table (calories, protein, carbs, fat, fiber) with `Total / Plan target / Remaining` rows.
-- A dedicated **Supplements** section (table: supplement · dose · timing · status · note) that doubles as a daily checklist — your regular regimen is pre-listed as `planned`, and items you take are marked `taken`.
+- A dedicated **Supplements** section (table: supplement · dose · timing · status · note) that doubles as a daily checklist — your regular regimen is pre-listed as `planned`, and items you take are marked `taken`. Supplements marked `active: false` in the Food Library are excluded from the checklist; they only appear when you explicitly mention taking one.
 - Hydration and late-eating notes.
 - Nutrition Analysis rating per category, including a **Condition adherence** row tied to the user's profile.
 - Patterns across recent days, and a short coach note.
@@ -57,7 +57,7 @@ Each entry carries a **Meal type** column (`breakfast`, `lunch`, `dinner`, `snac
 Lives in your vault at `$VAULT_DIR/fitness/Food Library.md` (created empty on first run). When you log a meal:
 
 - If you name an item that's in the library, the coach reuses its saved macros instead of re-asking.
-- If you describe a new item that looks like a recurring staple, it offers once to save it to the right section (with a Meal type) — written only on a yes.
+- If you describe a new item that looks like a recurring staple, it offers once to save it to the right section (with a Meal type) — written only on a yes. The library save check scans **all items in today's meal table** (not just what you described in the current message), so you'll get at most one save-offer per new staple per session — no repeat prompts mid-day.
 
 Edit the file directly any time; it's a normal Obsidian note.
 
