@@ -2,6 +2,30 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.10.0] — 2026-06-10
+
+### Added
+
+- **`/laptop-tracking report` — full-day vs in-progress window.** Past days now show the complete 00:00→24:00 window so away time includes any untracked tail (laptop off/asleep before midnight). Today's report shows "so far" with the actual last activity as the endpoint — no more inflated away time on live days.
+- **`/laptop-tracking report` — browser attribution table.** When Chrome or Safari time has no recorded domain (permission not granted, tab lookup timed out, non-web window), a new `## Browser attribution` section explains exactly why — so unaccounted browser time is visible, not silently dropped.
+- **`/laptop-tracking report` — YouTube per-video tracking.** Watch time on `youtube.com/watch`, `m.youtube.com`, and `music.youtube.com` now breaks out by video ID (`?v=`) so each video gets its own page row. Previously all YouTube watch time collapsed to a single `youtube.com/watch` line.
+- **`/habits reminders-reschedule` — align a habit's Apple Reminder to its planned time.** When `/plan-my-day` places a habit at a specific time in the plan table, it now silently reschedules the habit's one-shot reminder to match. Returns `RESCHEDULED`, `NOT_LINKED`, `NOT_FOUND`, or `UNAVAILABLE` — never blocks or fails loudly.
+- **`/habits reminders-sync --sweep` — end-of-day cleanup.** Running `reminders-sync` with `--sweep` now cancels any pending one-shot reminders for habits that weren't completed today, keeping the Apple Reminders list clean after EOD.
+- **`/end-of-day --date YYYY-MM-DD` — close a past day.** Pass a date (or a bare YYYY-MM-DD positional arg) to fill in the "How it went" section for a previous day. The habit rollup and laptop report key off the given date, not today.
+- **`lib/profile_lock.py` — atomic profile writes.** `habits add/edit/archive` now use an exclusive file lock + tempfile-then-rename write path, preventing profile corruption under concurrent invocations or disk-full failures.
+
+### Changed
+
+- **`/plan-my-day` — rescheduling habit reminders is now a silent step (Step 5c).** After writing the plan table, Claude automatically calls `reminders-reschedule` for any habit placed at a specific clock time. No user output unless the reschedule fails.
+- **`/plan-my-day` — habit marks pushed to Apple Reminders after check-in.** After the habit check-in step, Claude now calls `reminders-sync --date` to propagate any marks to their linked Apple Reminders in one pass.
+- **`/laptop-tracking` tracker daemon** — the `v=` query parameter is now preserved for YouTube URLs (video ID allowlist), and all other query parameters are still dropped. Video IDs are validated (alphanumeric + `-_`, max 16 chars) before storage.
+
+### Fixed
+
+- Full-day window now uses calendar arithmetic (`datetime + timedelta(days=1)`) instead of `+86400` to correctly handle DST-transition days (spring-forward/fall-back no longer inflate or deflate the reported away time by one hour).
+- YouTube video ID extraction now caps at 16 characters to prevent unbounded `raw_path` values from malformed URLs.
+- `reminders-reschedule` now validates the `--date` argument format before querying the DB, consistent with `end-of-day.sh`.
+
 ## [0.9.0] — 2026-06-06
 
 ### Added
