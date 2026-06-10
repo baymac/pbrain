@@ -47,8 +47,9 @@ set -euo pipefail
 #   habits.sh reminder --id <id> (--link --time HH:MM [--days mon,wed,fri] | --decline | --unlink [--cancel])
 #                  link a build habit to a per-day Apple Reminder (--days = fixed weekdays)
 #   habits.sh reminders-pending          daily build habits with no reminder decision yet
-#   habits.sh reminders-ensure [--date]  create today's one-shot reminders for linked habits (idempotent)
-#   habits.sh reminders-sync   [--date]  reconcile linked habits ↔ their one-shots, both directions
+#   habits.sh reminders-ensure      [--date]  create today's one-shot reminders for linked habits (idempotent)
+#   habits.sh reminders-sync        [--date] [--sweep]  reconcile linked habits ↔ their one-shots, both directions
+#   habits.sh reminders-reschedule  --habit <name> --time HH:MM [--date YYYY-MM-DD]  update a pending one-shot's due time
 #
 # A build (at_least) habit can be LINKED to Apple Reminders (/remind). The link
 # is an INTENT stored on the habit in the profile JSON as
@@ -285,49 +286,51 @@ import json, os, re, sys
 libdir, path, hid, name, direction, priority, notes, unit, measure = sys.argv[1:10]
 sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields, schedule_label
-with open(path) as fh:
-    text = fh.read()
-m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
-data = json.loads(m.group(2)) if m else {"habits": []}
-habits = data.setdefault("habits", [])
-sched = build_schedule({
-    "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
-    "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
-    "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
-    "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
-    "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
-})
-# schedule_type / target_count are the legacy SCORING fields the current evaluator
-# still reads: derive from the schedule, but an explicit --target always wins (it
-# is the cap for a limit habit, or the per-period count for a build habit).
-st, tv = legacy_fields(sched)
-target_env = (os.environ.get("PBH_TARGET") or "").strip()
-if target_env:
+from profile_lock import ProfileLock
+result_line = ""
+with ProfileLock(path) as lock:
+    text = lock.read()
+    m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+    data = json.loads(m.group(2)) if m else {"habits": []}
+    habits = data.setdefault("habits", [])
+    sched = build_schedule({
+        "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
+        "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
+        "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
+        "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
+        "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
+    })
+    # schedule_type / target_count are the legacy SCORING fields the current evaluator
+    # still reads: derive from the schedule, but an explicit --target always wins (it
+    # is the cap for a limit habit, or the per-period count for a build habit).
+    st, tv = legacy_fields(sched)
+    target_env = (os.environ.get("PBH_TARGET") or "").strip()
+    if target_env:
+        try:
+            tv = int(target_env)
+        except ValueError:
+            pass
     try:
-        tv = int(target_env)
-    except ValueError:
-        pass
-try:
-    mv = float(measure) if str(measure).strip() else None
-    if mv is not None and mv.is_integer():
-        mv = int(mv)
-except (TypeError, ValueError):
-    mv = None
-habits.append({
-    "id": hid, "name": name.strip(), "direction": direction,
-    "schedule": sched, "schedule_type": st, "target_count": tv,
-    "priority": priority, "unit": unit.strip(), "measure_target": mv,
-    "archived": False, "notes": notes.strip(),
-})
-new_json = json.dumps(data, indent=2)
-if m:
-    text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
-else:
-    text = text.rstrip() + f"\n\n```json\n{new_json}\n```\n"
-with open(path, "w") as fh:
-    fh.write(text)
-measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
-print(f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note})")
+        mv = float(measure) if str(measure).strip() else None
+        if mv is not None and mv.is_integer():
+            mv = int(mv)
+    except (TypeError, ValueError):
+        mv = None
+    habits.append({
+        "id": hid, "name": name.strip(), "direction": direction,
+        "schedule": sched, "schedule_type": st, "target_count": tv,
+        "priority": priority, "unit": unit.strip(), "measure_target": mv,
+        "archived": False, "notes": notes.strip(),
+    })
+    new_json = json.dumps(data, indent=2)
+    if m:
+        text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+    else:
+        text = text.rstrip() + f"\n\n```json\n{new_json}\n```\n"
+    lock.write(text)
+    measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
+    result_line = f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note})"
+print(result_line)
 PYEOF
   exit 0
 fi
@@ -385,64 +388,66 @@ import json, os, re, sys
 libdir, path, hid, name, direction, target, priority, notes, unit, measure = sys.argv[1:11]
 sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields
+from profile_lock import ProfileLock
 KEEP = "__keep__"
-with open(path) as fh:
-    text = fh.read()
-m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
-if not m:
-    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
-data = json.loads(m.group(2))
-found = None
-for h in (data.get("habits") or []):
-    if str(h.get("id", "")).strip() == hid:
-        found = h
-        break
-if found is None:
-    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
-if name != KEEP and name.strip():
-    found["name"] = name.strip()
-if direction != KEEP and direction in ("at_least", "at_most"):
-    found["direction"] = direction
-if priority != KEEP and priority in ("low", "medium", "high"):
-    found["priority"] = priority
-if unit != KEEP:
-    found["unit"] = unit.strip()
-if measure != KEEP:
-    if str(measure).strip():
-        try:
-            mv = float(measure)
-            found["measure_target"] = int(mv) if mv.is_integer() else mv
-        except (TypeError, ValueError):
+result_line = ""
+with ProfileLock(path) as lock:
+    text = lock.read()
+    m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+    if not m:
+        print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+    data = json.loads(m.group(2))
+    found = None
+    for h in (data.get("habits") or []):
+        if str(h.get("id", "")).strip() == hid:
+            found = h
+            break
+    if found is None:
+        print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+    if name != KEEP and name.strip():
+        found["name"] = name.strip()
+    if direction != KEEP and direction in ("at_least", "at_most"):
+        found["direction"] = direction
+    if priority != KEEP and priority in ("low", "medium", "high"):
+        found["priority"] = priority
+    if unit != KEEP:
+        found["unit"] = unit.strip()
+    if measure != KEEP:
+        if str(measure).strip():
+            try:
+                mv = float(measure)
+                found["measure_target"] = int(mv) if mv.is_integer() else mv
+            except (TypeError, ValueError):
+                found["measure_target"] = None
+        else:
             found["measure_target"] = None
-    else:
-        found["measure_target"] = None
-if notes != KEEP:
-    found["notes"] = notes.strip()
-# Rebuild the schedule only when a schedule-affecting flag was passed.
-if os.environ.get("PBH_TOUCHED") == "1":
-    sched = build_schedule({
-        "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
-        "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
-        "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
-        "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
-        "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
-    })
-    found["schedule"] = sched
-    st, tv = legacy_fields(sched)
-    found["schedule_type"] = st
-    found["target_count"] = tv
-# An explicit --target always wins (scoring axis: a limit cap / a build count),
-# applied after any schedule rebuild so it is never clobbered by the derivation.
-if target != KEEP:
-    try:
-        found["target_count"] = int(target) if str(target).strip() else None
-    except (TypeError, ValueError):
-        found["target_count"] = None
-new_json = json.dumps(data, indent=2)
-text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
-with open(path, "w") as fh:
-    fh.write(text)
-print(f"edited: {found.get('name')} [{hid}]")
+    if notes != KEEP:
+        found["notes"] = notes.strip()
+    # Rebuild the schedule only when a schedule-affecting flag was passed.
+    if os.environ.get("PBH_TOUCHED") == "1":
+        sched = build_schedule({
+            "kind": os.environ.get("PBH_KIND"), "days": os.environ.get("PBH_DAYS"),
+            "times_per_week": os.environ.get("PBH_TPW"), "start_day": os.environ.get("PBH_START_DAY"),
+            "every_days": os.environ.get("PBH_EVERY"), "start_date": os.environ.get("PBH_START_DATE"),
+            "days_of_month": os.environ.get("PBH_DOM"), "times_per_month": os.environ.get("PBH_TPM"),
+            "start_dom": os.environ.get("PBH_START_DOM"), "today": os.environ.get("PBH_TODAY"),
+        })
+        found["schedule"] = sched
+        st, tv = legacy_fields(sched)
+        found["schedule_type"] = st
+        found["target_count"] = tv
+    # An explicit --target always wins (scoring axis: a limit cap / a build count),
+    # applied after any schedule rebuild so it is never clobbered by the derivation.
+    if target != KEEP:
+        try:
+            found["target_count"] = int(target) if str(target).strip() else None
+        except (TypeError, ValueError):
+            found["target_count"] = None
+    new_json = json.dumps(data, indent=2)
+    text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+    lock.write(text)
+    result_line = f"edited: {found.get('name')} [{hid}]"
+print(result_line)
 PYEOF
   exit 0
 fi
@@ -463,33 +468,36 @@ if [[ "$SUB" == "archive" ]]; then
     echo "habits: archive requires --id and an existing profile" >&2
     exit 1
   fi
-  python3 - "$PROFILE_FILE" "$AR_ID" <<'PYEOF'
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$AR_ID" <<'PYEOF'
 import json, re, sys
-path, hid = sys.argv[1], sys.argv[2]
-with open(path) as fh:
-    text = fh.read()
-m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
-if not m:
-    print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
-data = json.loads(m.group(2))
-found = None
-for h in (data.get("habits") or []):
-    if str(h.get("id", "")).strip() == hid:
-        h["archived"] = True
-        found = h
-        break
-if found is None:
-    print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
-new_json = json.dumps(data, indent=2)
-text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
-with open(path, "w") as fh:
-    fh.write(text)
-print(f"archived: {found.get('name')} [{hid}] (history kept)")
-rem = found.get("reminder") if isinstance(found.get("reminder"), dict) else {}
-if rem.get("state") == "linked":
-    # Was linked → its per-day one-shots (ids live in the DB) may still be
-    # pending; signal /habits to offer cancelling them via reminder --unlink.
-    print("LINKED_REMINDER")
+libdir, path, hid = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, libdir)
+from profile_lock import ProfileLock
+result_lines = []
+with ProfileLock(path) as lock:
+    text = lock.read()
+    m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+    if not m:
+        print("habits: no json block in profile", file=sys.stderr); sys.exit(1)
+    data = json.loads(m.group(2))
+    found = None
+    for h in (data.get("habits") or []):
+        if str(h.get("id", "")).strip() == hid:
+            h["archived"] = True
+            found = h
+            break
+    if found is None:
+        print(f"habits: no habit with id {hid}", file=sys.stderr); sys.exit(1)
+    new_json = json.dumps(data, indent=2)
+    text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+    lock.write(text)
+    result_lines.append(f"archived: {found.get('name')} [{hid}] (history kept)")
+    rem = found.get("reminder") if isinstance(found.get("reminder"), dict) else {}
+    if rem.get("state") == "linked":
+        # Was linked → its per-day one-shots (ids live in the DB) may still be
+        # pending; signal /habits to offer cancelling them via reminder --unlink.
+        result_lines.append("LINKED_REMINDER")
+print("\n".join(result_lines))
 PYEOF
   exit 0
 fi
@@ -1045,23 +1053,31 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# reminders-sync [--date] — reconcile a day's linked habits with their per-day
-# one-shot reminders, BOTH directions:
+# reminders-sync [--date] [--sweep] — reconcile a day's linked habits with their
+# per-day one-shot reminders, BOTH directions:
 #   PULL  reminder → habit: a pending one-shot the user checked off in the Apple
 #         Reminders app (status DONE) marks the habit done that day (md + DB) and
 #         closes the row; a MISSING (deleted) one-shot just closes the row.
 #   PUSH  habit → reminder: a habit already done that day whose one-shot is still
 #         pending gets its reminder completed, then the row closed.
+#   SWEEP (only with --sweep): any one-shot STILL pending after PULL+PUSH means
+#         the habit wasn't done and the reminder wasn't ticked — the day is
+#         closing, so delete the stale Apple Reminder and close the row so it
+#         doesn't linger as an overdue notification. Gated behind --sweep so the
+#         morning plan-my-day sync never deletes the day's not-yet-done reminders;
+#         end-of-day passes --sweep.
 # PULL runs first so PUSH never double-handles a row. Degrades silently without
 # Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
-# "SYNCED pulled=<n> pushed=<n>". Run by plan-my-day (morning) + end-of-day.
+# "SYNCED pulled=<n> pushed=<n> swept=<n>". Run by plan-my-day (morning, no sweep)
+# + end-of-day (with --sweep).
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "reminders-sync" ]]; then
   shift || true
-  RS_DATE="$TODAY"
+  RS_DATE="$TODAY"; RS_SWEEP=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --date) RS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --date)  RS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --sweep) RS_SWEEP=1; shift ;;
       *) shift ;;
     esac
   done
@@ -1153,7 +1169,99 @@ PYEOF
     PUSHED=$((PUSHED + 1))
   done <<< "$PUSH"
 
-  echo "SYNCED pulled=$PULLED pushed=$PUSHED"
+  # SWEEP: delete stale one-shots for habits not done (end-of-day only).
+  SWEPT=0
+  if [[ "$RS_SWEEP" -eq 1 ]]; then
+    SWP="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, date = sys.argv[1:3]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for hid, rid in con.execute("SELECT habit_id, reminder_id FROM habit_reminders WHERE occurred_on=? AND status='pending'", (date,)).fetchall():
+        print("%s\t%s" % (hid, rid))
+    con.close()
+except Exception:
+    pass
+PYEOF
+)"
+    while IFS=$'\t' read -r hid rid; do
+      [[ -n "${rid//[[:space:]]/}" ]] || continue
+      pbrain_reminders_run delete --id "$rid" >/dev/null 2>&1 || true
+      _hr_set_status "$hid" "$RS_DATE" cancelled
+      SWEPT=$((SWEPT + 1))
+    done <<< "$SWP"
+  fi
+
+  echo "SYNCED pulled=$PULLED pushed=$PUSHED swept=$SWEPT"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-reschedule --habit <name> --time HH:MM [--date YYYY-MM-DD]
+# Update the due time (and at-due alarm) of a linked habit's pending one-shot
+# Apple Reminder for <date> (default today). Looks up the reminder_id from
+# habit_reminders, then calls pbrain_reminders_run edit --id <rid> --due.
+# Echoes: RESCHEDULED <name> → HH:MM | NOT_LINKED | NOT_FOUND | UNAVAILABLE
+# Used by /plan-my-day to align a habit's reminder with its planned time block.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-reschedule" ]]; then
+  shift || true
+  RR_DATE="$TODAY"; RR_NAME=""; RR_TIME=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --habit|--name) RR_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --time)         RR_TIME="${2:-}";  shift 2 2>/dev/null || shift ;;
+      --date)         RR_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "${RR_NAME//[[:space:]]/}" ]] || { echo "ERROR:--habit required"; exit 0; }
+  [[ -n "${RR_TIME//[[:space:]]/}" ]] || { echo "ERROR:--time required"; exit 0; }
+  [[ "$RR_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$RR_DATE'"; exit 0; }
+  [[ -f "$PROFILE_FILE" ]] || { echo "NOT_LINKED"; exit 0; }
+
+  # Look up habit_id by name → reminder_id for that date (pending only)
+  RID="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RR_NAME" "$RR_DATE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+profile, db, name, date = sys.argv[1:5]
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    sys.exit(0)
+hid = None
+for h in (data.get("habits") or []):
+    if str(h.get("name", "")).strip().lower() == name.strip().lower():
+        rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+        if str(rem.get("state", "")).strip().lower() != "linked":
+            print("NOT_LINKED"); sys.exit(0)
+        hid = str(h.get("id", "")).strip()
+        break
+if not hid:
+    print("NOT_LINKED"); sys.exit(0)
+try:
+    con = sqlite3.connect(db, timeout=5)
+    row = con.execute(
+        "SELECT reminder_id FROM habit_reminders WHERE habit_id=? AND occurred_on=? AND status='pending'",
+        (hid, date)).fetchone()
+    con.close()
+    print(row[0] if row else "NOT_FOUND")
+except Exception:
+    print("NOT_FOUND")
+PYEOF
+)"
+  case "${RID:-}" in
+    NOT_LINKED) echo "NOT_LINKED"; exit 0 ;;
+    NOT_FOUND)  echo "NOT_FOUND";  exit 0 ;;
+  esac
+  [[ -n "${RID//[[:space:]]/}" ]] || { echo "NOT_FOUND"; exit 0; }
+
+  RES="$(pbrain_reminders_run edit --id "$RID" --due "$RR_DATE $RR_TIME" 2>/dev/null || true)"
+  case "${RES:-}" in
+    EDITED*|OK*) echo "RESCHEDULED ${RR_NAME} → ${RR_TIME}" ;;
+    NOT_FOUND*)  echo "NOT_FOUND" ;;
+    *)           echo "${RES:-UNAVAILABLE}" ;;
+  esac
   exit 0
 fi
 

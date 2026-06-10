@@ -33,7 +33,23 @@ FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
 TODAY="$(date +%Y-%m-%d)"
-DOW="$(date +%A)"
+# Optional target date — close a PAST day (e.g. "for previous day") with
+# `--date YYYY-MM-DD` or a bare YYYY-MM-DD positional. Defaults to today. The
+# slash command resolves natural language ("previous day", "yesterday", a
+# weekday) to a concrete YYYY-MM-DD before calling. Every downstream path,
+# the habit rollup, and the laptop report key off this date.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --date) TODAY="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) TODAY="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+if ! [[ "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "Bad date '$TODAY' — expected YYYY-MM-DD." >&2; exit 1
+fi
+# Day-of-week for the target date (not necessarily today). macOS `date -j`.
+DOW="$(date -j -f "%Y-%m-%d" "$TODAY" +%A 2>/dev/null || date +%A)"
 
 PLAN_FILE="$PLAN_DIR/$TODAY.md"
 JOURNAL_FILE="$DAILY_DIR/$TODAY.md"
@@ -47,7 +63,7 @@ read_or_missing() {
   if [[ -f "$f" ]]; then
     cat "$f"
   else
-    echo "(no entry for today)"
+    echo "(no entry for this day)"
   fi
 }
 
@@ -262,13 +278,16 @@ without re-asking. Use the Edit tool on each file.
     checkbox; pbrain owns the data). Run this AFTER 4e's consolidate. No-op when
     no habits profile exists — don't mention reminders then.
     SYNC (silent bookkeeping — do NOT ask): run
-         bash "$HABITS_CMD" reminders-sync --date $TODAY
+         bash "$HABITS_CMD" reminders-sync --date $TODAY --sweep
        It reconciles today's linked habits with their one-shot reminders both
        ways: a reminder you ticked off in the Apple Reminders app marks the habit
-       done here, and a habit you closed today completes its reminder. It prints
-       "SYNCED pulled=<n> pushed=<n>". Surface ONE line only if something moved
-       (e.g. "Synced 2 habit reminders."); stay silent on "pulled=0 pushed=0" or
-       when reminders aren't set up.
+       done here, and a habit you closed today completes its reminder. With
+       --sweep (end-of-day only), any one-shot still pending after that — a habit
+       you didn't do and didn't tick — has its stale Apple Reminder deleted so it
+       doesn't linger overdue. It prints "SYNCED pulled=<n> pushed=<n> swept=<n>".
+       Surface ONE line only if something moved (e.g. "Synced 2 habit reminders,
+       cleared 1 undone."); stay silent on "pulled=0 pushed=0 swept=0" or when
+       reminders aren't set up.
     Do NOT proactively offer to set up new reminder links here — linking is
     opt-in, per habit, only when the user asks (or at /habits add/setup). If the
     user does ask, use: bash "$HABITS_CMD" reminder --id <hid> --link --time HH:MM

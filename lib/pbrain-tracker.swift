@@ -17,7 +17,8 @@
 // the ABSENCE of a segment, derived at render time from the gap between one
 // segment's ended_at and the next's started_at. The daemon stores RAW signals
 // (raw bundle id, raw URL host + path straight from AppleScript with the query
-// string dropped, an attribution reason);
+// string dropped except a tiny content-id allowlist — YouTube's `v` video id —
+// so per-video time survives, an attribution reason);
 // the python renderer does all normalization + active/away classification, so the
 // edge-case logic is unit-testable and the Swift surface stays thin.
 //
@@ -233,8 +234,11 @@ func automationRequest(_ bundleId: String) -> OSStatus {
 // Run the per-browser AppleScript and reduce it to (host?, path?, attribution).
 // Blocks the calling thread (always invoked on a background queue). We keep the
 // URL host AND path but DROP the query string (?…) — the privacy boundary: a
-// query can carry tokens, search terms, and session secrets. www-stripping /
-// display normalization is left to the python renderer.
+// query can carry tokens, search terms, and session secrets. The ONE exception
+// is a tiny allowlist of query params that identify distinct CONTENT rather than
+// secrets (currently just YouTube's `v` video id), so per-video watch time is
+// tracked instead of every video collapsing to youtube.com/watch. www-stripping
+// / display normalization is left to the python renderer.
 func runURLScript(_ src: String) -> (String?, String?, String) {
     guard let script = NSAppleScript(source: src) else { return (nil, nil, "non_web") }
     var errInfo: NSDictionary?
@@ -255,7 +259,20 @@ func runURLScript(_ src: String) -> (String?, String?, String) {
     // trailing slash so "/" and "" collapse to the bare host.
     var path = u.path
     if path == "/" { path = "" }
-    let hostPath = path.isEmpty ? host : host + path
+    var hostPath = path.isEmpty ? host : host + path
+    // Content-id allowlist: preserve YouTube's `v` (the video id) so each video
+    // gets its own row. Only the value of `v` is kept — never the rest of the
+    // query (search terms, session tokens, &list=, &t=, …).
+    let youtubeDomains: Set<String> = ["youtube.com", "m.youtube.com", "music.youtube.com"]
+    let bare = host.lowercased().hasPrefix("www.") ? String(host.dropFirst(4)) : host.lowercased()
+    if youtubeDomains.contains(bare),
+       path == "/watch",
+       let comps = URLComponents(url: u, resolvingAgainstBaseURL: false),
+       let vid = comps.queryItems?.first(where: { $0.name == "v" })?.value,
+       !vid.isEmpty, vid.count <= 16,
+       vid.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) {
+        hostPath += "?v=" + vid
+    }
     return (host, hostPath, "ok")
 }
 

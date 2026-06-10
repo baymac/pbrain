@@ -77,9 +77,10 @@ tracker_build() {
 # (the existing report is preserved) and writes atomically (temp + rename).
 render_day() {
   local day="$1" out="$2"
-  python3 - "$PBRAIN_TRACKER_DB_FILE" "$day" "$out" "$TOPN" <<'PYEOF'
+  local today_real; today_real="$(date +%Y-%m-%d)"
+  python3 - "$PBRAIN_TRACKER_DB_FILE" "$day" "$out" "$TOPN" "$today_real" <<'PYEOF'
 import sqlite3, sys, os, datetime, tempfile
-db, day, outpath, topn = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+db, day, outpath, topn, today_real = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
 
 # READ FIRST, guarded. On ANY read failure we exit(0) WITHOUT writing, so a
 # transient/locked/unreadable DB can never clobber an existing report with junk
@@ -93,7 +94,7 @@ try:
                    con.execute("PRAGMA table_info(tracker_segments)").fetchall())
     path_col = "raw_path" if has_path else "NULL"
     rows = con.execute(
-        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, %s "
+        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s "
         "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % path_col, (day,)
     ).fetchall()
     con.close()
@@ -131,10 +132,22 @@ def hm(sec):
 def hhmm(ep):
     return datetime.datetime.fromtimestamp(ep).strftime("%H:%M")
 
+# A browser segment with no resolved domain carries an attribution reason
+# (Decision T2) explaining the gap — surfaced in its own table so denied/timed-out
+# browser time isn't silently invisible. 'ok' (domain resolved) and 'not_browser'
+# (the app simply isn't a browser) need no explanation.
+SECONDS_PER_DAY = 86400
+
+ATTR_LABEL = {
+    "tcc_denied": "permission not granted",
+    "timeout":    "tab lookup timed out",
+    "non_web":    "non-web window",
+}
+
 active = 0
-app_secs, dom_secs, page_secs = {}, {}, {}
+app_secs, dom_secs, page_secs, attr_secs = {}, {}, {}, {}
 segs = []
-for s, e, bid, name, host, path in rows:
+for s, e, bid, name, host, attr, path in rows:
     dur = (e - s) if (e is not None and s is not None and e >= s) else 0
     active += dur
     app = name or bid or "(unknown)"
@@ -145,14 +158,27 @@ for s, e, bid, name, host, path in rows:
     pg = norm_path(path)
     if pg:
         page_secs[pg] = page_secs.get(pg, 0) + dur
+    if (attr in ATTR_LABEL) and dur > 0:
+        attr_secs[attr] = attr_secs.get(attr, 0) + dur
     if dur > 0:
         segs.append((s, e))
 
 import time as _time
+# Reconcile the day window to the full calendar day. The start is always the
+# day's midnight; the end depends on whether the day is complete:
+#   • a PAST day (day < today) is reconciled to the NEXT midnight, so away-time
+#     includes the untracked tail (laptop asleep/off before midnight) — a true
+#     full-day view from start to end.
+#   • TODAY (in progress) ends at the last recorded activity ("so far").
+full_day = bool(day < today_real)
 if segs:
     day_midnight = int(_time.mktime(datetime.datetime.strptime(day, "%Y-%m-%d").timetuple()))
     first = day_midnight
-    last = max(e for s, e in segs)
+    seg_last = max(e for s, e in segs)
+    # Use calendar arithmetic for the next midnight (not +86400) so DST
+    # transitions (23h/25h days) don't inflate or deflate the away window.
+    next_midnight = datetime.datetime.strptime(day, "%Y-%m-%d") + datetime.timedelta(days=1)
+    last = int(_time.mktime(next_midnight.timetuple())) if full_day else seg_last
     window = max(0, last - first)
     away = max(0, window - active)
 else:
@@ -166,7 +192,10 @@ if not segs:
 else:
     pct = (100 * active // window) if window else 0
     L.append("- **Active time:** %s" % hm(active))
-    L.append("- **Tracked window:** %s → %s (%s)" % (hhmm(first), hhmm(last), hm(window)))
+    if full_day:
+        L.append("- **Day window:** 00:00 → 24:00 (full day)")
+    else:
+        L.append("- **Tracked window:** %s → %s (%s, so far)" % (hhmm(first), hhmm(seg_last), hm(window)))
     L.append("- **Active vs away:** %s active · %s away (%d%% active)" % (hm(active), hm(away), pct))
     L.append("")
     L.append("## Top apps")
@@ -199,6 +228,16 @@ else:
         for pg, secs in sorted(paged.items(), key=lambda x: -x[1])[:topn]:
             p = (100 * secs // ptot) if ptot else 0
             L.append("| %s | %s | %d%% |" % (pg, hm(secs), p))
+    if attr_secs:
+        L.append("")
+        L.append("## Browser attribution")
+        L.append("")
+        L.append("Browser time with no recorded domain, by reason:")
+        L.append("")
+        L.append("| Reason | Active time |")
+        L.append("|--------|------------|")
+        for attr, secs in sorted(attr_secs.items(), key=lambda x: -x[1]):
+            L.append("| %s | %s |" % (ATTR_LABEL[attr], hm(secs)))
 content = "\n".join(L) + "\n"
 
 # WRITE only after content is fully built (never empty). Atomic temp + rename.

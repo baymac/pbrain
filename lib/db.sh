@@ -321,6 +321,7 @@ try:
         app_bundle_id TEXT,               -- raw bundle id (e.g. com.google.Chrome); NULL if none
         app_name      TEXT,               -- raw localized display-name snapshot
         raw_host      TEXT,               -- raw URL host from AppleScript; NULL if not applicable
+        raw_path      TEXT,               -- raw "host/path[?v=…]" for page-level rollup; NULL if not applicable
         attribution   TEXT NOT NULL DEFAULT 'ok'  -- ok|tcc_denied|timeout|non_web|not_browser
     );
     -- Day-bucket reads (the renderer queries one occurred_on at a time).

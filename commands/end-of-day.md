@@ -7,9 +7,11 @@ Run this with the Bash tool first, then follow the INSTRUCTIONS block in its out
 bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/end-of-day.sh"
 ```
 
+**Date:** by default the script closes **today**. If `$ARGUMENTS` asks for a different day ("previous day", "yesterday", "last Friday", or an explicit date), FIRST resolve it to a concrete `YYYY-MM-DD` relative to the current date, then pass it: append `--date YYYY-MM-DD` to the command above. Every downstream path — plan/journal/fitness/diet files, the habit rollup + consolidate + reminders-sync, AND the laptop-usage report — keys off that one date, so the laptop report is rendered for the day being closed (not today). Do not pass `--date` when closing today.
+
 **Run bash immediately. Do not say anything to the user until you have the INSTRUCTIONS block.**
 
-The script emits `END_OF_DAY_SESSION` with today's plan, journal, fitness, and diet files inlined. Follow the INSTRUCTIONS exactly. Key hard rules:
+The script emits `END_OF_DAY_SESSION` with the target day's plan, journal, fitness, and diet files inlined (the `date:` line names the day). Follow the INSTRUCTIONS exactly. Key hard rules:
 
 - Ask the four questions **one at a time**. Wait for each answer before asking the next.
 - Fill the plan file **in-place** using the Edit tool. No sibling close files.

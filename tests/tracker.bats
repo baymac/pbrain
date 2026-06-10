@@ -44,10 +44,12 @@ seed_day() {
   source "$REPO_ROOT/lib/db.sh"
   pbrain_tracker_db_init
   python3 - "$PBRAIN_TRACKER_DB_FILE" "$day" <<'PY'
-import sqlite3, sys
+import sqlite3, sys, time, datetime
 db, day = sys.argv[1], sys.argv[2]
 c = sqlite3.connect(db)
-base = 1_700_000_000
+# Anchor epochs to the day itself (09:00 local) so the renderer's day_midnight
+# math lines up — otherwise the window collapses to 0. Activity runs 09:00–11:35.
+base = int(time.mktime(datetime.datetime.strptime(day, "%Y-%m-%d").timetuple())) + 9*3600
 rows = [
     # 1h Chrome on www.github.com  → normalizes to github.com
     (base,        base+3600,  "com.google.Chrome", "Google Chrome", "www.github.com", "ok"),
@@ -73,7 +75,7 @@ PY
   run pbrain_tracker_db_init
   [ "$status" -eq 0 ]
   [ -f "$PBRAIN_TRACKER_DB_FILE" ]
-  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols=[r[1] for r in c.execute('PRAGMA table_info(tracker_segments)')]; assert cols==['id','started_at','ended_at','occurred_on','app_bundle_id','app_name','raw_host','attribution'], cols" "$PBRAIN_TRACKER_DB_FILE"
+  run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); cols=[r[1] for r in c.execute('PRAGMA table_info(tracker_segments)')]; assert cols==['id','started_at','ended_at','occurred_on','app_bundle_id','app_name','raw_host','raw_path','attribution'], cols" "$PBRAIN_TRACKER_DB_FILE"
   [ "$status" -eq 0 ]
 }
 
@@ -100,16 +102,29 @@ PY
 
 # --- render -----------------------------------------------------------------
 
-@test "report renders a daily md with active time and the tracked window" {
-  seed_day "2026-06-07"
+@test "report renders a daily md with active time and a full-day window for a past day" {
+  seed_day "2026-06-07"   # a past day → reconciled to the full midnight→midnight window
   run bash "$SH" report 2026-06-07
   [ "$status" -eq 0 ]
   [ -f "$PBRAIN_TRACKER_DIR/2026-06-07.md" ]
   run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
   # active = 3600+1800+1800+300 = 7500s = 2h 05m
   [[ "$output" == *"Active time:** 2h 05m"* ]]
-  # window = 9300s = 2h 35m; away = 1800s = 30m (the gap)
-  [[ "$output" == *"30m away"* ]]
+  # past day: window is the full calendar day; away = 24h − active = 21h 55m
+  [[ "$output" == *"Day window:** 00:00 → 24:00 (full day)"* ]]
+  [[ "$output" == *"21h 55m away"* ]]
+}
+
+@test "report for TODAY uses a 'so far' window ending at the last activity" {
+  TODAY="$(date +%Y-%m-%d)"
+  seed_day "$TODAY"
+  run bash "$SH" report "$TODAY"
+  [ "$status" -eq 0 ]
+  run cat "$PBRAIN_TRACKER_DIR/$TODAY.md"
+  [[ "$output" == *"Active time:** 2h 05m"* ]]
+  # today is in progress → window runs midnight → last activity (not a full day)
+  [[ "$output" == *"so far"* ]]
+  [[ "$output" != *"full day"* ]]
 }
 
 @test "report normalizes www. and aggregates domains" {
@@ -118,6 +133,32 @@ PY
   run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
   [[ "$output" == *"| github.com |"* ]]
   [[ "$output" != *"www.github.com"* ]]
+  [[ "$output" == *"| youtube.com |"* ]]
+}
+
+@test "youtube per-video paths (?v=) render as distinct pages with per-video time" {
+  source "$REPO_ROOT/lib/db.sh"; pbrain_tracker_db_init
+  python3 - "$PBRAIN_TRACKER_DB_FILE" "2026-06-07" <<'PY'
+import sqlite3, sys, time, datetime
+db, day = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+base = int(time.mktime(datetime.datetime.strptime(day, "%Y-%m-%d").timetuple())) + 9*3600
+rows = [
+    # two different videos on the same youtube.com/watch path → must stay separate
+    (base,      base+1200, "com.google.Chrome","Google Chrome","youtube.com","youtube.com/watch?v=AAA111","ok"),
+    (base+1200, base+1500, "com.google.Chrome","Google Chrome","youtube.com","youtube.com/watch?v=BBB222","ok"),
+]
+for s,e,bid,name,host,path,attr in rows:
+    c.execute("INSERT INTO tracker_segments(started_at,ended_at,occurred_on,app_bundle_id,app_name,raw_host,raw_path,attribution) "
+              "VALUES(?,?,?,?,?,?,?,?)",(s,e,day,bid,name,host,path,attr))
+c.commit(); c.close()
+PY
+  bash "$SH" report 2026-06-07
+  run cat "$PBRAIN_TRACKER_DIR/2026-06-07.md"
+  # both videos appear as their own page rows (not merged into youtube.com/watch)
+  [[ "$output" == *"youtube.com/watch?v=AAA111 | 20m"* ]]
+  [[ "$output" == *"youtube.com/watch?v=BBB222 | 5m"* ]]
+  # the domain rollup still aggregates them under the bare host
   [[ "$output" == *"| youtube.com |"* ]]
 }
 
