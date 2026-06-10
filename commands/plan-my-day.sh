@@ -787,6 +787,15 @@ Step 5b — Anchor profile update (only if anchors changed or profile has no dai
   On yes: read $PROFILE_FILE, parse the JSON block, update (or add) the "daily_anchors" keys with today's confirmed values, write the file back. Only update the keys the user touched today — do not wipe other keys. Keep all other profile fields and the markdown prose intact. The JSON block must remain valid.
   On no or if anchors matched exactly: skip silently.
 
+Step 5c — Reschedule habit reminders to planned times (silent, best-effort):
+  Look at the plan table you just wrote. For any row whose action corresponds
+  to a habit from today's tracker AND the row has an explicit start time,
+  align that habit's one-shot Apple Reminder to the planned time:
+    bash "$HABITS_CMD" reminders-reschedule --habit "<name>" --time "HH:MM" --date $TODAY
+  Only call this for habits that appear at a specific clock time in the plan.
+  Ignore habits with no explicit time slot. NOT_LINKED / NOT_FOUND responses
+  mean the habit has no reminder — skip silently. No user output for this step.
+
 Step 6 — Reminders (only if relevant — don't force it):
   If anything time-bound came up while planning (a call/appointment at a set
   time, "pay X today", "don't forget Y at 6") and it isn't already a pending
@@ -810,6 +819,8 @@ Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very e
         check and mark more, or just leave it and /end-of-day consolidates."
   c) On any named habits, mark each one:
        bash "$HABITS_CMD" mark --habit "<name>" --date $TODAY
+     Then push those marks to Apple Reminders (best-effort, silent on failure):
+       bash "$HABITS_CMD" reminders-sync --date $TODAY
      Confirm what was marked. One round only — don't loop asking for more.
   Don't force marking — the tracker is auto-created; marking is one ask, no loop.
 PROMPT
