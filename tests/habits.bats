@@ -832,6 +832,46 @@ PYEOF
   [[ "$output" == *"SYNCED pulled=0 pushed=0"* ]]
 }
 
+# Insert a pending habit_reminders row directly (simulates a created one-shot).
+_hr_seed_pending() {  # <habit_id> <date> <reminder_id>
+  python3 - "$PBRAIN_DB_FILE" "$1" "$2" "$3" <<'PYEOF'
+import sqlite3, sys
+db, hid, date, rid = sys.argv[1:5]
+con = sqlite3.connect(db)
+con.execute("INSERT OR REPLACE INTO habit_reminders (habit_id, occurred_on, reminder_id, status, created_at) VALUES (?,?,?,?,?)",
+            (hid, date, rid, 'pending', '2026-06-03 00:00'))
+con.commit(); con.close()
+PYEOF
+}
+# Read one habit_reminders row's status (or empty).
+_hr_status() {  # <habit_id> <date>
+  python3 - "$PBRAIN_DB_FILE" "$1" "$2" <<'PYEOF'
+import sqlite3, sys
+db, hid, date = sys.argv[1:4]
+con = sqlite3.connect(db)
+r = con.execute("SELECT status FROM habit_reminders WHERE habit_id=? AND occurred_on=?", (hid, date)).fetchone()
+print(r[0] if r else "")
+PYEOF
+}
+
+@test "reminders-sync WITHOUT --sweep leaves an undone habit's one-shot pending" {
+  _write_profile
+  _hr_seed_pending brush-at-night 2026-06-03 R-UNDONE
+  run HABITS reminders-sync --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"swept=0"* ]]
+  [ "$(_hr_status brush-at-night 2026-06-03)" = "pending" ]   # morning sync never sweeps
+}
+
+@test "reminders-sync --sweep closes an undone habit's stale one-shot" {
+  _write_profile
+  _hr_seed_pending brush-at-night 2026-06-03 R-UNDONE
+  run HABITS reminders-sync --date 2026-06-03 --sweep
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"swept=1"* ]]
+  [ "$(_hr_status brush-at-night 2026-06-03)" = "cancelled" ] # end-of-day sweep deletes + closes
+}
+
 @test "archive of a linked habit reports LINKED_REMINDER" {
   _write_profile
   HABITS reminder --id brush-at-night --link --time 07:00
@@ -1129,4 +1169,54 @@ EOF
   [ "$status" -eq 0 ]
   run sqlite3 "$PBRAIN_DB_FILE" "select amount from habit_events where habit_id='eat-clean' and occurred_on='2026-06-07'"
   [ "$output" = "1.0" ]
+}
+
+# ── reminders-reschedule ─────────────────────────────────────────────────────
+
+@test "reminders-reschedule: missing --habit prints ERROR:--habit required" {
+  _write_profile
+  run HABITS reminders-reschedule --time 08:00 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ERROR:--habit required"* ]]
+}
+
+@test "reminders-reschedule: missing --time prints ERROR:--time required" {
+  _write_profile
+  run HABITS reminders-reschedule --habit "Brush at night" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ERROR:--time required"* ]]
+}
+
+@test "reminders-reschedule: unknown habit name prints NOT_LINKED" {
+  _write_profile
+  run HABITS reminders-reschedule --habit "No Such Habit" --time 08:00 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT_LINKED"* ]]
+}
+
+@test "reminders-reschedule: habit exists but is not linked prints NOT_LINKED" {
+  _write_profile
+  # brush-at-night exists in the profile with no reminder link
+  run HABITS reminders-reschedule --habit "Brush at night" --time 08:00 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT_LINKED"* ]]
+}
+
+@test "reminders-reschedule: linked habit with no pending DB row prints NOT_FOUND" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  # No row seeded in habit_reminders for this date
+  run HABITS reminders-reschedule --habit "Brush at night" --time 08:00 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NOT_FOUND"* ]]
+}
+
+@test "reminders-reschedule: linked habit with pending row attempts edit (UNAVAILABLE in CI)" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  _hr_seed_pending brush-at-night 2026-06-03 R-RESCHED-TEST
+  run HABITS reminders-reschedule --habit "Brush at night" --time 08:00 --date 2026-06-03
+  [ "$status" -eq 0 ]
+  # Apple Reminders is stubbed to UNAVAILABLE in test setup; any non-EDITED response is acceptable
+  [[ "$output" != "NOT_LINKED" && "$output" != "NOT_FOUND" ]]
 }
