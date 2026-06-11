@@ -2,6 +2,63 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.21.0] — 2026-06-12
+
+### Added — 4-tier goals altitude + per-day task log + /monthly-review
+
+- **4-tier goals altitude system.** Goals now live at four scopes: goals profile (whole) → monthly goals → weekly goals → daily tasks. Each tier is more focused than the one above. Weekly and monthly goals are versioned store files with a `period` tag; the current period's file is the editable draft, committed once the period closes.
+- **`/monthly-review` command.** New command that synthesizes the month across all weekly reviews, drives monthly-goals versioning (commit closing month → mint next month's draft derived from the goals profile, priority only, one goal at a time), and offers an optional goals-profile hygiene pass (move mostly-done work to `maintenance_mode`, drop finished goals). Writes to `life/monthly-tracking/YYYY-MM.md`.
+- **Weekly goals lifecycle in `/weekly-review`.** A new "Weekly goals" step commits the closing week's goals draft, mints next week's draft derived from monthly goals (if set) or the profile, and walks goals one-by-one assigning priority + difficulty. Task-log data from the week's day plans feeds the goal-progress summary.
+- **Per-day task log table in `/plan-my-day`.** Each day plan now has a second table (`## Task log`) listing the day's chosen tasks with priority, difficulty, and blank `Done at`/`Status` columns for `/end-of-day` to fill.
+- **Mid-day `task add` / `task remove` / `task list` in `/plan-my-day`.** Revise *today's already-written plan* without rebuilding the day. `task add` appends a task-log row (resolving its tie to a current weekly goal, reusing suggest-tier, taking priority + difficulty) and re-flows "Today at a glance" — slotting a new work block into the next free gap around the fixed anchors, never past `last_block_end`, flagging if it doesn't fit. `task remove` drops a row and frees its block (confirming first if the row is already closed so `/end-of-day`'s rollup isn't lost). Both tables are always rewritten together. A clean no-op pointing at `/plan-my-day` when today isn't planned yet.
+- **`/plan-my-day` weekly goals menu.** The daily "what to work on" menu is now drawn from this week's weekly goals (ordered by priority then difficulty), falling back to monthly → profile when weekly goals aren't set up.
+- **Suggest-tier in `/plan-my-day`.** When a named task ties to no weekly goal, the plan offers to add it at the right tier (weekly goal, monthly goal, or goals profile) with a one-line offer — non-blocking.
+- **Month-boundary nudge in `/plan-my-day`.** In the first/last 3 days of a month, the daily plan suggests running `/monthly-review` once.
+- **`/end-of-day` task-log actuals.** Fills `Done at` / `Status` in the task-log table from Q1, and rolls completed tasks up to the tied weekly-goals draft (updating each goal's status in place).
+- **`priority` + `maintenance_mode` in goals profile.** Every work/life goal now carries a `priority` integer (1 = most important). A `maintenance_mode` array holds mostly-done goals still being tended (visible but not cluttering the active list). Migration 0002 (goals profile restructure) now seeds these fields.
+- **`pbrain_profile_latest_for_period` in `lib/profiles.sh`.** New helper that resolves a versioned profile file by its JSON `"period"` field (rather than "latest committed"), enabling weekly/monthly goals resolution.
+- **`PBRAIN_MONTHLY_DIR` env var** — override the monthly-review output directory (default: `$VAULT_DIR/life/monthly-tracking`).
+- **Two new scored default habits, computed by the same deterministic evaluator as Eat clean / Sleep well.** **"Work the plan"** (`weighted_completion`) — seeded once a committed goals profile exists; scores the day's task log like gym volume (difficulty = load, priority = importance, status = reps), with every planned task in the denominator so overplanning costs you; auto-marked at `/end-of-day` after the task-log actuals are filled. **"Train"** (`session_volume`) — seeded once a committed fitness library exists, scheduled on the union of the activities' fixed days (so rest days are "off", never missed); scores actual-vs-planned volume capped at 100 (strength = Σreps, duration = minutes, binary = status credit); auto-marked at `/fitness-journal` on a logged session or at `/end-of-day` when the day closes. Both render `<score>/<target> ✅`. The model only classifies raw rows; `score_from_spec` computes the number. New `--items <json>` / `--session <json>` flags on `habits.sh mark`/`score` carry the per-row data.
+
+### Changed
+
+- **Goals profile JSON schema**: `work_goals` and `life_goals` entries now carry `"priority": 1`; a top-level `"maintenance_mode": []` array is added.
+- **`/plan-my-day` frontmatter**: adds `week_period` field (the ISO week, e.g. `2026-W24`).
+- **`/plan-my-day` profile subcommand**: `profile show|new|commit` now accepts `monthly-goals` and `weekly-goals` as bases in addition to the existing three.
+
+### Fixed
+
+- **"Train" default habit was silently mis-scheduled.** The seeder read each activity's fixed days from a JSON block as integers, but per-activity profiles store `days:` in **frontmatter as weekday names** — so the days were always dropped and Train fell back to a daily schedule (scored "missed" on rest days). It now parses the frontmatter `days:` (highest committed version per activity) and normalizes via the schedule engine, so Train is genuinely schedule-aware: due on training days, "off" on rest days.
+- **Seeded habit schedules used the wrong key.** The four scored defaults (Eat clean, Sleep well, Work the plan, Train) wrote their `schedule` dict with `"kind"` instead of `"type"` — the key the schedule engine (`build_schedule`/`derive_schedule`/`is_due`) actually reads. Latent for the `daily` defaults (daily is always due), but it collapsed Train (the first `weekdays` default) to Monday-only. All five seeded schedules now use `"type"`. Existing vaults are unaffected (seeding is add-only).
+- **`/plan-my-day` failed to parse under macOS bash 3.2.** The daily-flow's stacked command-substitution-nested Python heredocs sat at bash 3.2's parser limit; the carry-forward block now runs from a temp file (heredoc kept outside `$()`), so the script parses cleanly on the system bash.
+
+## [0.20.0] — 2026-06-11
+
+**Versioning re-synced.** The `VERSION` file and `plugin.json` had drifted apart (0.11.0 vs 0.7.0); both now carry 0.20.0. Migration correctness does NOT depend on the version string anyway: applied migrations are tracked in a per-vault ledger (`$VAULT_DIR/.pbrain/migrations/`), so exactly the unapplied ones run, once, in order, regardless of which version you upgrade from. Dev installs (`PBRAIN_DEV_DIR` set) no longer get upgrade nags — dev clones update via git.
+
+### Added — profile architecture (breaking, auto-migrated)
+
+- **Versioned profile store (`lib/profiles.sh`).** Every command's base config now lives as versioned markdown profiles under a hidden `.profile/` dir inside its tracking dir (`<base>.vN.md`, frontmatter `version` + `committed`). Drafts (`committed: false`) are editable; **committing freezes the version** — changes mint the next version via each command's new `profile new` → edit draft → `profile commit` subcommand. Commands always read the highest committed version; old versions stay as history. Libraries (food, work, goals, fitness) are living documents — rows append in place, no version bump.
+- **Migration system (`lib/migrations.sh` + `lib/migrations/`).** Database-style ordered migrations for the vault: AUTO migrations (pure file moves) apply instantly on any command run and are recorded in the ledger; STAGED migrations (profile rebuilds needing your input) run once inside the owning command's next session. Re-runs cost nothing — no LLM, no I/O beyond a marker-file glob. `PBRAIN_MIGRATIONS=0` disables.
+- **`profile` subcommand on `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/habits`** — `profile show | new | commit [base]`.
+- **Prefs + feedback moved into the vault** (`$VAULT_DIR/.pbrain/<cmd>/prefs.md`, `_global/prefs.md`, `<cmd>/feedback.md`) so they sync across devices. Migration 0001 copies existing `~/.config/pbrain/{prefs,feedback}` files across.
+
+### Changed — per command
+
+- **`/fitness-journal`**: new overall **fitness profile** (sleep window bed/wake + hours, steps/day, health-tracker metrics), a **fitness library** (activities + occurrence per week/month + equipment/location/typical time — replaces `fitness-activities.json`), and per-activity profiles with **fixed, non-conflicting days of week** (gym defaults 4×/week). Today's session is **pre-selected from the schedule**. Sleep is captured as bed + wake time (+ quality) and written into the session frontmatter (`sleep_bed/sleep_wake/sleep_quality/sleep_hours`). **Training-gap rules**: 7–13 idle days → repeat weights, no progression; 14+ → deload −20% (rounded to 2.5kg) with a session note. The "equipment unavailable?" question is gone (equipment lives in the profile). Migration 0003 rebuilds old plans part by part.
+- **`/diet-journal`**: the old profile JSON + `Diet Plan.md` merged into ONE versioned **diet profile** (stats + conditions + computed targets + meal slots + **meal times**). Meal timings are **fitness-anchored** — pre-workout fuel and post-workout protein land relative to today's real session time. The food library moved into the store (migration 0006). Migration 0004 merges old data part by part.
+- **`/plan-my-day`**: the goals profile is now the **combination view over two living libraries** — a **work library** (projects with rich context) and a **goals library** (non-work goals). `current_focus` is GONE — the goals profile *is* the focus. New working-style fields: session length, break length + activities, total work hours/day, focus hours, last-block-end. **New daily flow**: wake time read from today's fitness entry (asked only if missing) → "what have you done since waking?" backfilled gap-free → "how many focused hours from now?" → computed block layout shown around the day's anchors (diet meal times, scheduled fitness session, habit reminders, calendar) → tasks allocated from the goals. The regex cadence signal is gone — **habits are the only cadence source**. Migration 0002 rebuilds the old profile part by part (the old inline JSON migration moved into the migration system).
+- **`/habits`**: two new deterministic scoring types — **`meal_ratio`** (Eat clean: score = share of clean meals, so 1 slip of 3 meals scores worse than 1 of 6; mark with `--good/--bad`) and **`deviation`** (Sleep well: score steps down a ladder per 30 min off your normal bed time + per half-hour of sleep shortfall, midnight crossing handled; mark with `--actual-time/--actual-hours`). **Default habits**: "Eat clean" and "Sleep well" are seeded automatically once committed diet/fitness profiles exist (idempotent; archived defaults stay gone). The profile lives in the versioned store (migration 0005 moves the legacy file).
+- **`/weekly-review`**: Step 4 is now an **Improvements walk** — a per-command improvement list built from the week's evidence, approved/rejected **one item at a time**; each approved profile change mints a **new committed profile version** through the owning command's `profile` subcommand. Reads all core profiles from the versioned stores.
+- **`/loose-ends` / `/discuss`**: read the new goals profile (work + life goals) from the store.
+
+### Removed
+
+- **Declutter** — the `/plan-my-day` declutter question, the `## Declutter` plan section, and the `/end-of-day` tick-off are gone entirely.
+- **`current_focus`** — replaced by the goals profile itself.
+- **`CADENCE_SIGNAL`** — replaced by habit streak/last-done data.
+- Legacy base-config files after migration: `Gym Plan.md`, `fitness/plans/`, `Diet Plan.md`, `Goals Profile.md`, `Habits Profile.md`, `Food Library.md` (all parked in `$VAULT_DIR/.pbrain/backup/`, never deleted), plus `fitness-activities.json` / `diet-profile.json` (left in place, superseded).
+
 ## [0.11.0] — 2026-06-10
 
 ### Added

@@ -18,11 +18,11 @@ A weekly cadence is the missing layer between daily journaling (too noisy) and q
 - Quotes you back to yourself in the synthesis — your language, not the agent's.
 - No productivity-system prescriptions. The user is reviewing their own life, not buying a course.
 
-**Plan enrichment (Step 4):**
+**Improvements (Step 4):**
 
-After the synthesis and the three questions, the review proposes concrete, evidence-tied updates to your core plans — "you skipped legs twice", "protein landed under target 5/7 days", "the focus you set wasn't mentioned in any plan". It proposes nothing when the week gives no clear signal; it won't invent changes.
+After the synthesis and the three questions, the review builds a **per-command improvement list** from the week's evidence — one list each for `/plan-my-day` (goals profile + work/goals libraries), `/diet-journal` (diet profile), `/fitness-journal` (fitness profile, library, activity profiles), and `/habits` (the habit set). Each improvement is one evidence-tied line — "you skipped legs twice", "protein landed under target 5/7 days", "the Lettuce goal wasn't touched in any plan". It proposes nothing when the week gives no clear signal.
 
-All three core plans — `Goals Profile.md`, `Diet Plan.md`, and the fitness plans — are user-owned vault files and are treated the same way: each proposed change is written into a `## Proposed plan changes` section of the review, and the actual plan file is edited **only** if you say yes to that specific change in-session. Propose-in-review is the default; nothing is auto-written. The decisions you make are recorded in that section. (When the goals profile is edited, its fenced JSON block is kept valid.)
+You then walk the list **one item at a time** — approve or reject each, no batch approvals. For every profile with at least one approved improvement, a **new version is minted** through the owning command's `profile` subcommand (`profile new` → the approved edits land in the draft → `profile commit`); the old version stays on disk as history. Libraries (work, goals, food, fitness) are living documents — approved library edits apply in place with no version mint. Everything proposed, decided, and committed (with the new version path) is recorded in the review's `## Improvements` section.
 
 **Overrides:**
 
@@ -32,13 +32,10 @@ All three core plans — `Goals Profile.md`, `Diet Plan.md`, and the fitness pla
 | `PBRAIN_WEEKLY_DIR` | Where the weekly review writes |
 | `PBRAIN_JOURNAL_DIR` | Daily journals (read) |
 | `PBRAIN_GRATITUDE_DIR` | Gratitude entries (read) |
-| `PBRAIN_PLAN_DIR` | Daily plans, including the in-place end-of-day close (read) |
-| `PBRAIN_FITNESS_DIR` | Fitness sessions (read) |
-| `PBRAIN_DIET_DIR` | Diet logs (read) |
-| `PBRAIN_PLAN_PROFILE_FILE` | Goals profile for enrichment (vault-owned; proposed). Default `$VAULT/life/Goals Profile.md` |
-| `PBRAIN_DIET_PLAN_FILE` | Diet plan for enrichment (vault-owned; proposed). Default `$VAULT/fitness/Diet Plan.md` |
-| `PBRAIN_FITNESS_PLANS_DIR` | Per-activity fitness plans for enrichment (vault-owned; proposed). Default `$VAULT/fitness/plans` |
-| `PBRAIN_GYM_PLAN_FILE` | Primary gym plan for enrichment (vault-owned; proposed) |
+| `PBRAIN_PLAN_DIR` | Daily plans + the plan profile store inside it (read) |
+| `PBRAIN_FITNESS_DIR` | Fitness sessions + the fitness profile store (read) |
+| `PBRAIN_DIET_DIR` | Diet logs + the diet profile store (read) |
+| `PBRAIN_PLAN_PROFILE_FILE` | Explicit goals-profile file, bypassing the store |
 
 **Example:**
 

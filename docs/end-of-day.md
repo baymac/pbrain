@@ -1,6 +1,6 @@
 # /end-of-day
 
-Close-of-day reflection — bookend to `/plan-my-day`. Reads today's plan, daily journal, fitness session, and diet log, then walks four questions: what got done, what got dropped, energy curve, what to carry into tomorrow. Writes the answers **into the existing "How it went" section of today's plan file** — no sibling close files.
+Close-of-day **completion pass** — bookend to `/plan-my-day`. Not a reflection journal: it takes what the day's tables and tracker already record, asks only **specific gap-filling questions** (never open-ended "how did it go"), makes sure the day's trackings are complete, then writes a lean **executive summary** into the existing "How it went" section of today's plan file — no sibling close files.
 
 The plan-close loop is where most planning systems get sticky. Opening the day without closing it leaves the plan unverified — you keep planning into a void. Closing reconnects the loop and gives `/weekly-review` something to read.
 
@@ -8,24 +8,27 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 
 **Behaviour:**
 
-- If today's plan file exists → fills the `## How it went` section in place with: what you actually did, wins, what slipped, goal progress (vs `focus_today`), energy curve, tomorrow seed.
+- Leads with a one-line **recap** of what's already known (resolved tasks, logged meals, the fitness session, habit marks, laptop usage), then asks only the gaps — one domain per message: (1) still-open plan tasks/blocks, (2) the fitness session + on-track-to-sleep (today only), (3) unlogged meals, (4) which due habits got done, (5) any unresolved journal open questions. A domain with no gaps is skipped.
+- Fills **both** plan tables in place: `## Task log` (Done at / Status) and `## Today at a glance` (a `✓` prefix on blocks that happened).
+- Writes a lean `## How it went`: **Executive summary** (small wins across work / diet / fitness / relationships + anything logged in your journal & thoughts), **Goal progress** (vs `focus_today`), **Sleep**, and an auto-derived **Carry-forward** (your not-done tasks, which next day's `/plan-my-day` offers back to you). No energy curve, no tomorrow-seed prompt.
+- **Marks all four scored-habit defaults** from the day's data as a backstop — Work the plan, Train, Eat clean, Sleep well — so weekly/monthly scores aren't full of holes (idempotent if a command already marked one).
+- On the last day of the ISO week / month, adds a once pointer to `/weekly-review` / `/monthly-review` (non-blocking).
 - If today's plan file doesn't exist → creates a free-form close at that path instead of anchoring to a plan.
 - If `## How it went` already has user-filled content → asks whether to overwrite, append, or skip before touching it (idempotency guardrail).
 - Propagates the close into today's diet and fitness files automatically:
   - **Diet file:** flips planned meals to `eaten` (or `skipped`) with real items + macros, recomputes the Total/Net rows, rebuilds the Nutrition Analysis table against actuals, strips the stale "Suggested next meal(s)" block and replaces it with a short carry-forward list, updates the Coach note to the day that actually happened.
   - **Fitness file:** flips `status: planned` → `completed` (or `skipped`), preserves the sets the user already logged, appends an `## Other movement today` section for walks / ring closes / extra cardio if mentioned.
   - **Journal file:** untouched (it's the user's raw voice from earlier).
-  - **Declutter:** if the plan has an unchecked `## Declutter` item, asks whether you got to it and ticks the checkbox (`- [ ]` → `- [x]`). Skipped if there's no item or your prefs turned the declutter prompt off.
   - **Habits:** logs any tracked habits you evidenced today and notes standouts (a limit habit over cap, a high-priority build habit that lagged). Silent if you haven't set up `/habits` (nudges once).
   - **Reminders:** once your habits are consolidated, a **two-way sync with sweep** runs (`habits reminders-sync --sweep`) for any habit linked to an Apple Reminder (`/remind`): a reminder you ticked off in the Reminders app marks the habit done here, and a habit you closed today completes its per-day reminder. The `--sweep` pass (end-of-day only) then cancels any still-pending one-shot reminders for habits you didn't complete, so they don't linger as overdue notifications overnight. Surfaced as a one-line summary only if something moved (e.g. "Synced 2 habit reminders, cleared 1 undone."), never asked. No proactive "want to link these?" nag — linking is opt-in, per habit, only when you ask (or at `/habits` add/setup). Reminders only — a Calendar event has no "done" state. Silent when nothing's linked or the Reminders helper isn't built / lacks access.
   - Bookkeeping only — the close never invents new analysis or new prescriptions.
 
 **Tone rules baked into the prompt:**
 
-- Warm but tight — the user already reflected, the agent's job is to record, not pile on.
+- Specific questions only — no open-ended reflection prompts; the agent's job is to record, not pile on.
 - Neutral language only — no "wins" or "losses" in the agent's voice (the user's own framing is preserved verbatim).
 - Quotes the user's own words verbatim into the file — no corporate paraphrase.
-- If the day went sideways (illness, crisis), skips the "what got dropped" question and softens the rest.
+- If the day went sideways (illness, crisis), keeps the remaining questions minimal and the summary soft.
 - One line of closing warmth, not three paragraphs.
 
 **Overrides:**
@@ -34,7 +37,9 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 |---|---|
 | `PBRAIN_VAULT` | Vault root |
 | `PBRAIN_PLAN_DIR` | Where the plan file lives (read + write target) |
-| `PBRAIN_JOURNAL_DIR` | Today's daily journal (cross-reference) |
+| `PBRAIN_JOURNAL_DIR` | Today's daily journal (cross-reference + open-questions + summary feed) |
+| `PBRAIN_GRATITUDE_DIR` | Today's gratitude entry (completeness note) |
+| `PBRAIN_THOUGHTS_DIR` | Today's captured thoughts (summary feed) |
 | `PBRAIN_FITNESS_DIR` | Today's fitness session (cross-reference + bookkeeping update target) |
 | `PBRAIN_DIET_DIR` | Today's diet log (cross-reference + bookkeeping update target) |
 | `PBRAIN_HABITS_PROFILE_FILE` | Habits profile (cross-ref for the habit rollup) |

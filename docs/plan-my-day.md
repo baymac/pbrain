@@ -1,74 +1,70 @@
 # /plan-my-day
 
-Adaptive daily planner that's actually anchored on **your goals**, not a generic to-do list. On first run, interviews you to build a goals profile. Every subsequent run plans the day against that profile, surfacing your current focus areas at the top and tying each work block back to a specific goal.
+Adaptive daily planner that's actually anchored on **your goals**, not a generic to-do list. On first run, interviews you to build a versioned goals profile over two living libraries. Every subsequent run plans the day against that profile, tying each work block back to a specific goal.
+
+## The profile store
+
+All base config lives in the **versioned profile store** under your planning dir:
+
+```
+$VAULT_DIR/life/daily-planning/.profile/
+├── goals-profile.vN.md   # THE lens: work_goals + life_goals + working_style + anchors
+├── work-library.vN.md    # every project you work on, with rich context (living doc)
+└── goals-library.vN.md   # non-work goals: health, creative, relationships (living doc)
+```
+
+The **goals profile is the combination view** over the two libraries — each `work_goals` entry references a work-library project, each `life_goals` entry a goals-library goal. A **committed** version is final; changes mint the next version (`profile new` → edit the draft → `profile commit`). The libraries are living documents — entries are appended and enriched in place.
+
+`working_style` carries the numbers the planner builds with: `session_length_min` (work-session length), `break_min` + `break_activities` (the rotation between blocks), `work_hours_per_day`, `focus_hours` (your important hours of the day), and `last_block_end` (when the final block must end).
 
 ## First-run setup
 
-Acts as a planning coach the first time you run it.
+Asks you about: **work goals** (1–5 concrete outcomes with deadlines + the projects behind them, which seed the work library), **life goals** (health, creative, relationships — the goals library), **working style** (focus hours, total work hours/day, session length, break preference + activities, last block end, energy peak, day-wreckers), **daily anchors** (wake/workout/lunch/dinner/walk/bed), **anti-patterns**, and **personal anchors**.
 
-Asks you about:
+## Migrating from older pbrain
 
-- **Horizon goals** (1–5 things you're trying to build / become / achieve over the next 3–12 months, with rough deadlines + what success looks like)
-- **Current focus** (1–3 goals you're actively pushing this month, with this week's concrete move)
-- **Working style** (when you actually do focused work, realistic focused hours/day, preferred deep-work block length, energy peak, your "day-wreckers")
-- **Anti-patterns** to actively avoid (doomscrolling, late nights, whatever sabotages you)
-- **Personal anchors** (relationships to nurture, creative pursuits you practise, health/movement non-negotiables)
-
-Writes everything to a note in your vault:
-
-```
-$VAULT/life/Goals Profile.md
-```
-
-It's a normal Obsidian note (standard frontmatter + a short intro), with the structured data carried in a fenced ` ```json ` block so the commands that read it (`/plan-my-day`, `/loose-ends`, `/weekly-review`) can parse it. Edit it directly any time, or delete it to redo the interview from scratch. The JSON block's shape:
-
-```json
-{
-  "created": "2026-05-27",
-  "horizon_goals": [
-    { "goal": "Ship pbrain v1", "deadline": "2026-06", "success_looks_like": "..." }
-  ],
-  "current_focus": [
-    { "goal": "Ship pbrain v1", "this_week_move": "publish repo + write blog post" }
-  ],
-  "working_style": {
-    "focus_window": "9am-1pm + 8pm-10pm",
-    "focused_hours_per_day": 4,
-    "deep_work_block_min": 90,
-    "energy_peak": "morning",
-    "day_wreckers": ["sleep<7h", "no exercise"]
-  },
-  "anti_patterns": ["doomscrolling", "late nights"],
-  "personal_anchors": {
-    "relationships": ["mom", "partner", "best friend"],
-    "creative_pursuits": ["music", "writing"],
-    "health_habits": ["daily walk", "gym 4x/week"]
-  },
-  "notes": ""
-}
-```
+If you had the old `Goals Profile.md` (or the ancient `plan-profile.json`), the first run after upgrading rebuilds it **part by part** — each goal confirmed/updated/dropped and classified work vs life, the new working-style questions asked (break preference, total hours, focus hours, last block end), the work library seeded from your old goals + recent plans. The old `current_focus` concept is gone — **the goals profile is the focus**. Old files are parked in `$VAULT_DIR/.pbrain/backup/`. One-time; recorded in the migration ledger.
 
 ## Daily flow
 
 After setup, every run:
 
-1. Reads your profile + today's `/fitness-journal` + today's `/journal` + the last 7 day-plans + a 30-day cadence signal across recent plans + any pending reminders + your habit rollup (week/month vs caps).
-2. Surfaces your current focus areas as the anchor for today (or nudges you to set them if empty).
-3. Runs a short **interview-style check-in** (a back-and-forth, not a wall of questions) — opens with what time you woke up **and what time you went to bed last night** (sleep duration is computed automatically, flagging anything under 7 hours with a coaching note; the plan gets a `sleep_hours:` frontmatter field), then what you've done since (backfilled into the plan as ✓ rows), then adapts: energy, your **top things to do today named in order of complexity/priority** (the Now/Next/Later list — usually 3, but not capped), commitments, available hours, what to avoid, mood for creative, and **anything to declutter** — skipping anything you already mentioned in passing. From that task list it **allocates work blocks by complexity** — the deeper/higher-priority tasks get more blocks, small ones share a block — weaves a **~30-min break between blocks** (rotating through your saved break activities: walk, a couple of games, snack prep), and shows you the split to adjust. The resulting table is gap-free and overlap-free: every span from wake to bed is accounted for.
-4. Sweeps the cadence signal against your `personal_anchors` — only suggests calls/check-ins for contacts you actually listed.
-5. Surfaces what needs attention from reminders + habits (see below), and generates a structured day plan tied back to the chosen goals.
+1. Reads your profile + both libraries + today's `/fitness-journal` (including its recorded **sleep data**) + today's `/journal` + the diet profile's **meal times** + today's **scheduled fitness activity** + the last 7 day-plans + your calendar + your habit rollup.
+2. Surfaces your goals as the anchor for today.
+3. **Wake time** — if today's fitness check-in recorded it, the planner confirms it in passing instead of asking; otherwise it opens with "what time did you wake up?" (short sleep gets flagged; the plan gets a `sleep_hours:` frontmatter field).
+4. **Backfill** — "what have you done since waking until now?" Whatever you say gets slotted into ✓ time ranges by the planner itself — gap-free, no overlaps; you correct, it places.
+5. **Focus hours → block layout** — "how many focused hours from now?" The planner computes and shows the possible blocks (your session length, breaks rotating through your break activities) laid around the day's fixed anchors — calendar events, the fitness session, meal times (workout-shifted), habit reminder times, your focus hours, nothing past `last_block_end` — and asks if you want to add or reduce.
+6. **Allocation** — what goes in the blocks: your work goals first (with context pulled from the work library), life goals next, anything else you name. Deeper tasks get more blocks; small things share one.
+7. Confirm the gap-free **Today at a glance** table, then it writes the plan.
 
-The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors** (fitness + commitments), **Work** (blocks annotated with which goal they serve), **Breaks & movement**, **Eating**, **Relationships** (only if due and named in profile), **Creative** (tied to your craft), **Rest**, **Avoiding today** (union of your answer + profile anti-patterns), **Notes**, **Declutter** (a tidy task to tick off later), and a **How it went** template for end-of-day reflection — including a **Goal progress** row.
+The plan includes: a **Today at a glance** schedule table, a **Task log** table (one row per task — `/end-of-day` fills *Done at* / *Status*), **Anchoring on**, **Anchors**, **Blocks** (annotated with which goal each serves), **Breaks & movement**, **Eating**, **Rest**, **Avoiding today**, **Notes**, and a lean **How it went** template `/end-of-day` fills at close (**Executive summary**, **Goal progress**, **Sleep**, **Carry-forward**). Unfinished tasks land in **Carry-forward**, which the next day's plan offers back to you.
 
-## Declutter, reminders, habits
+## Mid-day task edits
 
-- **Declutter** — the check-in asks if there's a small mess to tidy today (inbox, desk, files, tabs). Whatever you name lands in a **`## Declutter`** checkbox in the plan, and `/end-of-day` asks whether you got to it and ticks it off. The question is **opt-out**: say "stop asking me to declutter" and the self-improve loop saves that preference, after which it's dropped.
-- **Reminders** — anything due today or overdue is surfaced at the top (and has already fired as a macOS notification). Mark one done just by saying so. If a set-time thing comes up while planning ("call X at 3"), the planner offers to set it as a reminder. See [`remind.md`](remind.md).
-- **Habits** — if you've set up [`/habits`](habits.md), the planner notes anything that needs attention (a limit habit over its cap, a high-priority build habit lagging this week) and weaves it into the day. Habits you mention are logged automatically. If you haven't set habits up, it nudges once (non-blocking).
+Once today's plan exists, revise it without rebuilding the day:
 
-**Cadence thresholds:** parents ≥ 6 days → suggest a call, siblings ≥ 14, friends ≥ 7, creative ≥ 4 (if yes/maybe), walk ≥ 2 (if a walk habit is in your profile).
+```bash
+/plan-my-day task add        # "add a task to ship the diet refactor"
+/plan-my-day task remove     # "drop the email cleanup"
+/plan-my-day task list        # show today's task-log rows
+```
 
-**Monday weekly-review nudge:** on Mondays only, the planner measures how many calendar days have elapsed since your last `/weekly-review` (parsed from the review's covered-through date; if you've never run one, it counts from your oldest day-plan). Once that span hits **7+ days**, it suggests running `/weekly-review` first (once, non-blocking — you can plan now and review later). The span is calendar-based, so days you skipped `/plan-my-day` still count toward the 7 — a sparse planning week won't under-count. If you reviewed within the last week (e.g. the prior Sunday), it stays quiet, and it keeps nudging each Monday until you actually run a review.
+`task add` appends a row to the **Task log** (resolving its tie to a current weekly goal, offering to add it at the right tier if nothing matches, taking priority + difficulty) and **re-flows "Today at a glance"** — it slots a new work block into the next free gap around the fixed anchors (calendar, meals, fitness, habit 🔔), never past your `last_block_end`, flagging if it doesn't fit. `task remove` drops a row and frees its block (confirming first if the row is already closed, so end-of-day's rollup isn't lost). Both tables are always rewritten together so the schedule and the task log never drift. Running any of these before today is planned is a clear no-op pointing you at `/plan-my-day`.
+
+## Reminders, habits, cadence
+
+- **Reminders** — if a set-time thing comes up while planning ("call X at 3"), the planner offers to set it as an Apple Reminder. Habits placed at a specific time get their one-shot reminders silently rescheduled to match. See [`remind.md`](remind.md).
+- **Habits** — if you've set up [`/habits`](habits.md), the planner notes anything that needs attention (a limit habit over cap, a high-priority build habit lagging) and weaves it into the day. **Habits are the only cadence source now**: recurring touchpoints you want surfaced (call mom, creative session, daily walk) should be tracked as habits — the planner reads their streaks/last-done from the rollup instead of grepping old plans.
+- **Monday weekly-review nudge** — on Mondays, once 7+ calendar days have passed since your last `/weekly-review`, it suggests running one first (once, non-blocking).
+
+## Managing profiles
+
+```bash
+/plan-my-day profile show                 # human-readable summary of all three
+/plan-my-day profile new                  # mint a new goals-profile draft
+/plan-my-day profile new work-library     # structural rebuild of a library (rare)
+/plan-my-day profile commit [base]        # finalize the open draft
+```
 
 ## Defaults and overrides
 
@@ -77,22 +73,12 @@ The plan includes: **Anchoring on** (current focus + this-week moves), **Anchors
 | Env var | Effect |
 |---|---|
 | `PBRAIN_VAULT` | Vault root |
-| `PBRAIN_PLAN_DIR` | Where today's plan is written |
-| `PBRAIN_PLAN_PROFILE_FILE` | Goals profile note (default: `$VAULT/life/Goals Profile.md`; JSON in a fenced block) |
-| `PBRAIN_HABITS_PROFILE_FILE` | Habits profile note (default: `$VAULT/life/Habits Profile.md`; cross-ref for the habit rollup) |
-| `PBRAIN_DB_FILE` | Shared SQLite store for reminders + habit events (default: `~/.config/pbrain/pbrain.db`) |
-| `PBRAIN_FITNESS_DIR` | Where the script reads today's fitness entry from (cross-ref) |
-| `PBRAIN_JOURNAL_DIR` | Where the script reads today's daily journal from (cross-ref) |
-| `PBRAIN_WEEKLY_DIR` | Where the script checks for last week's review (Monday nudge, cross-ref) |
-
-**Example:**
-
-```bash
-/plan-my-day
-```
+| `PBRAIN_PLAN_DIR` | Where today's plan is written; the `.profile` store lives inside it |
+| `PBRAIN_PLAN_PROFILE_FILE` | Explicit goals-profile file, bypassing the store |
+| `PBRAIN_FITNESS_DIR` | Today's fitness entry + the fitness store (sleep data, scheduled session) |
+| `PBRAIN_DIET_DIR` | The diet store (meal times) |
+| `PBRAIN_JOURNAL_DIR` | Today's daily journal (cross-ref) |
+| `PBRAIN_WEEKLY_DIR` | Last week's review (Monday nudge, cross-ref) |
+| `PBRAIN_HABITS_PROFILE_FILE` / `PBRAIN_DB_FILE` | Habits profile / shared SQLite store (cross-ref) |
 
 If today's plan already exists, it's shown and you're asked if you want to update the "How it went" section or revise blocks.
-
-**Re-running setup:** delete `$VAULT/life/Goals Profile.md` to redo the goals interview. Or edit the JSON block directly when goals shift.
-
-**Migrating from an older install:** if you previously had `~/.config/pbrain/plan-profile.json`, the next `/plan-my-day` converts it into `Goals Profile.md` automatically — no re-interview.

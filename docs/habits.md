@@ -2,7 +2,7 @@
 
 Track your habits over time — each with its **own** fulfillment criteria. There's no cap on how many you track. First run defines the set (one question at a time); every run after shows where you stand against each habit's criteria.
 
-**Two layers.** Definitions live in `Habits Profile.md` (the *what*). The day-to-day log lives in **dated markdown files** — `life/habit-tracking/<date>.md` — exactly like `/journal` and `/fitness-journal`. Those files are what you work with. A local SQLite DB is a *derived* analysis store, synced from the markdown, that the history/rollup/weekly-review reads. You edit markdown; the DB stays in sync underneath.
+**Two layers.** Definitions live in the versioned habits profile (the *what*) — `life/habit-tracking/.profile/habits-profile.vN.md`. The day-to-day log lives in **dated markdown files** — `life/habit-tracking/<date>.md` — exactly like `/journal` and `/fitness-journal`. Those files are what you work with. A local SQLite DB is a *derived* analysis store, synced from the markdown, that the history/rollup/weekly-review reads. You edit markdown; the DB stays in sync underneath.
 
 ## Two axes: schedule + scoring
 
@@ -53,7 +53,7 @@ A setup interview the first time you run it — **one question at a time**. It o
 Written to a normal Obsidian note:
 
 ```
-$VAULT/life/Habits Profile.md
+$VAULT/life/habit-tracking/.profile/habits-profile.vN.md
 ```
 
 The structured data lives in a fenced ` ```json ` block. Each habit has a **stable `id`** (a slug) — minted once and never changed. Renaming a habit touches only its display name; its history (kept in SQLite, keyed by `id`) stays attached. Removing a habit **soft-archives** it, so history is preserved. Shape:
@@ -164,7 +164,7 @@ Script-level API (used by the auto-marking, surfacing, and the dashboard's offer
 | Env var | Effect | Default |
 |---|---|---|
 | `PBRAIN_VAULT` | Vault root | iCloud Obsidian path |
-| `PBRAIN_HABITS_PROFILE_FILE` | Habits profile markdown path | `$VAULT/life/Habits Profile.md` |
+| `PBRAIN_HABITS_PROFILE_FILE` | Explicit profile file (bypasses the versioned store) | `$VAULT/life/habit-tracking/.profile/habits-profile.vN.md` |
 | `PBRAIN_HABIT_TRACK_DIR` | Dated tracking-file directory | `$VAULT/life/habit-tracking` |
 | `PBRAIN_DB_FILE` | SQLite analysis DB (shared with `/remind`) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_HABIT_SUGGEST_FILE` | New-habit suggestion suppress-list | `~/.config/pbrain/habit-suggest-seen` |
@@ -173,3 +173,22 @@ Script-level API (used by the auto-marking, surfacing, and the dashboard's offer
 **Re-running setup:** add/edit/archive via the dashboard's offers, or delete `Habits Profile.md` to redo the interview.
 
 **Migration:** older event logs (keyed by habit name) are migrated to stable-id keys automatically on first run — one-time, guarded, idempotent.
+
+## Versioned profile + scored defaults
+
+The habits profile lives in the **versioned profile store** (`life/habit-tracking/.profile/habits-profile.vN.md`; the legacy `life/Habits Profile.md` is moved there automatically by migration 0005). Day-to-day `add` / `edit` / `archive` amend the latest version in place — the profile is a living document. Structural redesigns go through versions:
+
+```bash
+/habits profile show      # human-readable summary + which version is active
+/habits profile new       # mint an editable draft copied from the current version
+/habits profile commit    # freeze the draft — commands read the latest committed
+```
+
+**Default scored habits.** As soon as the profile they key off is committed, four scored habits seed themselves — each a 0–100 score you never pick by hand (the model only classifies your raw inputs; the lib computes the number):
+
+- **Eat clean** (`meal_ratio`, seeded once a **diet profile** exists): score = share of clean meals — `mark --name "Eat clean" --good <clean> --bad <unclean>`. The score depends on how many meals the day had: 1 slip out of 3 meals scores worse than 1 out of 6. The diet journal's extraction block classifies the meals.
+- **Sleep well** (`deviation`, seeded once a **fitness profile** exists, normal window baked from it): score from deviation vs your normal bed time + sleep hours — `mark --name "Sleep well" --actual-time HH:MM --actual-hours N.N`. Every 30 min off your normal bed time and every half-hour of sleep shortfall steps the score down the ladder (100 → 90 → 75 → 50 → 25 → 0). The midnight crossing is handled (00:30 vs a 23:00 normal counts as 90 minutes, not 21.5 hours). The fitness check-in's bed/wake answers feed this automatically.
+- **Work the plan** (`weighted_completion`, daily, target 70 — seeded once a **goals profile** exists): scores the day's task log like gym volume. Each task's weight = its difficulty (easy 1 / normal 2 / hard 3 / nightmare 5) boosted by its priority (p1 ×1.5, p2 ×1.25, p3+ ×1.0); credit = its status (done 1.0 / partial 0.5 / dropped, carried 0). `score = 100 · earned / possible`. **Every planned task is in the denominator**, so piling on tasks you don't finish lowers the score, and finishing a hard high-priority task is worth far more than a clutch of easy ones. Auto-marked at `/end-of-day` once the task-log actuals are filled — `mark --name "Work the plan" --items '[{"priority":1,"difficulty":"hard","status":"done"},…]'`.
+- **Train** (`session_volume`, target 80 — seeded once a **fitness library** exists): scheduled on the union of your activities' fixed days, so rest days are "off", never missed. A skipped session scores 0; a strength/duration session scores `100 · clamp(actual/planned, 0, 1)` (strength = Σreps vs target sets×reps; duration = actual vs target minutes — capped at 100, so hitting plan = 100, a reduced deload target still hits 100); a binary session (yoga/sport, no target) scores by status (completed 100 / partial 50). Auto-marked at `/fitness-journal` when you log a session, or at `/end-of-day` when the day closes — `mark --name "Train" --session '{"mode":"strength","status":"completed","planned":120,"actual":115}'`.
+
+Seeding is idempotent and archiving a default keeps it gone — it is never re-added.
