@@ -28,6 +28,15 @@ EOF
 exit 0
 EOF
   chmod +x "$TMP/bin/swiftc"
+  # Default pgrep stub: report NO overlay running, so the fire-path tests are
+  # immune to a REAL pbrain-overlay being up on the host (the user's actual
+  # break reminder would otherwise make the tick defer and flake these tests).
+  # The overlay-busy test overwrites this stub with one that reports busy.
+  cat > "$TMP/bin/pgrep" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+  chmod +x "$TMP/bin/pgrep"
   export PATH="$TMP/bin:$PATH"
   # Default the screen to UNLOCKED so the tick fires (override per-test).
   export PBRAIN_SCREEN_LOCKED=0
@@ -243,7 +252,7 @@ EOF
   pbrain_reminders_tick
   [ ! -f "$LOG" ]
   run _col 1 fired_at; [ "$output" = "NULL" ]
-  rm -f "$TMP/bin/pgrep"
+  printf '#!/bin/sh\nexit 1\n' > "$TMP/bin/pgrep"; chmod +x "$TMP/bin/pgrep"
   pbrain_reminders_tick
   [ "$(cat "$LOG")" = "Break" ]
 }

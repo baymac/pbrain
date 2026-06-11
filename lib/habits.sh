@@ -20,14 +20,41 @@
 #   pbrain_habits_rollup [today]      text rollup: week/month counts vs caps per habit
 #   pbrain_emit_habits_extract <cmd>  ride-along: tell Claude to log evidenced habits (silent if no profile)
 #
-# Resolution:
-#   PBRAIN_HABITS_PROFILE_FILE  override (default $VAULT_DIR/life/Habits Profile.md)
+# Resolution (in order):
+#   1. PBRAIN_HABITS_PROFILE_FILE  explicit file override (no versioning)
+#   2. versioned store — highest COMMITTED habits-profile.v<N>.md under
+#      <habit-track-dir>/.profile (lib/profiles.sh; migration 0005 moves the
+#      legacy file here automatically)
+#   3. legacy $VAULT_DIR/life/Habits Profile.md if it still exists
+#   4. otherwise the store v1 path (not existing yet → triggers first-run setup;
+#      the bootstrap writes it with version: 1, committed: true)
 #
 # Never exits non-zero. Assumes lib/vault.sh has set VAULT_DIR and sourced
-# profile.sh + db.sh first.
+# profile.sh + profiles.sh + db.sh first.
+
+pbrain_habits_store() {
+  printf '%s\n' "${PBRAIN_HABIT_TRACK_DIR:-${VAULT_DIR:-$HOME}/life/habit-tracking}/.profile"
+}
 
 pbrain_habits_profile_file() {
-  printf '%s\n' "${PBRAIN_HABITS_PROFILE_FILE:-${VAULT_DIR:-$HOME}/life/Habits Profile.md}"
+  if [[ -n "${PBRAIN_HABITS_PROFILE_FILE:-}" ]]; then
+    printf '%s\n' "$PBRAIN_HABITS_PROFILE_FILE"
+    return 0
+  fi
+  local store f
+  store="$(pbrain_habits_store)"
+  if declare -f pbrain_profile_latest >/dev/null 2>&1; then
+    f="$(pbrain_profile_latest "$store" "habits-profile")"
+    if [[ -n "$f" ]]; then
+      printf '%s\n' "$f"
+      return 0
+    fi
+  fi
+  if [[ -f "${VAULT_DIR:-$HOME}/life/Habits Profile.md" ]]; then
+    printf '%s\n' "${VAULT_DIR:-$HOME}/life/Habits Profile.md"
+    return 0
+  fi
+  printf '%s\n' "$store/habits-profile.v1.md"
 }
 
 pbrain_habits_json() {
@@ -536,20 +563,132 @@ def _to_int(s):
     except (TypeError, ValueError):
         return None
 
-def score_from_spec(spec, good=None, bad=None, slips=None):
-    """Generic, deterministic habit-score evaluator. The habit's profile owns the
-    rule (spec); the caller supplies only raw classification counts. Returns a
-    float score, or None when the spec is unusable / no inputs were given.
+def _parse_hhmm(s):
+    """HH:MM -> minutes since midnight; None when unparsable."""
+    try:
+        parts = str(s).strip().split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except (TypeError, ValueError, IndexError):
+        return None
 
-    Supported spec type "slip_ladder":
+def _to_float(s):
+    try:
+        s = str(s).strip()
+        return float(s) if s != "" else None
+    except (TypeError, ValueError):
+        return None
+
+def score_from_spec(spec, good=None, bad=None, slips=None,
+                    actual_time=None, actual_hours=None,
+                    items=None, session=None):
+    """Generic, deterministic habit-score evaluator. The habit's profile owns
+    the rule (spec); the caller supplies only raw inputs. Returns a float
+    score, or None when the spec is unusable / no inputs were given (callers
+    fall back to their normal path on None).
+
+    Spec types:
+
+    "slip_ladder" (the original):
       slips = given --slips, else max(bad, good_target - good)  (clamped >= 0)
       score = ladder[min(slips, len(ladder)-1)]
-    'good_target' is optional (0 = no good-count requirement -> pure bad ladder).
-    Nothing here is habit-specific: what counts as a good/bad unit is the
-    caller's (model's) classification, not the code's."""
+      'good_target' is optional (0 = no good-count requirement -> pure bad ladder).
+
+    "meal_ratio" (eat-clean): inputs good = clean MEALS, bad = unclean MEALS.
+      score = round(100 * good / (good + bad)). The score depends on the
+      NUMBER of meals — one slip out of 3 meals scores worse than one of 6.
+
+    "deviation" (sleep-well): spec carries normal_time "HH:MM", normal_hours,
+      unit_minutes (default 30), unit_hours (default 0.5), ladder. Inputs
+      actual_time "HH:MM" + actual_hours.
+      slips = round(circular_minutes(actual_time, normal_time) / unit_minutes)
+            + round(max(0, normal_hours - actual_hours) / unit_hours)
+      score = ladder[min(slips, len(ladder)-1)]. The bed-time diff is circular
+      (00:30 vs 23:00 = 90 min, not 1350), so just-past-midnight stays sane.
+
+    Nothing here is habit-specific: what counts as a good/bad unit (or which
+    session supplied the times) is the caller's classification, not the code's."""
     if not isinstance(spec, dict):
         return None
-    if str(spec.get("type", "slip_ladder")).strip() != "slip_ladder":
+    stype = str(spec.get("type", "slip_ladder")).strip()
+
+    if stype == "meal_ratio":
+        if good is None and bad is None:
+            return None
+        g = max(0, good or 0)
+        b = max(0, bad or 0)
+        total = g + b
+        if total <= 0:
+            return None
+        # int(x + 0.5): predictable half-up (python round() is banker's rounding).
+        return float(int(100.0 * g / total + 0.5))
+
+    if stype == "deviation":
+        ladder = spec.get("ladder")
+        if not isinstance(ladder, list) or not ladder:
+            return None
+        nt = _parse_hhmm(spec.get("normal_time"))
+        nh = _to_float(spec.get("normal_hours"))
+        at = _parse_hhmm(actual_time)
+        ah = _to_float(actual_hours)
+        if at is None and ah is None:
+            return None  # no inputs -> caller falls back to its normal path
+        unit_min = _to_float(spec.get("unit_minutes")) or 30.0
+        unit_hrs = _to_float(spec.get("unit_hours")) or 0.5
+        # int(x + 0.5): predictable half-up (python round() is banker's — round(2.5)=2).
+        n = 0
+        if at is not None and nt is not None:
+            d = abs(at - nt)
+            d = min(d, 1440 - d)
+            n += int(d / unit_min + 0.5)
+        if ah is not None and nh is not None:
+            n += int(max(0.0, nh - ah) / unit_hrs + 0.5)
+        idx = min(max(0, n), len(ladder) - 1)
+        try:
+            return float(ladder[idx])
+        except (TypeError, ValueError):
+            return None
+
+    if stype == "weighted_completion":
+        if not isinstance(items, list) or not items:
+            return None
+        dw = spec.get("difficulty_weights", {"easy": 1, "normal": 2, "hard": 3, "nightmare": 5})
+        sc_map = spec.get("status_credit", {"done": 1.0, "partial": 0.5, "dropped": 0.0, "carried": 0.0})
+        pivot = float(spec.get("priority_pivot", 3))
+        step = float(spec.get("priority_step", 0.25))
+        possible = 0.0
+        earned = 0.0
+        for t in items:
+            if not isinstance(t, dict):
+                continue
+            diff = str(t.get("difficulty", "normal")).strip()
+            status = str(t.get("status", "dropped")).strip().lower()
+            pri = _to_int(t.get("priority")) or 3
+            w = float(dw.get(diff, 2))
+            w *= 1.0 + max(0.0, pivot - pri) * step
+            possible += w
+            earned += w * float(sc_map.get(status, 0.0))
+        if possible <= 0.0:
+            return None
+        return float(int(100.0 * earned / possible + 0.5))
+
+    if stype == "session_volume":
+        if not isinstance(session, dict):
+            return None
+        status = str(session.get("status", "skipped")).strip().lower()
+        sc_map = spec.get("status_credit", {"completed": 1.0, "partial": 0.5, "skipped": 0.0})
+        mode = str(session.get("mode", "binary")).strip().lower()
+        planned = _to_float(session.get("planned"))
+        actual_vol = _to_float(session.get("actual"))
+        volume_cap = float(spec.get("volume_cap", 1.0))
+        if status == "skipped":
+            return 0.0
+        if mode in ("strength", "duration") and planned is not None and planned > 0.0 and actual_vol is not None:
+            ratio = min(max(0.0, actual_vol / planned), volume_cap)
+            return float(int(100.0 * ratio + 0.5))
+        credit = float(sc_map.get(status, 0.0))
+        return float(int(100.0 * credit + 0.5))
+
+    if stype != "slip_ladder":
         return None
     ladder = spec.get("ladder")
     if not isinstance(ladder, list) or not ladder:
@@ -753,6 +892,10 @@ elif op == "mark":
     good  = sys.argv[11] if len(sys.argv) > 11 else ""
     bad   = sys.argv[12] if len(sys.argv) > 12 else ""
     slips = sys.argv[13] if len(sys.argv) > 13 else ""
+    a_time  = sys.argv[14] if len(sys.argv) > 14 else ""   # deviation: actual HH:MM
+    a_hours = sys.argv[15] if len(sys.argv) > 15 else ""   # deviation: actual hours
+    items_json   = sys.argv[16] if len(sys.argv) > 16 else ""  # weighted_completion
+    session_json = sys.argv[17] if len(sys.argv) > 17 else ""  # session_volume
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -760,11 +903,28 @@ elif op == "mark":
     if not h:
         print(f"not a tracked habit: {name.strip()} — add it with /habits (not marked)")
         sys.exit(0)
-    # Scored habit: when the caller supplied classification counts, the score is
+    # Scored habit: when the caller supplied classification inputs, the score is
     # computed from the habit's profile rule — the caller never picks the number.
     g, b, sl = _to_int(good), _to_int(bad), _to_int(slips)
-    if h.get("scoring") and (g is not None or b is not None or sl is not None):
-        val = score_from_spec(h["scoring"], good=g, bad=b, slips=sl)
+    items_parsed = None
+    session_parsed = None
+    if items_json.strip():
+        try:
+            items_parsed = json.loads(items_json)
+        except Exception:
+            pass
+    if session_json.strip():
+        try:
+            session_parsed = json.loads(session_json)
+        except Exception:
+            pass
+    if h.get("scoring") and (g is not None or b is not None or sl is not None
+                             or a_time.strip() or a_hours.strip()
+                             or items_parsed is not None or session_parsed is not None):
+        val = score_from_spec(h["scoring"], good=g, bad=b, slips=sl,
+                              actual_time=a_time.strip() or None,
+                              actual_hours=a_hours.strip() or None,
+                              items=items_parsed, session=session_parsed)
         if val is not None:
             amount = fmtnum(val)  # feed the measured-amount path below
     con = sqlite3.connect(db) if os.path.exists(db) else None
@@ -816,18 +976,37 @@ elif op == "mark":
 
 elif op == "score":
     # Pure deterministic evaluator — compute a habit's score from its profile
-    # rule + caller-supplied classification counts. No DB / md write. Prints the
-    # numeric score (blank if the habit has no usable scoring spec).
+    # rule + caller-supplied inputs. No DB / md write. Prints the numeric
+    # score (blank if the habit has no usable scoring spec).
     profile, name = sys.argv[2:4]
     good  = sys.argv[4] if len(sys.argv) > 4 else ""
     bad   = sys.argv[5] if len(sys.argv) > 5 else ""
     slips = sys.argv[6] if len(sys.argv) > 6 else ""
+    a_time  = sys.argv[7] if len(sys.argv) > 7 else ""
+    a_hours = sys.argv[8] if len(sys.argv) > 8 else ""
+    items_json   = sys.argv[9]  if len(sys.argv) > 9  else ""
+    session_json = sys.argv[10] if len(sys.argv) > 10 else ""
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
     h = active.get(name.strip().lower()) or byid.get(name.strip().lower())
+    items_parsed = None
+    session_parsed = None
+    if items_json.strip():
+        try:
+            items_parsed = json.loads(items_json)
+        except Exception:
+            pass
+    if session_json.strip():
+        try:
+            session_parsed = json.loads(session_json)
+        except Exception:
+            pass
     val = score_from_spec(h.get("scoring"), good=_to_int(good), bad=_to_int(bad),
-                          slips=_to_int(slips)) if h else None
+                          slips=_to_int(slips),
+                          actual_time=a_time.strip() or None,
+                          actual_hours=a_hours.strip() or None,
+                          items=items_parsed, session=session_parsed) if h else None
     print(fmtnum(val) if val is not None else "")
 
 elif op == "sync":
@@ -905,8 +1084,10 @@ pbrain_habit_track_init() {
 
 # Mark a habit done in the date's tracking file (creating it if needed). Rejects
 # names that aren't a tracked habit. count/note/amount optional. For a measured
-# habit (one with a unit + target) the amount is what's recorded.
-pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips]
+# habit (one with a unit + target) the amount is what's recorded. Scored habits
+# take classification inputs instead: good/bad/slips (slip_ladder, meal_ratio)
+# or actual_time/actual_hours (deviation) — the score lands in amount.
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json]
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
@@ -914,15 +1095,15 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [sli
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
     "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')" \
-    "${6:-}" "${7:-}" "${8:-}"
+    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}"
 }
 
 # Compute (without writing) a scored habit's score from its profile rule + raw
-# classification counts. Echoes the numeric score, or "" if not a scored habit.
-pbrain_habit_score() {  # <name> [good] [bad] [slips]
+# inputs. Echoes the numeric score, or "" if not a scored habit.
+pbrain_habit_score() {  # <name> [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json]
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   _pbrain_habit_track_py score "$(pbrain_habits_profile_file)" \
-    "${1:-}" "${2:-}" "${3:-}" "${4:-}"
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by
@@ -1135,11 +1316,34 @@ print("\n".join(out))
   printf '%s\n' ""
   printf '%s\n' "For a habit tagged [scored] above, DO NOT choose the amount/score yourself —"
   printf '%s\n' "the number is computed deterministically from the habit's rule in your"
-  printf '%s\n' "profile. Your ONLY job is to classify and pass the raw counts:"
+  printf '%s\n' "profile. Your ONLY job is to classify and pass the raw inputs:"
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today --good <N> --bad <N> [--note \"...\"]"
   printf '%s\n' "where --good = qualifying units (e.g. clean home-cooked meals) and --bad ="
   printf '%s\n' "slip units (e.g. outside/junk meals). habits.sh applies the profile formula."
   printf '%s\n' "(If you've already reduced it to one slip count, pass --slips <N> instead.)"
+  printf '%s\n' "Meal-ratio scored habits (e.g. Eat clean): count clean vs unclean MEALS from"
+  printf '%s\n' "today's diet log/table — every eating occasion counts — and pass them as"
+  printf '%s\n' "--good/--bad; the score scales with how many meals the day actually had."
+  printf '%s\n' "Deviation-scored habits (e.g. Sleep well): derive the ACTUAL bed time and"
+  printf '%s\n' "sleep hours from the session (the fitness check-in answers, or the"
+  printf '%s\n' "plan-my-day wake/bed exchange) and mark with:"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today --actual-time HH:MM --actual-hours <N.N>"
+  printf '%s\n' "(--actual-time = when they got to bed; the score is computed from the"
+  printf '%s\n' "deviation vs their normal sleep window in the habit's rule.)"
+  printf '%s\n' "Weighted-completion scored habits (e.g. Work the plan): at /end-of-day, collect"
+  printf '%s\n' "every row in the ## Task log table (priority integer, difficulty string,"
+  printf '%s\n' "status string) and pass them as a JSON array:"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today \\"
+  printf '%s\n' "    --items '[{\"priority\":1,\"difficulty\":\"hard\",\"status\":\"done\"}, ...]'"
+  printf '%s\n' "Status values: done | partial | dropped | carried. Never guess the score."
+  printf '%s\n' "Session-volume scored habits (e.g. Train): after a fitness session is logged,"
+  printf '%s\n' "derive mode (strength|duration|binary), status (completed|partial|skipped),"
+  printf '%s\n' "planned volume (target sets x reps for strength; target minutes for duration),"
+  printf '%s\n' "and actual volume from the session log table, then mark with:"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today \\"
+  printf '%s\n' "    --session '{\"mode\":\"strength\",\"status\":\"completed\",\"planned\":120,\"actual\":115}'"
+  printf '%s\n' "For binary sessions (yoga, sport): omit planned/actual, set mode=binary;"
+  printf '%s\n' "score is status_credit x 100 (completed=100, partial=50, skipped=0)."
   if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
     printf '%s\n' "Classification rules per scored habit — use EXACTLY these definitions to count"
     printf '%s\n' "good/bad units; every eating occasion counts (snacks included), not just mains:"

@@ -18,6 +18,10 @@
 
 _pbrain_update_check() {
   [[ "${PBRAIN_UPDATE_CHECK:-1}" == "0" ]] && return 0
+  # Dev installs (PBRAIN_DEV_DIR points at a live clone) update via git, and
+  # their local version may legitimately sit behind/aside the marketplace line
+  # — never nag them toward the remote.
+  [[ -n "${PBRAIN_DEV_DIR:-}" ]] && return 0
 
   local lib_dir state_dir cache plugin_json local_ver remote_url
   local cached remote_json remote_ver higher now mtime ttl

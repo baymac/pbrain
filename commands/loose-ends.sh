@@ -39,7 +39,12 @@ JOURNAL_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 BRAINSTORMS_DIR="${PBRAIN_BRAINSTORMS_DIR:-$VAULT_DIR/agent-work/brainstorms}"
 TBD_DIR="$BRAINSTORMS_DIR/tbd"
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
-PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
+# Goals profile: explicit override file, else latest committed in the plan
+# store (legacy life/Goals Profile.md as a last resort for pre-migration vaults).
+PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-}"
+if [[ -n "$PROFILE_FILE" && ! -f "$PROFILE_FILE" ]]; then PROFILE_FILE=""; fi
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$(pbrain_profile_store "$PLAN_DIR")" goals-profile)"
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$VAULT_DIR/life/Goals Profile.md"
 
 STALE_DAYS="${PBRAIN_STALE_DAYS:-7}"
 LOOKBACK="${PBRAIN_LOOSE_ENDS_LOOKBACK:-30}"
@@ -231,8 +236,10 @@ emit("OPEN TODOS (unchecked boxes in recent plans, oldest first)",
      [l for _, l in todos])
 
 # ---------------------------------------------------------------------------
-# 4. Recurring tomorrow-seeds — '### Tomorrow seed' bullets repeating across
-#    recent plans (= something that keeps getting deferred).
+# 4. Recurring carry-forward — '### Carry-forward' bullets repeating across
+#    recent plans (= something that keeps getting deferred). /end-of-day writes
+#    this section from not-done tasks; older plans used '### Tomorrow seed', so
+#    read both for back-compatibility.
 # ---------------------------------------------------------------------------
 seed_dates = {}   # normalized seed -> set of dates
 seed_label = {}   # normalized seed -> original text
@@ -241,28 +248,33 @@ for f in plan_files:
     d = file_date(f, text)
     if d is None or d < cutoff:
         continue
-    for ln in section_lines(text, "### Tomorrow seed"):
+    seed_src = section_lines(text, "### Carry-forward") + section_lines(text, "### Tomorrow seed")
+    for ln in seed_src:
         sm = re.match(r'^-\s+(.*)$', ln)
         if sm:
             raw = sm.group(1).strip()
             if not raw or raw == "—":
                 continue
-            norm = re.sub(r'[^a-z0-9 ]', '', raw.lower()).strip()
+            # Drop trailing carry-forward annotations like "(carried from
+            # 2026-06-10)" / "(was not started)" so the same deferred task
+            # matches across days (the date/status varies, the task doesn't).
+            base = re.sub(r'\s*\([^)]*\)\s*$', '', raw).strip() or raw
+            norm = re.sub(r'[^a-z0-9 ]', '', base.lower()).strip()
             norm = re.sub(r'\s+', ' ', norm)
             if not norm:
                 continue
             seed_dates.setdefault(norm, set()).add(d.isoformat())
-            seed_label.setdefault(norm, raw)
+            seed_label.setdefault(norm, base)
 
 recurring = sorted(
     ((len(ds), seed_label[k], sorted(ds)) for k, ds in seed_dates.items() if len(ds) >= 2),
     reverse=True,
 )
-emit("RECURRING TOMORROW-SEEDS (deferred >= 2 days)",
+emit("RECURRING CARRY-FORWARD (deferred >= 2 days)",
      [f'- "{label}" — appeared {n}x ({", ".join(ds)})' for n, label, ds in recurring])
 
 # ---------------------------------------------------------------------------
-# 5. Focus drift — current_focus goals not mentioned in last stale_days plans.
+# 5. Focus drift — profile goals not mentioned in last stale_days plans.
 # ---------------------------------------------------------------------------
 STOP = set("the a an and or to of for in on at by with from is are was were be been "
            "this that these those will would should could can may might must i you we "
@@ -278,7 +290,10 @@ goals = []
 if ptext:
     try:
         pdata = json.loads(ptext)
-        goals = [g.get("goal", "") for g in pdata.get("current_focus", []) if g.get("goal")]
+        # The goals profile IS the focus: work_goals first, then life_goals.
+        # (Legacy pre-migration profiles fall back to horizon_goals.)
+        for key in ("work_goals", "life_goals", "horizon_goals"):
+            goals.extend(g.get("goal", "") for g in pdata.get(key, []) if g.get("goal"))
     except Exception:
         focus_lines.append("(goals profile present but its JSON block is unreadable — skipping focus drift)")
 
@@ -304,9 +319,9 @@ if goals:
         if last_seen is None:
             focus_lines.append(f'- "{goal}" — not mentioned in plans for the last {stale_days}d')
 elif not focus_lines:
-    focus_lines.append("(no current_focus goals in profile — nothing to check)")
+    focus_lines.append("(no goals in the goals profile — nothing to check)")
 
-emit(f"FOCUS DRIFT (current_focus goals quiet >= {stale_days}d)", focus_lines)
+emit(f"FOCUS DRIFT (profile goals quiet >= {stale_days}d)", focus_lines)
 PYEOF
 
 echo "--- END LOOSE_ENDS_SCAN ---"

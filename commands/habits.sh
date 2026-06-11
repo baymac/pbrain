@@ -37,10 +37,15 @@ set -euo pipefail
 #   habits.sh list                   list configured habits
 #   habits.sh track [--date YYYY-MM-DD]  init today's tracking md from profile
 #   habits.sh mark --name "X" [--date YYYY-MM-DD] [--count N] [--amount N] [--note "..."]
-#                  [--good N] [--bad N] [--slips N]   (scored habits: pass raw counts,
-#                  the score is computed from the habit's profile rule — see `score`)
-#   habits.sh score --name "X" (--good N --bad N | --slips N)   compute (no write) a
-#                  scored habit's score from its profile rule + classification counts
+#                  [--good N] [--bad N] [--slips N]              (slip_ladder / meal_ratio)
+#                  [--actual-time HH:MM] [--actual-hours N.N]    (deviation: sleep-well)
+#                  (scored habits: pass raw inputs, the score is computed from the
+#                  habit's profile rule — see `score`)
+#   habits.sh score --name "X" (--good N --bad N | --slips N | --actual-time HH:MM --actual-hours N)
+#                  compute (no write) a scored habit's score from its profile rule
+#   habits.sh profile show|new|commit    manage the VERSIONED habits profile
+#                  (lib/profiles.sh store; add/edit/archive stay living-document
+#                  ops on the latest version — `new` is for structural redesigns)
 #   habits.sh sync [--days N] [--date YYYY-MM-DD]  mirror md → DB (default 7 days)
 #   habits.sh consolidate [--date YYYY-MM-DD]  sync md → DB then prune unchecked rows
 #   habits.sh refresh [--date YYYY-MM-DD] [--days N]  recompute Progress column from DB
@@ -69,11 +74,20 @@ set -euo pipefail
 # habit, offered at first-run setup and on add (or when the user asks).
 # Reminders only — Calendar has no done-state.
 #
-# Default profile:  $VAULT_DIR/life/Habits Profile.md
+# Default profile:  versioned store at $VAULT_DIR/life/habit-tracking/.profile/
+#                   habits-profile.vN.md (migration 0005 moves the legacy
+#                   life/Habits Profile.md here automatically)
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
+#
+# DEFAULT SCORED HABITS: once a committed diet profile exists, "Eat clean"
+# (meal_ratio scoring) is seeded automatically; once a committed fitness
+# profile exists, "Sleep well" (deviation scoring vs the profile's normal
+# sleep window) is seeded. Idempotent; archived defaults are never resurrected.
+#
 # Overrides:
 #   PBRAIN_VAULT                  — vault root
-#   PBRAIN_HABITS_PROFILE_FILE    — habits profile markdown path
+#   PBRAIN_HABITS_PROFILE_FILE    — explicit profile file (bypasses the store)
+#   PBRAIN_HABIT_TRACK_DIR        — tracking dir (the store lives inside it)
 #   PBRAIN_DB_FILE                — SQLite DB path
 
 _PB_SRC="${BASH_SOURCE[0]}"
@@ -91,6 +105,247 @@ pbrain_db_init || true
 PROFILE_FILE="$(pbrain_habits_profile_file)"
 TODAY="$(date +%Y-%m-%d)"
 SUB="${1:-}"
+
+# Default scored habits — seeded once their source profiles exist: a committed
+# diet profile enables "Eat clean" (meal_ratio: score = share of clean meals);
+# a committed fitness profile enables "Sleep well" (deviation vs the normal
+# sleep window baked from that profile). Goes through the same atomic
+# ProfileLock write path as `add`. Idempotent; an id that exists (active OR
+# archived) is never re-added, so archiving a default makes it stay gone.
+_habits_seed_defaults() {
+  [[ -f "$PROFILE_FILE" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local diet_store fit_store plan_store dietp fitp fitlibp goalsp act_store
+  diet_store="$(pbrain_profile_store "${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}")"
+  fit_store="$(pbrain_profile_store "${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}")"
+  plan_store="$(pbrain_profile_store "${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}")"
+  dietp="$(pbrain_profile_latest "$diet_store" diet-profile)"
+  fitp="$(pbrain_profile_latest "$fit_store" fitness-profile)"
+  fitlibp="$(pbrain_profile_latest "$fit_store" fitness-library)"
+  goalsp="$(pbrain_profile_latest "$plan_store" goals-profile)"
+  act_store="$fit_store/activities"
+  [[ -n "$dietp$fitp$goalsp$fitlibp" ]] || return 0
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$dietp" "$fitp" "$TODAY" "$goalsp" "$fitlibp" "$act_store" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+libdir, path, dietp, fitp, today, goalsp, fitlibp, act_store = sys.argv[1:9]
+sys.path.insert(0, libdir)
+from profile_lock import ProfileLock
+
+def read_json_block(p):
+    if not p:
+        return None
+    try:
+        with open(p) as fh:
+            text = fh.read()
+    except Exception:
+        return None
+    m = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+    try:
+        return json.loads(m.group(1) if m else text)
+    except Exception:
+        return None
+
+added = []
+with ProfileLock(path) as lock:
+    text = lock.read()
+    m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
+    if not m:
+        sys.exit(0)
+    try:
+        data = json.loads(m.group(2))
+    except Exception:
+        sys.exit(0)
+    habits = data.setdefault("habits", [])
+    ids = {str(h.get("id", "")).strip() for h in habits}  # incl. archived — never resurrect
+
+    if dietp and "eat-clean" not in ids:
+        habits.append({
+            "id": "eat-clean", "name": "Eat clean", "direction": "at_least",
+            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            "target_count": None, "priority": "high",
+            "unit": "", "measure_target": 80, "archived": False,
+            "notes": ("Default scored habit (from the diet profile). Daily score = "
+                      "share of clean meals: count clean vs unclean MEALS in the "
+                      "diet log for the day (every eating occasion counts) and "
+                      "mark with --good/--bad; target 80+."),
+            "scoring": {"type": "meal_ratio"},
+        })
+        added.append("Eat clean (scored from your diet log)")
+
+    if fitp and "sleep-well" not in ids:
+        fp = read_json_block(fitp) or {}
+        sleep = fp.get("sleep") or {}
+        bed = str(sleep.get("bed_time") or "23:00")
+        hours = sleep.get("hours")
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError):
+            hours = 8.0
+        habits.append({
+            "id": "sleep-well", "name": "Sleep well", "direction": "at_least",
+            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            "target_count": None, "priority": "high",
+            "unit": "", "measure_target": 80, "archived": False,
+            "notes": ("Default scored habit (from the fitness profile). Daily "
+                      "score = deviation from the normal sleep window: mark with "
+                      "--actual-time HH:MM (bed time) and --actual-hours N.N; "
+                      "target 80+."),
+            "scoring": {"type": "deviation", "normal_time": bed,
+                        "normal_hours": hours, "unit_minutes": 30,
+                        "unit_hours": 0.5, "ladder": [100, 90, 75, 50, 25, 0]},
+        })
+        added.append("Sleep well (scored vs your normal sleep window)")
+
+    if goalsp and "work-the-plan" not in ids:
+        habits.append({
+            "id": "work-the-plan", "name": "Work the plan", "direction": "at_least",
+            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            "target_count": None, "priority": "high",
+            "unit": "", "measure_target": 70, "archived": False,
+            "notes": ("Default scored habit (from the goals profile). Daily score = "
+                      "weighted task completion (difficulty=load, priority=importance, "
+                      "status=credit). Mark at end-of-day with "
+                      "--items JSON array of {priority,difficulty,status}; target 70+."),
+            "scoring": {"type": "weighted_completion",
+                        "difficulty_weights": {"easy": 1, "normal": 2, "hard": 3, "nightmare": 5},
+                        "status_credit": {"done": 1.0, "partial": 0.5, "dropped": 0.0, "carried": 0.0},
+                        "priority_pivot": 3, "priority_step": 0.25},
+        })
+        added.append("Work the plan (scored from your daily task log)")
+
+    if fitlibp and "train" not in ids:
+        import glob as _glob
+        import os as _os
+        try:
+            from habit_schedule import norm_days as _norm_days
+        except Exception:
+            _norm_days = None
+        # Per-activity profiles carry their fixed days in FRONTMATTER as weekday
+        # NAMES (`days: [Mon, Thu]`), not in a JSON block — mirror the
+        # fitness-journal pre-select parser. Take the highest COMMITTED version
+        # per slug, then union the activities' fixed days into the schedule.
+        by_slug = {}  # slug -> (version, [day-name tokens])
+        for af in _glob.glob(_os.path.join(act_store, "*.v*.md")):
+            mver = re.match(r"^(.*)\.v(\d+)\.md$", _os.path.basename(af))
+            if not mver:
+                continue
+            slug, ver = mver.group(1), int(mver.group(2))
+            try:
+                with open(af) as fh:
+                    atxt = fh.read()
+            except Exception:
+                continue
+            fm = re.match(r"^---\n(.*?)\n---", atxt, re.DOTALL)
+            if not fm:
+                continue
+            front = fm.group(1)
+            if re.search(r"^committed:\s*false\s*$", front, re.MULTILINE):
+                continue
+            dm = re.search(r"^days:\s*\[(.*?)\]\s*$", front, re.MULTILINE)
+            if not dm:
+                continue
+            days = [d.strip().strip("\"'") for d in dm.group(1).split(",") if d.strip()]
+            if slug not in by_slug or ver > by_slug[slug][0]:
+                by_slug[slug] = (ver, days)
+        train_days = []
+        for _ver, days in by_slug.values():
+            train_days.extend(days)
+        if _norm_days:
+            norm = _norm_days(train_days)
+        else:
+            norm = sorted({d.strip().lower()[:3] for d in train_days if d.strip()})
+        if norm:
+            schedule = {"type": "weekdays", "days": norm}
+            schedule_type = "weekly"
+        else:
+            schedule = {"type": "daily"}
+            schedule_type = "daily"
+        habits.append({
+            "id": "train", "name": "Train", "direction": "at_least",
+            "schedule": schedule, "schedule_type": schedule_type,
+            "target_count": None, "priority": "high",
+            "unit": "", "measure_target": 80, "archived": False,
+            "notes": ("Default scored habit (from the fitness library). Daily score = "
+                      "session volume ratio (actual vs planned volume). Mark after "
+                      "logging a session with --session JSON; target 80+."),
+            "scoring": {"type": "session_volume",
+                        "status_credit": {"completed": 1.0, "partial": 0.5, "skipped": 0.0},
+                        "volume_cap": 1.0},
+        })
+        added.append("Train (scored from your fitness sessions)")
+
+    if added:
+        new_json = json.dumps(data, indent=2)
+        text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
+        lock.write(text)
+
+for a in added:
+    print(f"Added default habit: {a}")
+PYEOF
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# profile — manage the VERSIONED habits profile (lib/profiles.sh store at
+# <habit-track-dir>/.profile). Day-to-day add/edit/archive remain LIVING-
+# document ops on the latest version; `new` mints a draft for structural
+# redesigns only, `commit` freezes it.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "profile" ]]; then
+  P_ACTION="${2:-show}"
+  P_STORE="$(pbrain_habits_store)"
+  case "$P_ACTION" in
+    show)
+      echo "HABITS_PROFILE_SHOW"
+      P_F="$(pbrain_profile_latest "$P_STORE" habits-profile)"
+      P_D="$(pbrain_profile_draft "$P_STORE" habits-profile)"
+      echo "committed: ${P_F:-none}"
+      echo "draft: ${P_D:-none}"
+      echo "active (resolved): $PROFILE_FILE"
+      echo ""
+      [[ -f "$PROFILE_FILE" ]] && cat "$PROFILE_FILE"
+      echo ""
+      echo "---"
+      echo "INSTRUCTIONS: Present the habits above as a short human-readable summary"
+      echo "(name, schedule, direction, target/measure, priority — one line each)."
+      echo "Do not dump raw JSON. Structural redesigns go through:"
+      echo "  /habits profile new   (then edit the draft, then /habits profile commit)"
+      exit 0
+      ;;
+    new)
+      P_D="$(pbrain_profile_draft "$P_STORE" habits-profile)"
+      if [[ -n "$P_D" ]]; then
+        echo "HABITS_PROFILE_DRAFT_OPEN"
+        echo "draft: $P_D"
+        echo "A draft is already open. Iterate on it with the user and, when they confirm,"
+        echo "finalize with: bash \"$_SCRIPT_DIR/habits.sh\" profile commit"
+        exit 0
+      fi
+      P_NEW="$(pbrain_profile_new "$P_STORE" habits-profile)" || exit 1
+      echo "HABITS_PROFILE_NEW"
+      echo "draft: $P_NEW"
+      echo ""
+      echo "INSTRUCTIONS: A new DRAFT version of the habits profile was minted (copied"
+      echo "from the previous version). Walk the user through the structural changes"
+      echo "they want (keep the fenced JSON valid and every habit id STABLE — renames"
+      echo "touch only the name field; history is keyed to ids), then finalize with:"
+      echo "  bash \"$_SCRIPT_DIR/habits.sh\" profile commit"
+      echo "Once committed the version is FINAL — further redesigns mint the next one."
+      exit 0
+      ;;
+    commit)
+      P_OUT="$(pbrain_profile_commit "$P_STORE" habits-profile)" || exit 1
+      echo "HABITS_PROFILE_COMMITTED"
+      echo "file: $P_OUT"
+      echo "This version is now final. Day-to-day add/edit/archive keep working on it."
+      exit 0
+      ;;
+    *)
+      echo "usage: habits.sh profile show|new|commit" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # log — append/update a habit event. Used by Claude (via the extraction emitter)
@@ -239,7 +494,9 @@ if [[ "$SUB" == "add" ]]; then
     esac
   fi
 
-  # Ensure the profile exists with a json block before appending.
+  # Ensure the profile exists with a json block before appending. A fresh
+  # bootstrap lands in the versioned store as v1, committed (the store path is
+  # what pbrain_habits_profile_file resolves to when nothing exists yet).
   if [[ ! -f "$PROFILE_FILE" ]]; then
     mkdir -p "$(dirname "$PROFILE_FILE")"
     cat > "$PROFILE_FILE" <<EOF
@@ -247,6 +504,8 @@ if [[ "$SUB" == "add" ]]; then
 type: habits-profile
 date: $TODAY
 tags: []
+version: 1
+committed: true
 ---
 
 # Habits profile
@@ -622,6 +881,8 @@ if [[ "$SUB" == "track" || "$SUB" == "track-init" ]]; then
     echo "habits: no profile yet — run /habits to set up your habits first" >&2
     exit 1
   fi
+  # Seed default scored habits first so they appear in this date's tracker.
+  _habits_seed_defaults || true
   FILE="$(pbrain_habit_track_init "$T_DATE")"
   # Best-effort: ensure linked habits have their per-day one-shot reminder for
   # this date (idempotent; degrades silently without Reminders access).
@@ -641,7 +902,8 @@ fi
 if [[ "$SUB" == "mark" ]]; then
   shift || true
   M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
-  M_GOOD=""; M_BAD=""; M_SLIPS=""
+  M_GOOD=""; M_BAD=""; M_SLIPS=""; M_ATIME=""; M_AHOURS=""
+  M_ITEMS=""; M_SESSION=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -651,6 +913,10 @@ if [[ "$SUB" == "mark" ]]; then
       --good)   M_GOOD="${2:-}"; shift 2 2>/dev/null || shift ;;
       --bad)    M_BAD="${2:-}"; shift 2 2>/dev/null || shift ;;
       --slips)  M_SLIPS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --actual-time)  M_ATIME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --actual-hours) M_AHOURS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --items)   M_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --session) M_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
       --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
@@ -664,7 +930,7 @@ if [[ "$SUB" == "mark" ]]; then
     exit 0
   fi
   pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT" \
-    "$M_GOOD" "$M_BAD" "$M_SLIPS"
+    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION"
   exit 0
 fi
 
@@ -676,13 +942,18 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "score" ]]; then
   shift || true
-  SC_NAME=""; SC_GOOD=""; SC_BAD=""; SC_SLIPS=""
+  SC_NAME=""; SC_GOOD=""; SC_BAD=""; SC_SLIPS=""; SC_ATIME=""; SC_AHOURS=""
+  SC_ITEMS=""; SC_SESSION=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) SC_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
       --good)  SC_GOOD="${2:-}"; shift 2 2>/dev/null || shift ;;
       --bad)   SC_BAD="${2:-}"; shift 2 2>/dev/null || shift ;;
       --slips) SC_SLIPS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --actual-time)  SC_ATIME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --actual-hours) SC_AHOURS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --items)   SC_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --session) SC_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -694,7 +965,7 @@ if [[ "$SUB" == "score" ]]; then
     echo "no habits profile" >&2
     exit 1
   fi
-  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS"
+  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS" "$SC_ATIME" "$SC_AHOURS" "$SC_ITEMS" "$SC_SESSION"
   exit 0
 fi
 
@@ -1359,6 +1630,10 @@ remove habits, or check a habit's history."
 SETUP
   exit 0
 fi
+
+# Seed default scored habits (eat-clean / sleep-well) before the dashboard
+# reads the profile, so a freshly-enabled diet/fitness profile shows up here.
+_habits_seed_defaults || true
 
 # Validate the profile JSON.
 PROFILE_JSON="$(pbrain_habits_json || true)"

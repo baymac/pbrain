@@ -13,6 +13,8 @@
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
+  export PBRAIN_MIGRATIONS=0   # keep the vault migration runner out of unit tests
+  export PBRAIN_UPDATE_CHECK=0  # never hit the network / nag in unit tests
   # Isolate HOME so start/stop never touch the real ~/Library/LaunchAgents or
   # ~/.config, and stub launchctl/swiftc/codesign so nothing hits the system.
   export HOME="$TMP/home"

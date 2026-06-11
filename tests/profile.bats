@@ -31,7 +31,7 @@ tags: []
 intro line
 
 ```json
-{ "current_focus": [ { "goal": "ship pbrain" } ] }
+{ "work_goals": [ { "goal": "ship pbrain" } ] }
 ```
 EOF
   run pbrain_profile_json "$TMP/p.md"
@@ -42,7 +42,7 @@ EOF
 }
 
 @test "falls back to whole-file raw JSON (old config format)" {
-  echo '{ "current_focus": [] }' > "$TMP/p.json"
+  echo '{ "work_goals": [] }' > "$TMP/p.json"
   run pbrain_profile_json "$TMP/p.json"
   [ "$status" -eq 0 ]
   echo "$output" | python3 -c 'import json,sys; json.load(sys.stdin)'

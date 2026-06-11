@@ -2,24 +2,40 @@
 set -euo pipefail
 
 # plan-my-day.sh
-# Adaptive daily planner anchored on your goals. On first run, interviews you
-# to build a "goals profile" (long-term horizon, current focus areas, working
-# style, anti-patterns, personal anchors) — that profile becomes the lens for
-# every subsequent daily plan.
+# Adaptive daily planner anchored on your goals. The goals profile is the
+# COMBINATION VIEW over two living libraries:
 #
-# Flow:
-#   1. No profile config       → interview, write profile JSON, exit.
-#   2. Profile in place        → daily flow: read profile + today's fitness/
-#                                 journal/recent-plans → generate a plan tied
-#                                 back to the user's goals and focus areas.
+#   <plan-dir>/.profile/goals-profile.vN.md — work_goals + life_goals (refs
+#       into the libraries) + working_style (session length, breaks, work
+#       hours/day, focus hours, last-block ceiling) + daily_anchors +
+#       anti_patterns + personal_anchors. THE day-planning lens.
+#   <plan-dir>/.profile/work-library.vN.md  — every project/thing worked on,
+#       with rich context; enriched over time (LIVING document).
+#   <plan-dir>/.profile/goals-library.vN.md — non-work goals (health,
+#       creative, relationships…); LIVING document.
+#
+# Daily flow: wake time (read from today's fitness entry when present) →
+# what's done since waking (backfilled, gap-free) → how many focus hours from
+# now → block layout around the day's anchors (meal times from the diet
+# profile, today's fitness session, habit reminders, calendar events) →
+# allocate work from the goals onto the blocks → confirm → write.
+#
+# `plan-my-day.sh profile show|new|commit [base]` manages versions: drafts
+# are editable, committed versions are final. Migration 0002 rebuilds the old
+# Goals Profile.md into this store.
+#
+# `plan-my-day.sh task add|remove|list` revises TODAY'S already-written plan
+# without rebuilding it: add/remove a task-log row and re-flow "Today at a
+# glance" around the fixed anchors (both tables rewritten together). A no-op
+# pointing at /plan-my-day when today's plan doesn't exist yet.
 #
 # Default destination:  $VAULT_DIR/life/daily-planning
-# Profile config:       ~/.config/pbrain/plan-profile.json
 # Overrides:
 #   PBRAIN_VAULT             — vault root
-#   PBRAIN_PLAN_DIR          — daily-plan dir (write target)
-#   PBRAIN_PLAN_PROFILE_FILE — goals profile markdown path (vault; JSON in a fenced block)
-#   PBRAIN_FITNESS_DIR       — today's fitness entry (cross-ref)
+#   PBRAIN_PLAN_DIR          — daily-plan dir (the .profile store lives inside)
+#   PBRAIN_PLAN_PROFILE_FILE — explicit goals-profile file (bypasses the store)
+#   PBRAIN_FITNESS_DIR       — today's fitness entry + fitness store (cross-ref)
+#   PBRAIN_DIET_DIR          — diet store, for meal times (cross-ref)
 #   PBRAIN_JOURNAL_DIR       — today's daily journal (cross-ref)
 #   PBRAIN_WEEKLY_DIR        — weekly reviews (Monday nudge cross-ref)
 
@@ -37,186 +53,363 @@ pbrain_emit_prefs "plan-my-day" || true
 
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
+DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
-PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
 WEEKLY_DIR="${PBRAIN_WEEKLY_DIR:-$VAULT_DIR/life/weekly-tracking}"
+STORE="$(pbrain_profile_store "$PLAN_DIR")"
+FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
+DIET_STORE="$(pbrain_profile_store "$DIET_DIR")"
 
 TODAY="$(date +%Y-%m-%d)"
 DOW="$(date +%A)"
+DOW3="$(date +%a)"
 NOW_TIME="$(date +%H:%M)"
+ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+MONTH_YEAR="$(date +%Y-%m)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
 
 mkdir -p "$PLAN_DIR"
 
-# Migration: earlier versions stored the profile as ~/.config/pbrain/plan-profile.json.
-# If the new vault markdown profile is absent but the old JSON exists, convert it
-# in place (wrap the JSON in a fenced block) so existing users aren't re-interviewed.
-_OLD_PROFILE="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json"
-if [[ ! -f "$PROFILE_FILE" && -f "$_OLD_PROFILE" ]]; then
-  mkdir -p "$(dirname "$PROFILE_FILE")"
-  python3 - "$_OLD_PROFILE" "$PROFILE_FILE" "$TODAY" <<'PYEOF' 2>/dev/null || true
-import json, sys
-old, new, today = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(old) as fh:
-        data = json.load(fh)
-except Exception:
-    sys.exit(0)
-created = data.get("created", today)
-body = json.dumps(data, indent=2, ensure_ascii=False)
-with open(new, "w") as fh:
-    fh.write(f"---\ntype: profile\ndate: {created}\ntags: []\n---\n\n")
-    fh.write("# Goals profile\n\n")
-    fh.write("The lens every `/plan-my-day` plans against. Edit freely; the structured data lives in the JSON block below.\n\n")
-    fh.write("```json\n" + body + "\n```\n")
-PYEOF
-  [[ -f "$PROFILE_FILE" ]] && echo "Migrated goals profile to $PROFILE_FILE (from $_OLD_PROFILE)."
+# ---------------------------------------------------------------------------
+# `profile` subcommand — manage the versioned planning profiles.
+#   profile show | profile new [base] | profile commit [base]
+#   base ∈ goals-profile (default) | work-library | goals-library
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "profile" ]]; then
+  ACTION="${2:-show}"
+  BASE="${3:-goals-profile}"
+  case "$ACTION" in
+    show)
+      echo "PLAN_PROFILE_SHOW"
+      for b in goals-profile work-library goals-library monthly-goals weekly-goals; do
+        f="$(pbrain_profile_latest "$STORE" "$b")"
+        d="$(pbrain_profile_draft "$STORE" "$b")"
+        echo ""
+        echo "=== $b (committed: ${f:-none}; draft: ${d:-none}) ==="
+        [[ -n "$f" ]] && cat "$f"
+      done
+      echo ""
+      echo "---"
+      echo "INSTRUCTIONS: Present the profiles above as a short human-readable summary"
+      echo "(work goals with deadlines, life goals, working-style numbers, anchors)."
+      echo "Do not dump raw JSON. Committed profiles are final — to change one:"
+      echo "  /plan-my-day profile new [goals-profile|work-library|goals-library]"
+      exit 0
+      ;;
+    new)
+      DRAFT="$(pbrain_profile_draft "$STORE" "$BASE")"
+      if [[ -n "$DRAFT" ]]; then
+        echo "PLAN_PROFILE_DRAFT_OPEN"
+        echo "draft: $DRAFT"
+        echo "A draft of $BASE is already open. Iterate on it with the user and, when they"
+        echo "confirm, finalize with: bash \"$_SCRIPT_DIR/plan-my-day.sh\" profile commit $BASE"
+        exit 0
+      fi
+      NEW_PATH="$(pbrain_profile_new "$STORE" "$BASE")" || exit 1
+      echo "PLAN_PROFILE_NEW"
+      echo "draft: $NEW_PATH"
+      echo ""
+      echo "INSTRUCTIONS: A new DRAFT version of $BASE was minted (copied from the"
+      echo "previous version when one existed). Walk the user through what they want to"
+      echo "change, edit the draft file directly (keep the fenced JSON block valid and"
+      echo "the frontmatter version/committed lines intact), iterate until they are"
+      echo "happy, then finalize with:"
+      echo "  bash \"$_SCRIPT_DIR/plan-my-day.sh\" profile commit $BASE"
+      echo "Once committed the version is FINAL — further changes mint the next version."
+      exit 0
+      ;;
+    commit)
+      OUT="$(pbrain_profile_commit "$STORE" "$BASE")" || exit 1
+      echo "PLAN_PROFILE_COMMITTED"
+      echo "file: $OUT"
+      echo "This version is now final. Future changes: /plan-my-day profile new $BASE"
+      exit 0
+      ;;
+    *)
+      echo "usage: plan-my-day.sh profile show|new|commit [goals-profile|work-library|goals-library|monthly-goals|weekly-goals]" >&2
+      exit 2
+      ;;
+  esac
 fi
-unset _OLD_PROFILE
 
 # ---------------------------------------------------------------------------
-# PHASE 0 — first-run profile setup (build the goals lens).
+# `task` on a day with no plan yet is a clean no-op — handle it BEFORE the
+# staged-migration / first-run-setup guards below, so a `task` verb never
+# surprises the user with a setup interview or migration block. (When the plan
+# DOES exist, a committed profile must too, and the full task handler runs
+# after profile resolution — see further down.)
 # ---------------------------------------------------------------------------
-if [[ ! -f "$PROFILE_FILE" ]]; then
-  cat <<SETUP
-PLAN_MY_DAY_SETUP_PROFILE
-profile_file: $PROFILE_FILE
+if [[ "${1:-}" == "task" && ! -f "$OUT_FILE" ]]; then
+  echo "PLAN_MY_DAY_TASK_NO_PLAN"
+  echo "action: ${2:-list}"
+  echo "file: $OUT_FILE"
+  echo ""
+  echo "INSTRUCTIONS: There is no day plan for $TODAY yet, so there is nothing to"
+  echo "edit. Tell the user to run /plan-my-day first to lay down today's plan —"
+  echo "the task verb only revises an existing day, it never creates one. Stop here."
+  exit 0
+fi
 
-INSTRUCTIONS — first-time setup. Do not generate any plan yet. You're helping
-the user lay down the goals lens that every future /plan-my-day will use.
+# ---------------------------------------------------------------------------
+# Staged migration 0002 — rebuild the old Goals Profile.md (or legacy
+# plan-profile.json) into the store. An EXPLICIT profile override that points
+# at a real file wins outright — the user told us which file to use.
+# ---------------------------------------------------------------------------
+if [[ ! -f "${PBRAIN_PLAN_PROFILE_FILE:-/nonexistent}" ]] \
+   && declare -F pbrain_migration_pending >/dev/null \
+   && pbrain_migration_pending 0002_goals_profile_restructure; then
+  OLD_PROFILE="$VAULT_DIR/life/Goals Profile.md"
+  OLD_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json"
+  echo "PLAN_MY_DAY_MIGRATION"
+  echo "store: $STORE"
+  echo "backup_dir: $VAULT_DIR/.pbrain/backup"
+  echo ""
+  echo "=== OLD GOALS PROFILE ($OLD_PROFILE) ==="
+  cat "$OLD_PROFILE" 2>/dev/null || echo "(none)"
+  echo ""
+  echo "=== LEGACY JSON PROFILE ($OLD_JSON) ==="
+  cat "$OLD_JSON" 2>/dev/null || echo "(none)"
+  echo ""
+  echo "=== RECENT DAY PLANS (project names for the work library) ==="
+  python3 - "$PLAN_DIR" <<'PYEOF' 2>/dev/null || true
+import glob, os, sys
+d = sys.argv[1]
+for f in sorted(glob.glob(os.path.join(d, "*.md")))[-10:]:
+    try:
+        with open(f) as fh:
+            print(f"=== {os.path.basename(f)} ===")
+            print(fh.read())
+    except Exception:
+        pass
+PYEOF
+  cat <<MIGRATE
 
-Step 1 — Tell the user this is a one-time setup (re-runnable by deleting the
-profile file). Frame it warmly: "Let's get a clear picture of what you're
-trying to push forward right now — that way each daily plan is actually
-anchored on what matters to you, not just a generic to-do list."
+---
+INSTRUCTIONS — one-time migration to the new planning profile store. Do not
+plan any day yet. Tell the user: pbrain now splits the goals lens into a
+goals profile + a work library + a goals library, all versioned; you'll walk
+their existing profile across (a few minutes, their data carries over — plus
+a few new questions).
 
-Step 2 — Interview the user. Ask in 2–3 batches (not all at once, not one at
-a time). Cover everything below — skip a sub-question only if it clearly
-doesn't apply to them.
+Step 1 — Validate the old data PART BY PART (not in one go):
+  - Each old horizon goal: confirm, update, or drop — quote it back. Classify
+    every kept goal as WORK (projects, career, money) or LIFE (health, body,
+    creative, relationships, inner work). For each kept goal, ask the user to
+    assign a priority (1 = most important, higher = lower priority).
+  - Note: the old "current focus" concept is GONE — the goals profile itself
+    is the focus now. Do not carry it over.
+  - working_style: confirm what exists, then ASK what the old data lacks:
+      - preferred work-session length (minutes) if not present
+      - break preference: how long between sessions, and what break
+        activities they actually like (the menu the plan rotates through)
+      - total work hours per day they realistically want
+      - the important focus hours of their day (e.g. "9-12, 15-17")
+      - the LAST block time of day — when the final work block must end
+  - daily_anchors: carry over what exists (wake/workout/lunch/dinner/walk/
+    bed); confirm briefly.
+  - anti_patterns + personal_anchors: confirm, prune anything stale.
 
-  Horizon goals (3–12 months out)
-  - What are 1–5 things you're actively trying to build, become, or achieve
-    over the next 3–12 months? (career, learning, body, relationships,
-    creative, financial — any mix.) Phrase each as a concrete outcome, not a
-    vague aspiration.
-  - For each: rough deadline or "ongoing"? what does success look like?
+Step 2 — From the recent day plans above + the old work goals, seed the WORK
+LIBRARY: one entry per project/initiative the user actually works on — id,
+name, one-line summary, status, and a context paragraph rich enough that a
+future plan can pull it in for block descriptions. Confirm the list with the
+user.
 
-  Current focus areas (what's live RIGHT NOW)
-  - Of those goals, which 1–3 are you actively pushing this month?
-    (We'll surface these at the top of every plan.)
-  - For each active focus, what's the next concrete move you'd take this week?
+Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1:
 
-  Working style
-  - Typical weekday: when do you actually do focused work? (morning, evening,
-    flexible, only after kids sleep, etc.)
-  - Realistic focused-work hours per day on a normal day?
-  - Preferred deep-work block length? (45 / 60 / 90 / 120 min)
-  - Energy peak: morning person, afternoon, night owl, mixed?
-  - Anything that wrecks your day if it slips? (sleep, exercise, sunlight,
-    talking to no one, etc.)
-  - Break activities: between work blocks you'll get a ~30-min break — what
-    restful things do you actually like doing in those? (e.g. short walk,
-    a couple of games, prep + eat a light snack, stretch, sit outside.) These
-    become a menu the daily plan rotates through automatically between blocks.
-
-  Anti-patterns to actively avoid
-  - What behaviours sabotage you? (doomscrolling, late nights, alcohol mid-
-    week, skipping meals, news binges, social-media spirals, gaming benders.)
-  - We'll add these to a "Avoiding today" block whenever they're relevant.
-
-  Daily time anchors (the fixed skeleton your day revolves around)
-  - What time do you typically work out or do physical activity? (rough start time)
-  - What time do you usually eat lunch?
-  - What time do you usually have dinner?
-  - Do you do a regular walk? Morning, after dinner, or not at all — and roughly when?
-  - What time do you usually wake up?
-  - What time do you aim to be in bed?
-  - On a normal workday, how many focused work hours do you realistically get in?
-
-  Personal anchors (the non-work stuff)
-  - Relationships you want to stay close to? (parents, siblings, partner,
-    specific friends — just first names or labels, no contact info needed.)
-  - Creative pursuit(s)? (music, writing, painting, photography, woodworking,
-    DJ, etc. — whatever you actually practise.)
-  - Health / movement non-negotiables? (daily walk, gym N times a week,
-    yoga, meditation, etc.)
-
-Step 3 — Write the profile to:
-  $PROFILE_FILE
-
-  This is an Obsidian note. Write it in EXACTLY this shape: standard frontmatter,
-  a short intro line, then the structured data in a fenced JSON block (use empty
-  arrays / null for anything the user skipped or doesn't apply):
-
+  $STORE/goals-profile.v1.md:
   ---
-  type: profile
+  type: goals-profile
   date: $TODAY
   tags: []
+  version: 1
+  committed: true
   ---
 
   # Goals profile
 
-  The lens every /plan-my-day plans against. Edit freely; the structured data lives in the JSON block below.
-
   \`\`\`json
-  {
-    "created": "$TODAY",
-    "horizon_goals": [
-      {
-        "goal": "concrete outcome",
-        "deadline": "YYYY-MM or ongoing",
-        "success_looks_like": "..."
-      }
-    ],
-    "current_focus": [
-      {
-        "goal": "matches one of horizon_goals.goal",
-        "this_week_move": "..."
-      }
-    ],
-    "working_style": {
-      "focus_window": "e.g. 9am-1pm + 8pm-10pm",
-      "focused_hours_per_day": 4,
-      "deep_work_block_min": 90,
-      "break_block_min": 30,
-      "break_activities": ["short walk", "2 games", "prep + eat a light snack"],
-      "energy_peak": "morning|afternoon|evening|mixed",
-      "day_wreckers": ["sleep<7h", "no exercise", "no sunlight"]
-    },
-    "daily_anchors": {
-      "wake_time": "HH:MM",
-      "workout_time": "HH:MM",
-      "lunch_time": "HH:MM",
-      "dinner_time": "HH:MM",
-      "walk_time": "HH:MM or null",
-      "bed_target": "HH:MM",
-      "focused_hours_per_day": 5
-    },
-    "anti_patterns": ["doomscrolling", "late nights", "..."],
-    "personal_anchors": {
-      "relationships": ["mom", "partner", "best friend"],
-      "creative_pursuits": ["music", "writing"],
-      "health_habits": ["daily walk", "gym 4x/week"]
-    },
-    "notes": "free-form anything important not captured above"
-  }
+  {"created": "$TODAY",
+   "work_goals": [{"id": "<work-library id>", "goal": "...",
+                   "deadline": "YYYY-MM or ongoing", "success_looks_like": "...",
+                   "priority": 1}],
+   "life_goals": [{"id": "<goals-library id>", "goal": "...",
+                   "deadline": "ongoing", "success_looks_like": "...",
+                   "priority": 1}],
+   "maintenance_mode": [],
+   "working_style": {"session_length_min": 90, "break_min": 30,
+     "break_activities": ["..."], "work_hours_per_day": 7,
+     "focus_hours": "9-12,15-17", "last_block_end": "HH:MM",
+     "energy_peak": "...", "day_wreckers": ["..."]},
+   "daily_anchors": {"wake_time": "HH:MM", "workout_time": "HH:MM",
+     "lunch_time": "HH:MM", "dinner_time": "HH:MM",
+     "walk_time": "HH:MM or null", "bed_target": "HH:MM"},
+   "anti_patterns": ["..."],
+   "personal_anchors": {"relationships": ["..."],
+     "creative_pursuits": ["..."], "health_habits": ["..."]},
+   "notes": "..."}
   \`\`\`
 
-  - mkdir -p the parent dir before writing.
-  - Keep the fenced JSON code block exactly as shown — the commands that read this profile parse the JSON out of it.
-  - Use the user's actual words where possible — don't sanitize their voice.
-  - If the user gave fewer than 3 horizon goals, that's fine. Don't pad.
-  - If the user couldn't name a current_focus yet, leave the array empty.
-    The daily flow will gently prompt them to set one over time.
+  $STORE/work-library.v1.md (type: work-library):
+  \`\`\`json
+  {"created": "$TODAY", "projects": [
+    {"id": "<slug>", "name": "...", "summary": "...", "status": "active",
+     "context": "rich working context, enriched over time",
+     "last_worked": "YYYY-MM-DD"}]}
+  \`\`\`
 
-Step 4 — Confirm: "Goals profile saved at $PROFILE_FILE. Edit it any time
-(or delete it to redo this interview). Now re-run /plan-my-day and I'll
-plan today against these goals."
+  $STORE/goals-library.v1.md (type: goals-library):
+  \`\`\`json
+  {"created": "$TODAY", "goals": [
+    {"id": "<slug>", "goal": "...",
+     "category": "health|creative|relationships|financial|personal",
+     "deadline": "ongoing", "success_looks_like": "..."}]}
+  \`\`\`
+
+  Every work_goals entry references a work-library project id; every
+  life_goals entry references a goals-library goal id. The profile is the
+  combination view over the two libraries.
+
+Step 4 — Park the old profile so nothing is lost (do NOT delete):
+  mkdir -p "$VAULT_DIR/.pbrain/backup"
+  mv "$OLD_PROFILE" "$VAULT_DIR/.pbrain/backup/" 2>/dev/null
+  (Leave $OLD_JSON in place if it exists — superseded, not harmful.)
+
+Step 5 — Record the migration so it never re-runs:
+  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0002_goals_profile_restructure
+
+Step 6 — Confirm: "Goals profile migrated → $STORE (profile + work library +
+goals library). Re-run /plan-my-day to plan today." Stop here.
+MIGRATE
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Resolution — explicit override file, else latest committed in the store.
+# ---------------------------------------------------------------------------
+PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-}"
+if [[ -n "$PROFILE_FILE" && ! -f "$PROFILE_FILE" ]]; then PROFILE_FILE=""; fi
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$STORE" goals-profile)"
+
+# ---------------------------------------------------------------------------
+# PHASE 0 — first-run setup (no committed goals profile anywhere).
+# ---------------------------------------------------------------------------
+if [[ -z "$PROFILE_FILE" ]]; then
+  DRAFT="$(pbrain_profile_draft "$STORE" goals-profile)"
+  if [[ -n "$DRAFT" ]]; then
+    echo "PLAN_PROFILE_DRAFT_OPEN"
+    echo "draft: $DRAFT"
+    echo ""
+    cat "$DRAFT"
+    echo ""
+    echo "---"
+    echo "A goals-profile draft is already open (shown above). Review it with the user,"
+    echo "apply any edits they want (keep the fenced JSON valid), then finalize with:"
+    echo "  bash \"$_SCRIPT_DIR/plan-my-day.sh\" profile commit goals-profile"
+    echo "Daily planning starts once the profile is committed."
+    exit 0
+  fi
+  cat <<SETUP
+PLAN_MY_DAY_SETUP_PROFILE
+store: $STORE
+
+INSTRUCTIONS — first-time setup. Do not generate any plan yet. You're helping
+the user lay down the goals lens that every future /plan-my-day will use:
+a goals profile (the lens) built on a work library + a goals library.
+
+Step 1 — Tell the user this is a one-time setup (changeable later with
+/plan-my-day profile new). Frame it warmly: "Let's get a clear picture of
+what you're trying to push forward right now — that way each daily plan is
+actually anchored on what matters to you, not just a generic to-do list."
+
+Step 2 — Interview the user. Ask in 2–3 batches (not all at once, not one at
+a time). Cover everything below — skip a sub-question only if it clearly
+doesn't apply.
+
+  Work goals (projects, career, money — 3–12 months out)
+  - What are the 1–5 things you're actively trying to build or achieve?
+    Phrase each as a concrete outcome. For each: rough deadline or "ongoing",
+    what success looks like, and a priority (1 = most important).
+  - For each, capture the PROJECT behind it for the work library: a one-line
+    summary plus a short context paragraph (what it is, where it stands,
+    what kind of work it needs).
+
+  Life goals (the non-work side)
+  - Health/body, creative pursuits, relationships, inner work, finances —
+    what are you building there? Each with a category and what success
+    looks like. These seed the goals library.
+
+  Working style
+  - Typical weekday: when do you actually do focused work? Which hours of
+    the day are your IMPORTANT focus hours (e.g. "9-12, 15-17")?
+  - How many total work hours per day do you realistically want?
+  - Preferred work-session length? (45 / 60 / 90 / 120 min)
+  - Break preference: how long between sessions, and what restful break
+    activities do you actually like (short walk, a couple of games, snack
+    prep, stretch — the menu the plan rotates through)?
+  - When must the LAST work block of the day end?
+  - Energy peak: morning / afternoon / night / mixed?
+  - Anything that wrecks your day if it slips?
+
+  Daily time anchors (the fixed skeleton)
+  - Usual wake time, workout time, lunch time, dinner time, walk (if any),
+    bed target.
+
+  Anti-patterns to actively avoid
+  - What behaviours sabotage you? (doomscrolling, late nights, gaming
+    benders, …) These feed the "Avoiding today" block when relevant.
+
+  Personal anchors
+  - Relationships to stay close to (first names/labels), creative pursuits,
+    health/movement non-negotiables.
+
+Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1,
+each with frontmatter (type, date: $TODAY, tags: [], version: 1,
+committed: true), a heading, and a fenced json block:
+
+  goals-profile.v1.md — json:
+  {"created": "$TODAY",
+   "work_goals": [{"id": "<work-library id>", "goal": "...", "deadline": "...",
+                   "success_looks_like": "...", "priority": 1}],
+   "life_goals": [{"id": "<goals-library id>", "goal": "...", "deadline": "...",
+                   "success_looks_like": "...", "priority": 1}],
+   "maintenance_mode": [],
+   "working_style": {"session_length_min": 90, "break_min": 30,
+     "break_activities": ["..."], "work_hours_per_day": 7,
+     "focus_hours": "...", "last_block_end": "HH:MM",
+     "energy_peak": "...", "day_wreckers": ["..."]},
+   "daily_anchors": {"wake_time": "", "workout_time": "", "lunch_time": "",
+     "dinner_time": "", "walk_time": null, "bed_target": ""},
+   "anti_patterns": ["..."],
+   "personal_anchors": {"relationships": ["..."], "creative_pursuits": ["..."],
+     "health_habits": ["..."]},
+   "notes": "free-form anything important not captured above"}
+
+  work-library.v1.md — json:
+  {"created": "$TODAY", "projects": [
+    {"id": "<slug>", "name": "...", "summary": "...", "status": "active",
+     "context": "...", "last_worked": null}]}
+
+  goals-library.v1.md — json:
+  {"created": "$TODAY", "goals": [
+    {"id": "<slug>", "goal": "...", "category": "...", "deadline": "...",
+     "success_looks_like": "..."}]}
+
+  - Every work_goals/life_goals entry references a library id — the profile
+    is the combination view over the two libraries.
+  - Use the user's actual words where possible — don't sanitize their voice.
+  - Fewer goals than the maximum is fine. Don't pad.
+  - The libraries are LIVING documents: entries are appended/enriched in
+    place over time; versions only mint on structural rebuilds.
+
+Step 4 — Confirm: "Goals profile saved → $STORE (profile + work library +
+goals library). Edit any time with /plan-my-day profile new. Now re-run
+/plan-my-day and I'll plan today against these goals."
 SETUP
   exit 0
 fi
 
-# Extract + validate the profile JSON (carried in a fenced JSON block in the note).
+# Extract + validate the profile JSON (carried in a fenced JSON block).
 PROFILE_JSON="$(pbrain_profile_json "$PROFILE_FILE")"
 
 if [[ -z "$PROFILE_JSON" ]]; then
@@ -224,11 +417,173 @@ if [[ -z "$PROFILE_JSON" ]]; then
 PLAN_MY_DAY_CONFIG_ERROR
 profile_file: $PROFILE_FILE
 
-The goals profile at $PROFILE_FILE has no readable JSON block (or it is malformed).
-Either fix the JSON code block manually, or delete the file and re-run
-/plan-my-day to redo the goals interview.
+The goals profile at $PROFILE_FILE has no readable JSON block (or it is
+malformed). Fix the fenced JSON manually, or mint a fresh version with
+/plan-my-day profile new goals-profile.
 ERR
   exit 1
+fi
+
+# The two libraries (latest committed; living documents).
+WORK_LIB_FILE="$(pbrain_profile_latest "$STORE" work-library)"
+GOALS_LIB_FILE="$(pbrain_profile_latest "$STORE" goals-library)"
+WORK_LIB_CONTENT="(no work library yet — block context comes from the profile alone)"
+GOALS_LIB_CONTENT="(no goals library yet)"
+[[ -n "$WORK_LIB_FILE" ]] && WORK_LIB_CONTENT="$(cat "$WORK_LIB_FILE" 2>/dev/null || true)"
+[[ -n "$GOALS_LIB_FILE" ]] && GOALS_LIB_CONTENT="$(cat "$GOALS_LIB_FILE" 2>/dev/null || true)"
+
+# Weekly and monthly goals — resolved by period (draft or committed).
+WEEKLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$STORE" weekly-goals "$ISO_WEEK" || true)"
+MONTHLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$STORE" monthly-goals "$MONTH_YEAR" || true)"
+WEEKLY_GOALS_CONTENT="(not set up — /weekly-review creates this week's goals)"
+MONTHLY_GOALS_CONTENT="(not set up — /monthly-review creates this month's goals)"
+[[ -n "$WEEKLY_GOALS_FILE" ]] && WEEKLY_GOALS_CONTENT="$(cat "$WEEKLY_GOALS_FILE" 2>/dev/null || true)"
+[[ -n "$MONTHLY_GOALS_FILE" ]] && MONTHLY_GOALS_CONTENT="$(cat "$MONTHLY_GOALS_FILE" 2>/dev/null || true)"
+
+# ---------------------------------------------------------------------------
+# `task` subcommand — revise an EXISTING day's plan without rebuilding it.
+#   task add | task remove | task list
+# Mirrors the `profile` dispatch. It ONLY edits a day that already exists —
+# a clear no-op (pointing at /plan-my-day) when today's plan file is absent,
+# so it never creates a day. Needs the resolved profile + weekly/monthly
+# goals above (tie resolution, suggest-tier) so it sits after that block.
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "task" ]]; then
+  TASK_ACTION="${2:-list}"
+  case "$TASK_ACTION" in
+    add|remove|list) ;;
+    *)
+      echo "usage: plan-my-day.sh task add|remove|list" >&2
+      exit 2
+      ;;
+  esac
+
+  # The no-plan-yet case was already handled up top (before the migration /
+  # first-run guards); reaching here means today's plan file exists.
+  TASK_HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
+
+  echo "PLAN_MY_DAY_TASK"
+  echo "action: $TASK_ACTION"
+  echo "file: $OUT_FILE"
+  echo "today: $TODAY"
+  echo "now_time: $NOW_TIME"
+  echo "weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up yet)}"
+  echo "monthly_goals_file: ${MONTHLY_GOALS_FILE:-(not set up yet)}"
+  echo "habits_cmd: ${TASK_HABITS_CMD:-(unavailable)}"
+  echo ""
+  echo "=== TODAY'S PLAN ($OUT_FILE) ==="
+  cat "$OUT_FILE"
+  echo ""
+  echo "=== GOALS PROFILE (working_style + work/life goals) ==="
+  echo "$PROFILE_JSON"
+  echo ""
+  echo "=== WEEKLY GOALS ==="
+  echo "$WEEKLY_GOALS_CONTENT"
+  echo ""
+  echo "=== MONTHLY GOALS ==="
+  echo "$MONTHLY_GOALS_CONTENT"
+  echo ""
+
+  if [[ "$TASK_ACTION" == "list" ]]; then
+    cat <<'TASKLIST'
+---
+INSTRUCTIONS — task list. Show the user the rows of today's "## Task log"
+table above as a short numbered list: number, task, tie, priority,
+difficulty, and status (planned / done / partial / dropped / carried).
+Do NOT rewrite the file and do NOT touch "Today at a glance". If the table
+has no task rows yet, say so in one line. Stop here.
+TASKLIST
+    exit 0
+  fi
+
+  cat <<TASKEDIT
+---
+INSTRUCTIONS — task $TASK_ACTION. You are revising TODAY'S EXISTING plan
+($OUT_FILE), not rebuilding it. The user's request (in the conversation) names
+the task to $TASK_ACTION; map their natural language to the row(s) below. Keep
+the user's voice; do not re-plan the whole day.
+
+The plan carries TWO tables that must stay in sync:
+  • "## Today at a glance" — the gap-free, overlap-free schedule (wake → bed),
+    24h HH:MM–HH:MM rows. FIXED anchors already placed here: calendar events,
+    meal slots, the fitness session, habit 🔔 reminder rows, and ✓ backfilled
+    done rows. Work blocks flow AROUND those anchors.
+  • "## Task log" — one row per task: Task | Tie | Priority | Difficulty |
+    Done at | Status | Notes. /end-of-day fills Done at + Status.
+
+WORKING STYLE (from the goals profile above): use working_style.session_length_min
+for block size, working_style.break_min for the gap between blocks (rotate
+working_style.break_activities, never the same one back-to-back, respect
+anti_patterns), and NEVER schedule a work block past working_style.last_block_end.
+TASKEDIT
+
+  if [[ "$TASK_ACTION" == "add" ]]; then
+    cat <<'TASKADD'
+
+For `task add`:
+1. TIE the new task to a goal. Default menu = this week's WEEKLY GOALS (above),
+   ordered priority then difficulty; fall back to MONTHLY GOALS, then the
+   profile's work_goals/life_goals. Set Tie to the matched goal id/name.
+2. SUGGEST-TIER when the task ties to no weekly goal (same flow as a normal
+   plan):
+     • A clear, scoped, one-week piece of work → offer once: "This isn't in
+       your weekly goals — add it to this week's weekly-goals draft?" On yes,
+       edit the file at weekly_goals_file IN PLACE (append a goal entry with the
+       next available priority, difficulty: normal, status: active; keep the
+       fenced JSON valid). If weekly_goals_file is "(not set up yet)", say they
+       can run /weekly-review to set the week up — don't block.
+     • A broader new direction → offer: "add it to this month's monthly goals
+       (profile new monthly-goals) or the goals profile (profile new
+       goals-profile)?" Take their pick. One sentence, never block.
+   A task tied to nothing is fine: Tie = "—", priority = "—", difficulty = "—".
+3. PRIORITY + DIFFICULTY. Inherit priority from the tied goal when there is one;
+   otherwise ask (1 = most important). Ask for difficulty
+   (easy/normal/hard/nightmare) if you can't infer it.
+4. APPEND a row to "## Task log": Task | Tie | Priority | Difficulty | (Done at
+   blank) | planned | (Notes optional). Leave existing rows untouched.
+5. RE-FLOW "Today at a glance": slot ONE new work block (session_length_min,
+   with a break_min break separating it from an adjacent block) into the next
+   free gap that fits, honoring the fixed anchors and the last_block_end ceiling.
+   - If it fits: insert the block; keep the table gap-free and overlap-free
+     (adjust neighbouring rest/transition rows as needed).
+   - If NOTHING fits before last_block_end: do NOT silently overflow. Tell the
+     user it doesn't fit and offer to (a) place it tomorrow, (b) drop/shrink an
+     existing block to make room, or (c) extend past last_block_end just today.
+6. If a re-flowed block lands at a specific clock time AND corresponds to a
+   habit with a linked one-shot reminder, realign it (best-effort, silent on
+   failure), using habits_cmd above:
+     bash "<habits_cmd>" reminders-reschedule --habit "<name>" --time "HH:MM" --date $TODAY
+   Skip silently on NOT_LINKED / NOT_FOUND / (unavailable).
+TASKADD
+  else
+    cat <<'TASKREMOVE'
+
+For `task remove`:
+1. IDENTIFY the row the user means in "## Task log" (by name or by its number in
+   the list — quote it back so there's no ambiguity).
+2. CONFIRM-ON-CLOSED-ROW: if that row's Status is already filled (anything other
+   than "planned" — done / partial / dropped / carried, or it has a Done at
+   time), ask the user to confirm before removing it, because /end-of-day's goal
+   rollup would otherwise silently lose a closed task. On a plain "planned" row,
+   remove without the extra prompt.
+3. DROP the row from "## Task log".
+4. RE-FLOW "Today at a glance": free the removed task's block. Either pull the
+   following work blocks earlier to close the gap, OR leave the freed span as a
+   rest/buffer row — pick whichever keeps the day sensible and SAY which you did.
+   Keep the table gap-free and overlap-free; never disturb the fixed anchors
+   (calendar, meals, fitness, habit 🔔) or ✓ done rows.
+TASKREMOVE
+  fi
+
+  cat <<TASKWRITE
+
+After editing, REWRITE BOTH TABLES TOGETHER and save the full plan back to
+$OUT_FILE (the two tables must never drift apart). Then show the updated
+"Today at a glance" + "Task log" and confirm in one line what changed (e.g.
+"Added 'ship diet refactor' → Block 3 (15:30–17:00), tied to lettuce-algo.").
+Do not re-run the full daily check-in. Stop here.
+TASKWRITE
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -251,6 +606,115 @@ fi
 FITNESS_TODAY="$(cat "$FITNESS_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 DAILY_TODAY="$(cat "$DAILY_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 
+# Sleep data recorded by today's fitness check-in (frontmatter sleep_* fields)
+# — when present, the wake-time question is skipped (confirm in passing).
+FITNESS_SLEEP="$(python3 - "$FITNESS_DIR/$TODAY.md" <<'PYEOF' 2>/dev/null || true
+import re, sys
+try:
+    with open(sys.argv[1]) as fh:
+        head = fh.read(2000)
+except Exception:
+    sys.exit(0)
+m = re.match(r"^---\n(.*?)\n---", head, re.DOTALL)
+if not m:
+    sys.exit(0)
+fm = m.group(1)
+out = []
+for key in ("sleep_wake", "sleep_bed", "sleep_hours", "sleep_quality"):
+    km = re.search(r"^" + key + r":\s*(.+?)\s*$", fm, re.MULTILINE)
+    if km:
+        val = km.group(1).strip()
+        if val and val not in ("''", '""'):
+            out.append(f"{key}={val}")
+print(" ".join(out))
+PYEOF
+)"
+[[ -n "${FITNESS_SLEEP//[[:space:]]/}" ]] || FITNESS_SLEEP="(not recorded — ask the user)"
+
+# Meal times from the committed diet profile (rest-day defaults; the fitness
+# session shifts the nearby slots).
+DIET_MEAL_TIMES="$(python3 - "$(pbrain_profile_latest "$DIET_STORE" diet-profile)" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+path = sys.argv[1] if len(sys.argv) > 1 else ""
+if not path:
+    sys.exit(0)
+try:
+    with open(path) as fh:
+        text = fh.read()
+except Exception:
+    sys.exit(0)
+m = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+try:
+    p = json.loads(m.group(1) if m else text)
+except Exception:
+    sys.exit(0)
+times = p.get("meal_times") or {}
+print(", ".join(f"{k} {v}" for k, v in times.items()))
+PYEOF
+)"
+[[ -n "${DIET_MEAL_TIMES//[[:space:]]/}" ]] || DIET_MEAL_TIMES="(no diet profile — use the goals-profile daily_anchors / timing signal)"
+
+# Today's scheduled fitness activity + its typical time, from the fitness
+# store (activity profiles carry fixed days; the library carries times).
+TODAY_FITNESS_SCHEDULE="$(python3 - "$FIT_STORE" "$DOW3" <<'PYEOF' 2>/dev/null || true
+import glob, json, os, re, sys
+fit_store, dow = sys.argv[1], sys.argv[2]
+dow3 = dow.strip().lower()[:3]
+act_store = os.path.join(fit_store, "activities")
+
+meta = {}
+lib_best = None
+for f in glob.glob(os.path.join(fit_store, "fitness-library.v*.md")):
+    m = re.match(r".*\.v(\d+)\.md$", f)
+    if m and (lib_best is None or int(m.group(1)) > lib_best[0]):
+        lib_best = (int(m.group(1)), f)
+if lib_best:
+    try:
+        with open(lib_best[1]) as fh:
+            jm = re.search(r"```json\s*\n(.*?)```", fh.read(), re.DOTALL)
+        data = json.loads(jm.group(1)) if jm else {}
+        for a in data.get("activities", []):
+            slug = a.get("id") or re.sub(r"[^a-z0-9]+", "-", str(a.get("name", "")).lower()).strip("-")
+            meta[slug] = (str(a.get("name", slug)), a.get("typical_time"), a.get("duration_min"))
+    except Exception:
+        pass
+
+# Highest COMMITTED version per slug — an open draft (higher version,
+# committed: false) must NOT shadow the committed version below it.
+best = {}
+for f in glob.glob(os.path.join(act_store, "*.v*.md")):
+    m = re.match(r"(.+)\.v(\d+)\.md$", os.path.basename(f))
+    if not m:
+        continue
+    slug, ver = m.group(1), int(m.group(2))
+    try:
+        with open(f) as fh:
+            text = fh.read()
+    except Exception:
+        continue
+    fm = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+    if not fm or re.search(r"^committed:\s*false\s*$", fm.group(1), re.MULTILINE):
+        continue
+    if slug not in best or ver > best[slug][0]:
+        best[slug] = (ver, fm.group(1))
+
+for slug, (_v, front) in sorted(best.items()):
+    dm = re.search(r"^days:\s*\[(.*?)\]\s*$", front, re.MULTILINE)
+    if not dm:
+        continue
+    days = [d.strip().strip("\"").lower()[:3] for d in dm.group(1).split(",") if d.strip()]
+    if dow3 in days:
+        name, ttime, dur = meta.get(slug, (slug, None, None))
+        bits = [name]
+        if ttime:
+            bits.append(f"typically {ttime}")
+        if dur:
+            bits.append(f"~{dur} min")
+        print(" — ".join(bits))
+PYEOF
+)"
+[[ -n "${TODAY_FITNESS_SCHEDULE//[[:space:]]/}" ]] || TODAY_FITNESS_SCHEDULE="(nothing scheduled today)"
+
 RECENT_PLANS="$(python3 - "$PLAN_DIR" <<'PYEOF'
 import os, glob, sys
 d = sys.argv[1]
@@ -266,51 +730,106 @@ print("\n\n".join(parts) if parts else "(no previous plans)")
 PYEOF
 )"
 
-CADENCE_SIGNAL="$(python3 - "$PLAN_DIR" <<'PYEOF'
-import os, glob, re, datetime, sys
-d = sys.argv[1]
-files = sorted(glob.glob(os.path.join(d, "*.md")))[-30:]
+# Carry-forward from the most recent PRIOR day plan — /end-of-day writes a
+# "### Carry-forward" list (not-done tasks) + leaves "## Task log" rows whose
+# Status is "not started"/"partial". Surface those as candidate tasks for today
+# so unfinished work actually flows forward instead of getting lost.
+# NOTE: written to a temp file and run via `python3 <file>` rather than an
+# inline `"$(python3 - <<'EOF' … )"` heredoc on purpose — macOS bash 3.2's
+# parser miscounts parens when several command-substitution-nested heredocs
+# stack up in one script, and this block sits past that threshold (it would
+# fail `bash -n` with a spurious "syntax error near `('"). Keeping the heredoc
+# OUTSIDE the `$()` sidesteps the bug.
+_CF_PY="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/pbrain-carryfwd.$$.py")"
+cat > "$_CF_PY" <<'PYEOF'
+import os, glob, re, sys
+d, today = sys.argv[1], sys.argv[2]
+prior = [f for f in sorted(glob.glob(os.path.join(d, "*.md")))
+         if os.path.basename(f)[:-3] < today]
+if not prior:
+    print("(none)"); sys.exit(0)
+src = prior[-1]
+day = os.path.basename(src)[:-3]
+try:
+    with open(src) as fh:
+        text = fh.read()
+except Exception:
+    print("(none)"); sys.exit(0)
+items = []
+flags = re.MULTILINE | re.DOTALL
+# first: explicit "### Carry-forward" bullets
+m = re.search(r"^###\s+Carry-forward[ \t]*\n(.*?)(?=^#{2,3}\s|\Z)", text, flags)
+if m:
+    for ln in m.group(1).splitlines():
+        ln = ln.strip()
+        if ln.startswith("-"):
+            b = ln.lstrip("-").strip()
+            if b and not b.lower().startswith("(nothing"):
+                items.append(b)
+# then: unfinished "## Task log" rows with Status not started / partial
+tm = re.search(r"^##\s+Task log[ \t]*\n(.*?)(?=^#{2,3}\s|\Z)", text, flags)
+if tm:
+    for row in tm.group(1).splitlines():
+        cells = [c.strip() for c in row.strip().strip("|").split("|")]
+        if len(cells) < 6:
+            continue
+        status = cells[-1].lower() if len(cells) == 6 else cells[5].lower()
+        if status in ("not started", "partial"):
+            task = cells[0]
+            if task and task.lower() != "task" and not task.startswith("--"):
+                if all(task not in it for it in items):
+                    items.append(f"{task} (was {status})")
+if not items:
+    print("(none)"); sys.exit(0)
+print(f"from {day}:")
+for it in items[:12]:
+    print(f"- {it}")
+PYEOF
+CARRY_FORWARD="$(python3 "$_CF_PY" "$PLAN_DIR" "$TODAY" 2>/dev/null || true)"
+rm -f "$_CF_PY"
+[[ -n "${CARRY_FORWARD//[[:space:]]/}" ]] || CARRY_FORWARD="(none)"
 
-keywords = {
-    "mom": [r"\bmom\b", r"\bmother\b"],
-    "dad": [r"\bdad\b", r"\bfather\b"],
-    "siblings": [r"\bsister\b", r"\bbrother\b", r"\bsibling"],
-    "friends": [r"\bfriend", r"\bcall a friend"],
-    "creative": [r"\bcreative\b", r"\bmusic\b", r"\bwrit(?:e|ing)\b", r"\bpaint\b", r"\bdraw\b", r"\bphoto", r"\bdj\b", r"\brecord a set\b"],
-    "walk": [r"\bwalk\b"],
-    "deep_work": [r"\bdeep work\b", r"\bfocus block\b"],
+# Learned anchor times from past plans — the FALLBACK when the profiles have
+# no explicit time for an anchor.
+TIMING_SIGNAL="$(python3 - "$PLAN_DIR" <<'PYEOF'
+import os, glob, re, sys, collections
+plan_dir = sys.argv[1]
+files = sorted(glob.glob(os.path.join(plan_dir, "*.md")))[-21:]
+categories = {
+    "workout": [r"\b(gym|workout|fitness|apple fitness|lower body|upper body|push|pull|legs|cardio|football)\b"],
+    "lunch": [r"\blunch\b"],
+    "dinner": [r"\bdinner\b"],
+    "walk": [r"\b(outdoor walk|night walk|evening walk|morning walk)\b"],
+    "wind_down": [r"\b(wind-down|low-light close|hygiene, bed|bed)\b"],
 }
-
-last_seen = {k: None for k in keywords}
-today = datetime.date.today()
-
+times = collections.defaultdict(list)
 for f in files:
-    base = os.path.basename(f).replace(".md", "")
     try:
-        date = datetime.date.fromisoformat(base)
+        fh = open(f)
+        text = fh.read()
+        fh.close()
     except Exception:
         continue
-    try:
-        with open(f) as fh:
-            text = fh.read().lower()
-    except Exception:
-        continue
-    for k, pats in keywords.items():
-        if any(re.search(p, text) for p in pats):
-            if last_seen[k] is None or date > last_seen[k]:
-                last_seen[k] = date
-
-lines = []
-for k, d_ in last_seen.items():
-    if d_ is None:
-        lines.append(f"- {k}: not seen in last 30 plans")
-    else:
-        gap = (today - d_).days
-        lines.append(f"- {k}: last mentioned {gap} day(s) ago ({d_.isoformat()})")
-print("\n".join(lines))
+    for m in re.finditer(r"\|\s*(\d{1,2}):(\d{2})[^|]*\|([^|]+)\|", text):
+        start_h, start_m, action = m.group(1), m.group(2), m.group(3).lower()
+        start_min = int(start_h) * 60 + int(start_m)
+        for cat, patterns in categories.items():
+            if any(re.search(p, action) for p in patterns):
+                times[cat].append(start_min)
+                break
+def fmt(cat):
+    lst = times.get(cat, [])
+    if not lst:
+        return "unknown"
+    avg = sum(lst) / len(lst)
+    h = int(avg) // 60
+    m_val = int(avg) % 60
+    spread = (max(lst) - min(lst)) // 60 if len(lst) > 1 else 0
+    return "%02d:%02d (+/-%dh from %d plans)" % (h, m_val, spread, len(lst))
+for cat in ["workout", "lunch", "dinner", "walk", "wind_down"]:
+    print("- %s: %s" % (cat, fmt(cat)))
 PYEOF
 )"
-
 
 # Weekly-review nudge: Mondays only. Measures the calendar span since the last
 # weekly review covered through (parsed from the review's "Dates: X → Y" line,
@@ -381,6 +900,24 @@ else:
 PYEOF
 )"
 
+# Month-boundary nudge signal: suggest /monthly-review in the first or last 3
+# days of a month so the user sets (or closes) their monthly goals.
+MONTH_BOUNDARY_SIGNAL="$(python3 - "$TODAY" <<'PYEOF'
+import sys, datetime
+today = datetime.date.fromisoformat(sys.argv[1])
+day = today.day
+import calendar
+last_day = calendar.monthrange(today.year, today.month)[1]
+if day <= 3:
+    print(f"near_start {day}")
+elif day >= last_day - 2:
+    days_left = last_day - day
+    print(f"near_end {days_left}")
+else:
+    print("none")
+PYEOF
+)"
+
 # Habits surfacing. Every helper is a no-op (empty output) when the user hasn't
 # set anything up, so this costs nothing until they opt in. (Reminders are NOT
 # surfaced or fired here: /remind creates Apple Reminders (EKReminder), which are
@@ -440,14 +977,33 @@ current_time: $NOW_TIME (24h, local)
 output_file: $OUT_FILE
 profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
+month_boundary_signal: $MONTH_BOUNDARY_SIGNAL
+iso_week: $ISO_WEEK
+weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up yet)}
+monthly_goals_file: ${MONTHLY_GOALS_FILE:-(not set up yet)}
 habits_setup_needed: $HABITS_SETUP_NEEDED
 habits_track_file: $HABITS_TRACK_FILE
 habits_track_created: $HABITS_TRACK_CREATED
 laptop_tracking_state: $LAPTOP_TRACKING_STATE
 laptop_tracking_cmd: $LAPTOP_CMD
+fitness_sleep: $FITNESS_SLEEP
+diet_meal_times: $DIET_MEAL_TIMES
+fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
 
 === GOALS PROFILE ===
 $PROFILE_JSON
+
+=== WORK LIBRARY (project context for block descriptions) ===
+$WORK_LIB_CONTENT
+
+=== GOALS LIBRARY (non-work goals) ===
+$GOALS_LIB_CONTENT
+
+=== WEEKLY GOALS (current week: $ISO_WEEK) ===
+$WEEKLY_GOALS_CONTENT
+
+=== MONTHLY GOALS (current month: $MONTH_YEAR) ===
+$MONTHLY_GOALS_CONTENT
 
 === TODAY'S FITNESS JOURNAL ===
 $FITNESS_TODAY
@@ -455,11 +1011,14 @@ $FITNESS_TODAY
 === TODAY'S DAILY JOURNAL ===
 $DAILY_TODAY
 
-=== CADENCE SIGNAL (last 30 plans) ===
-$CADENCE_SIGNAL
+=== TIMING SIGNAL (learned anchor times from last 21 plans — FALLBACK when profiles lack a time) ===
+$TIMING_SIGNAL
 
 === RECENT DAY PLANS (last 7) ===
 $RECENT_PLANS
+
+=== CARRY-FORWARD (unfinished tasks from the last day plan — offer as candidates today) ===
+$CARRY_FORWARD
 
 === TODAY'S CALENDAR (Apple Calendar — hard time anchors for today) ===
 $CALENDAR_TODAY
@@ -481,328 +1040,303 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
     it for the plan. A standing preference always overrides this gate.
   - FITNESS GATE (do this BEFORE anything in Step 1 or Step 2): If TODAY'S
     FITNESS JOURNAL == "MISSING", your first message must be ONLY about the
-    fitness journal — do NOT show the Step 1 lens or the Step 2 check-in
-    questions yet. Ask: "Your fitness journal isn't done yet — running
-    /fitness-journal first means I can slot your workout into the day. Want to
-    do that first, or plan around it?" Then STOP and wait for their answer.
-      - If they choose to do the fitness journal first: let them go run
-        /fitness-journal and finish it. Do not start planning. When they come
-        back (the fitness file now exists), THEN proceed to Step 1 (lens) and
-        Step 2 (check-ins) as normal.
-      - If they say they'll skip it / plan around it / continue: ask once
-        "Roughly when's your physical activity today, and what is it? (e.g.
-        gym 4pm, football 7pm, rest day)", take their answer, and only THEN
-        proceed to Step 1 and Step 2.
+    fitness journal — do NOT show the Step 1 lens or start the Step 2 check-in
+    yet. Ask: "Your fitness journal isn't done yet — running /fitness-journal
+    first means I can slot your workout into the day (and it captures your
+    wake time for me). Want to do that first, or plan around it?" Then STOP
+    and wait for their answer.
+      - If they choose the fitness journal first: let them run it. When they
+        come back (the fitness file now exists), proceed to Step 1 + Step 2.
+      - If they say plan around it: ask once "Roughly when's your physical
+        activity today, and what is it? (e.g. gym 4pm, football 7pm, rest
+        day)", take their answer, and proceed.
     The daily-journal nudge and weekly-review nudge below may ride along in
-    this same first message, but the Step 1 lens and Step 2 questions never do.
-  - If TODAY'S FITNESS JOURNAL exists, there is no gate — go straight through
-    Step 1 and Step 2 in the normal flow.
-  - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's /journal is empty too — you can fill it in later." Do not block.
-  - If both exist, skip the preflight nudges.
+    this same first message; the Step 1 lens and Step 2 questions never do.
+  - If TODAY'S FITNESS JOURNAL exists, there is no gate — go straight through.
+  - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's
+    /journal is empty too — you can fill it in later." Do not block.
   - WEEKLY REVIEW (Mondays only) — read \`weekly_review_signal\` above:
       - \`none\` → not a Monday, or nothing to review yet: say nothing.
       - \`current\` → fewer than 7 days since the last weekly review: say nothing.
-      - \`due <days> <plans> <last_date|never>\` → it's Monday and \`<days>\` calendar days (gaps included) have passed since your last weekly review — over a week of activity, with \`<plans>\` day-plans logged in that window. Suggest once, don't block. Phrase with the real numbers, e.g.: "It's Monday and it's been <days> days since your last weekly review (\`<last_date>\`), with <plans> day-plans since — want to run /weekly-review first? A few minutes, and it gives today's plan that context. Or I plan now and you do it later." If \`<last_date>\` is \`never\`, say it's been <days> days of planning with no weekly review yet. If they say plan now, continue; offer to remind them at the end.
-  - If the profile's \`current_focus\` array is empty, mention once: "You haven't pinned a current focus in your profile yet — want to name 1–3 things you're actively pushing this month? I'll save them so I can anchor future plans on them." Don't block planning today either way.
-  - CALENDAR — read the TODAY'S CALENDAR block above. These are the user's Apple Calendar events for today (created via /remind or set directly in Calendar), with recurrences already expanded. They are HARD ANCHORS — the day is built around them. Surface today's TIMED items in your first message as fixed points (e.g. "On your calendar today: standup 9:30, dentist 14:00"). Note any ALLDAY items as context, and mention FREQUENT pings (e.g. "hourly stand-up reminder") only once, briefly. If it's "(none)", say nothing. These feed Step 4a as non-negotiable rows — do NOT ask the user to restate them; treat them like already-confirmed locked-in commitments.
+      - \`due <days> <plans> <last_date|never>\` → suggest once, don't block:
+        "It's Monday and it's been <days> days since your last weekly review
+        (\`<last_date>\`), with <plans> day-plans since — want to run
+        /weekly-review first? Or I plan now and you do it later." If
+        \`<last_date>\` is \`never\`, say it's been <days> days of planning with
+        no weekly review yet. If they say plan now, continue; offer to remind
+        them at the end.
+  - MONTH BOUNDARY — read \`month_boundary_signal\` above:
+      - \`none\` → not near a month boundary: say nothing.
+      - \`near_start <days>\` → first 1–3 days of a new month: suggest ONCE,
+        don't block: "It's the start of a new month — want to run
+        /monthly-review to set your monthly goals before planning today?
+        Or I'll plan now and you can do it later." Skip if the user's
+        preferences say not to nudge about monthly-review.
+      - \`near_end <days>\` → last 1–3 days of the month: suggest ONCE:
+        "Month's almost done — want to close it out with /monthly-review
+        first? Or plan the day now." Skip if preferences say not to nudge.
+  - CALENDAR — read the TODAY'S CALENDAR block above. These are HARD ANCHORS —
+    the day is built around them. Surface today's TIMED items in your first
+    message as fixed points. Note ALLDAY items as context; mention FREQUENT
+    pings once, briefly. If "(none)", say nothing. They feed Step 3 as
+    non-negotiable rows — do NOT ask the user to restate them.
   - HABITS — read the HABITS block + \`habits_setup_needed\` above:
-      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You haven't set up habit tracking yet — /habits lets you pick a few habits to build or cap, and I'll surface them here. Want to set it up later?" Skip this if the user's preferences say not to nag about habits. If the user tells you to stop asking about habits, that's a GLOBAL standing preference (it spans commands) — capture it in \`prefs/_global.md\` via the self-improve loop, not a per-command pref.
-      - If a HABITS rollup is present: note anything that needs attention today — a limit habit at/over cap (⚠️), or a high-priority build habit lagging / untouched this week — and factor it into the plan (e.g. slot a short block for a lagging build habit). One line, not a lecture.
+      - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You
+        haven't set up habit tracking yet — /habits lets you pick a few habits
+        to build or cap, and I'll surface them here. Want to set it up later?"
+        Skip if the user's preferences say not to nag about habits. A "stop
+        asking about habits" is a GLOBAL standing preference — capture it in
+        the global prefs via the self-improve loop.
+      - If a HABITS rollup is present: note anything that needs attention
+        today — a limit habit at/over cap (⚠️), a high-priority build habit
+        lagging, or a recurring touchpoint going stale (a relationship call,
+        a creative session, a walk — IF the user tracks it as a habit; habits
+        are the ONLY cadence source now) — and factor it into the plan. One
+        line, not a lecture.
   - LAPTOP TRACKING — read \`laptop_tracking_state\` above. It's OFF by default:
-      - \`not_setup\` → mention ONCE, don't block — "Want me to track where your laptop time goes (which apps, which sites)? /laptop-tracking start turns on a quiet background tracker and you'll get a daily breakdown. Or say no and I won't ask again." If they say yes, tell them to run \`/laptop-tracking start\` (then \`/laptop-tracking access\` to grant per-browser domain access). If they say no / not now / stop asking, run \`bash "\$laptop_tracking_cmd" decline\` so this never nudges again. Skip the nudge entirely if the user's preferences say not to nag about it.
+      - \`not_setup\` → mention ONCE, don't block — "Want me to track where
+        your laptop time goes (which apps, which sites)? /laptop-tracking
+        start turns on a quiet background tracker and you'll get a daily
+        breakdown. Or say no and I won't ask again." If yes → tell them to run
+        \`/laptop-tracking start\` (then \`/laptop-tracking access\`). If no /
+        stop asking → run \`bash "\$laptop_tracking_cmd" decline\`. Skip the
+        nudge entirely if preferences say not to nag about it.
       - \`active\` or \`declined\` → say NOTHING about laptop tracking.
 
-Step 1 — Show the user their lens, briefly:
-  Print 2-3 lines max — their current_focus goals as bullets (or, if empty,
-  list horizon_goals). Frame as the anchor for today, NOT as a quiz.
+Step 1 — Show the user their current week's lens, briefly:
+  Print 2-4 lines max. Frame as the anchor for today, NOT as a quiz.
+  - If WEEKLY GOALS are set (weekly_goals_file is not "(not set up yet)"):
+    show those goals as bullets ordered by priority (1 = most important),
+    noting difficulty where relevant. One line: the week (iso_week).
+  - If no weekly goals but MONTHLY GOALS are set: show monthly goals bullets.
+  - If neither: fall back to work_goals (priority order) + life_goals.
   Example:
-    "Anchoring on:
-     • Ship pbrain v1 (this week: publish repo + write blog post)
-     • Drop 3 kg by July (this week: 4 gym sessions + diet streak)
-     • Learn jazz piano (this week: 4×30 min practice)"
+    "Week W24 — anchoring on:
+     • Ship Lettuce VC application — algo module (normal)
+     • Meloro landing page (easy)
+     Life: fit body · DJing · present for family"
 
-Step 1.5 — Anchor confirmation (its own message, before Step 2):
-  Build anchor times from these sources in priority order — use the first source
-  that gives a real value for each anchor; skip an anchor entirely if no source
-  has a concrete value for it:
+Step 2 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
+  One thing (or a tight pair) per turn; let each answer steer the next.
 
-  1. TODAY'S CALENDAR block — hard time-bound events (zero variance, never shift).
-  2. TODAY'S FITNESS JOURNAL — the workout time + duration from the fitness session.
-  3. Profile "daily_anchors" block (if present) — explicit saved defaults (label "(profile)").
-  4. Profile prefs / user preferences — e.g. cook schedule driving dinner time.
-  5. HABITS block 🔔 times — SOFT only. A habit reminder time is only surfaced as
-     an anchor if its window does not overlap with any already-placed harder anchor
-     (fitness session, calendar event, etc.). If it conflicts, drop it silently —
-     do NOT show it. Walk in particular: if a fitness session overlaps the habit's
-     reminder window, omit walk from the anchor list for today.
+  2a — WAKE TIME. Read \`fitness_sleep\` above:
+    - If it has sleep_wake: do NOT ask — confirm in passing ("Up at
+      {sleep_wake} per your fitness check-in — {sleep_hours}h of sleep.").
+      If sleep_hours < 7, add one watch-out line.
+    - If "(not recorded — ask the user)": open with "Before we plan — what
+      time did you wake up?" (compute hours if they volunteer bed time too;
+      flag < 7h).
+  2b — BACKFILL. Ask: "What have you done since waking until now?" Take
+    whatever they say (work, meals, errands, scrolling — all of it) and slot
+    it into time ranges YOURSELF, marked ✓ — gap-free, no overlaps, from wake
+    time to now. Fill unexplained spans with honest rest/transition rows. Do
+    NOT interrogate them range by range — you place things, they correct.
+    Fold a light energy read into this turn ("and how's the energy — rough
+    number out of 10?").
+  2c — FOCUS HOURS. Ask: "How many focused hours are you planning from now?"
+    Then COMPUTE the block layout and SHOW it before going further:
+      - blocks of working_style.session_length_min, separated by
+        working_style.break_min breaks (rotate break_activities; never the
+        same one back-to-back; respect anti_patterns),
+      - laid around today's FIXED anchors: calendar events (zero variance),
+        the fitness session (\`fitness_today_schedule\` or the user's stated
+        time), meal times (\`diet_meal_times\`, shifted around the workout per
+        the diet profile), habit reminder times (🔔 in the rollup),
+        working_style.focus_hours preferred, nothing past
+        working_style.last_block_end,
+      - capped by the user's stated focus hours AND
+        working_style.work_hours_per_day.
+    Present: "That gives you N blocks: {compact list with times}. Want to add
+    or reduce?" Adjust until they're happy.
+  2d — WHAT TO WORK ON. Ask what goes into the blocks.
+    FIRST, if the CARRY-FORWARD section above is not "(none)": surface those
+    unfinished tasks up top — "Carried from {date}: {tasks}. Pull any of these
+    into today?" Let the user keep, drop, or re-scope each. Carried tasks the
+    user keeps go into the blocks (and the Task log) like any other task,
+    inheriting their original tie/priority where known.
+    THEN the menu, in priority order:
+      1. WEEKLY GOALS (from the WEEKLY GOALS section), sorted by priority
+         then difficulty (nightmare → hard → normal → easy). This is the
+         default menu when the week is set up.
+      2. If no weekly goals: fall back to MONTHLY GOALS (if set), then the
+         profile's work_goals + life_goals (priority order).
+    Pull CONTEXT from the WORK LIBRARY for block descriptions (what the
+    project is, where it stands). Allocate tasks to blocks proportional to
+    complexity/priority — a deep task gets 2–3 blocks, small things share one.
+    Honor any explicit time the user states. Also collect, in passing: any
+    locked-in commitments not already on the calendar, and anything to
+    specifically avoid today (defaults to profile anti_patterns).
+    SUGGEST-TIER: When the user names a task that ties to no weekly goal:
+      - A clear, scoped, one-week piece of work → offer briefly: "This isn't
+        in your weekly goals — want me to add it to this week's weekly-goals
+        draft?" If yes, edit the draft at weekly_goals_file in place (add an
+        entry with the next available priority, difficulty: normal). If no
+        weekly-goals file exists yet, say they can run /weekly-review to set
+        that up.
+      - A broader new direction → offer: "This sounds like a new direction —
+        add it to the goals profile (profile new goals-profile) or to this
+        month's monthly goals (profile new monthly-goals)?" Take their pick.
+      Keep the offer short — one sentence. Never block the planning on it.
 
-  Do NOT use historical averages or "inferred from past plans" — those are removed.
-  Only include anchors that have a concrete source. Skip any with no real value.
+Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet).
+  STRUCTURE: lead with a consolidated **Today at a glance** table (time range
+  + action + tie). All subjective detail comes AFTER the table as supporting
+  sections. The table is the operating doc.
 
-  Present a compact pre-filled list, showing only the anchors you have:
-
-    "Here are your anchor times for today — all good, or anything different?
-     • Workout: {time} (fitness journal)
-     • Lunch: {time} {source}
-     • Dinner: {time} {source}
-     • Walk: {time} (habit reminder) — or omit this line if conflicted/no source
-     • Bed: {time} {source}
-    (Say what's different, e.g. 'dinner at 11:30pm, no walk today' — or 'all good'.)"
-
-  Wait for their reply. Store the confirmed anchor times as the fixed skeleton for Step 4.
-  Track which anchors differ from the profile's daily_anchors (or that the profile has no
-  daily_anchors yet) — Step 5 will offer to save any changes.
-
-Step 2 — Run the check-in as an INTERVIEW, not an exam. Do NOT dump a numbered
-  list of questions in one message. Instead, have a short back-and-forth: lead with
-  the morning, then let each answer steer what you ask next, asking ONE thing (or a
-  tight, naturally-related pair) per turn and waiting for the reply before moving on.
-  Keep it warm and brief — a conversation, not a form.
-
-  HOW TO RUN IT:
-  - OPEN with the morning, always first: "Before we plan — what time did you wake up,
-    and what time did you go to bed last night? Also, what have you got done since waking?"
-    Wait. This anchors the plan to the real day and gives you the sleep window.
-  - THEN let it flow adaptively. Read each answer and ask the natural next thing. If an
-    answer already covers a later topic (e.g. they mention "I've got a 4pm call" or "no
-    energy today"), DON'T re-ask it — note it and move on. Skip anything already answered
-    in passing. The goal is to feel heard, not interrogated.
-  - You may bundle two closely-related things in one turn when it reads naturally
-    (e.g. energy + how the body feels), but never more than that — no walls of questions.
-
-  DATA POINTS TO COLLECT (these are the fields the rest of the plan needs — gather them
-  through the conversation in whatever order fits, not as a fixed script). Referenced
-  later as q1–q9:
-  - q1 — wake time today.
-  - q1b — bed time last night (collected in the same opening turn as q1). Compute sleep
-    duration (bed → wake, adding 24h if bed > wake for the midnight crossing). If sleep
-    < 7h OR working_style.day_wreckers contains "sleep" (case-insensitive), flag it in
-    your reply: "You got Xh of sleep — that's one to watch today."
-  - q2 — what they've already done since waking (the important parts: work, meals,
-    exercise, errands). You'll backfill these as already-done (✓) rows.
-  - q3 — energy/mood right now (1–10 + a word).
-  - q4 — their TOP THINGS to get done today, named IN ORDER OF COMPLEXITY / PRIORITY
-    (most complex or highest-priority first). This is the Now / Next / Later input: usually
-    the top 3, but NOT capped — they can name 2, or 5. Ask for the things and their order,
-    NOT for block counts or start times — YOU allocate those in Step 4. A "thing" can be
-    any deliberate task: work, creative, seeing someone, a gym session. If they're unsure
-    of order, infer it from focus_today priority + how hard each sounds, and confirm.
-    On a low-energy day it's fine if they name only one thing or none.
-    (How these become blocks: Step 4 splits them across as many work blocks as the day
-    holds, giving the more complex / higher-priority things MORE blocks, tucking small
-    ones into a shared block, and weaving 30-min breaks between blocks — then shows the
-    proposed split for the user to adjust. You don't ask the user to place blocks or
-    breaks one by one.)
-  - q5 — any locked-in commitments not already mentioned (meetings, calls, appointments).
-  - q6 — roughly how many focused hours they have today.
-  - q7 — anything to specifically avoid today (defaults to profile anti_patterns if they
-    don't volunteer one).
-  - q8 — mood for creative work (yes / maybe / not today).
-  - q9 — anything to declutter or tidy (inbox, desk, files, tabs — or none).
-
-  q1/q1b and q2 anchor the plan to the real day: use q1 as the table's start time
-  (overriding the profile/inferred wake time if it differs), and log each important thing
-  from q2 as a ✓ row in the "Today at a glance" table. Sleep duration (q1b → q1) feeds
-  the coaching note and Notes section if short. These q-labels carry through to Steps 3–4.
-
-  Don't belabor it — if the user gives a lot up front, a couple of follow-ups is enough;
-  don't ask all nine just to complete the set. Once you have what you need to build a
-  real plan, move on.
-
-  DECLUTTER OVERRIDE: the declutter point (q9) is opt-out. If the user's standing
-  preferences say not to ask about decluttering, DON'T ask it at all. Otherwise work it in.
-  If the user says "stop asking me to declutter" this session, the self-improve check at
-  the end will offer to save that as a preference.
-
-Step 3 — Cadence sweep. Use CADENCE SIGNAL + profile's personal_anchors.relationships to decide if any touchpoints should be surfaced today. Rules of thumb (only suggest if the contact appears in personal_anchors.relationships):
-    - parents (mom/dad) gap >= 6 days → suggest a call
-    - siblings gap >= 14 days → suggest a quick check-in
-    - friends gap >= 7 days → suggest reaching out to one named friend from the profile
-    - creative gap >= 4 days AND user said yes/maybe in q8 → suggest a creative block tied to their craft from personal_anchors.creative_pursuits
-    - walk gap >= 2 days AND "daily walk" or similar is in personal_anchors.health_habits → suggest one
-  Phrase as suggestions, not commands. Skip anything the profile doesn't endorse.
-
-Step 4 — Generate the full day plan draft in memory (do NOT write to disk yet).
-  STRUCTURE: lead with a consolidated **Today at a glance** table (time range + action + tie). All subjective detail — coaching, eating, breaks, rest, avoids — comes AFTER the table as supporting sections. The table is the operating doc; the sections are reference.
-
-  Time-range rules — ANCHOR-FIRST approach:
-  Step 4a — Use the confirmed anchors from Step 1.5 as the fixed skeleton rows. Then layer on top:
-    1. CALENDAR EVENTS (from the TODAY'S CALENDAR block) and locked-in commitments from q5, plus explicit block times from q4 — these are absolute, never shift them. A calendar TIMED item must appear in the table at its exact time window with its title; tie it to a goal/category or "—". Two calendar items that overlap → keep both and flag the conflict to the user. Don't invent calendar items that aren't in the block.
-    2. The confirmed anchors (workout, lunch, dinner, walk, bed) — these are non-negotiable skeleton rows, scheduled AROUND the fixed calendar/commitment rows above.
-    Maximum 15–30 min variance from any confirmed anchor time. More than that is a plan error. Calendar items have ZERO variance — they sit exactly where the calendar says.
-    The skeleton arc is: wake → workout → post-workout/lunch → blocks → dinner → walk → wind-down → bed. Fill gaps with transitions, breaks, meals.
-  Step 4b — CRITICAL: The table ALWAYS starts at the user's actual wake time today (q1), NOT at current_time. If q1 differs from the profile/inferred wake time, q1 wins. current_time is only for surfacing reminders — it must NEVER influence where the plan begins. Even if /plan-my-day is run at 13:00 and wake time is 07:30, the first table row is 07:30. The plan spans the full day: wake → bed. BACKFILL the morning: everything the user reported in q2 (what they've already done since waking) goes into the table as already-done rows at its real time, marked with a ✓ in the Action cell — so the table reflects the whole real day, not just what's ahead.
-
-  ALLOCATE BLOCKS FROM TASKS (q4): the user gave a priority/complexity-ordered list of things to do, NOT pre-formed blocks. YOU turn that list into blocks:
-    - Estimate each task's complexity/effort from its description + its focus_today priority + the order the user gave (earlier = more complex/important).
-    - Give the more complex / higher-priority tasks MORE blocks (a deep task → 2–3 blocks; a medium task → 1 block; a small/light task → tuck it into the tail of another block or let one block hold 2 small things). Block count is proportional to complexity, not 1-per-task.
-    - There is NO 3-block cap — lay in as many ~deep_work_block_min blocks as the wake→bed span and the q6 focused-hours ceiling allow. A full day might be 5–6 blocks; a low-energy day might be 1.
-    - Default placement rhythm: morning block(s), then post-lunch, then evening (the Now / Next / Later arc — most complex/important first while fresh). Honor any time the user explicitly stated for a task.
-    - Each block ≥ deep_work_block_min wide; total intentional block time ≤ q6 hours.
-    - Label each block with its task(s) and tie it to the right goal/category in the Tie column.
-    - PROPOSE the split and let the user adjust (Step 4d already shows the table for confirmation — make the block→task allocation visible there, e.g. "Lettuce got 2 blocks, Spotify tucked into Kickapp's tail — adjust?").
-  Step 4b-breaks — BREAK BLOCKS: between every pair of CONSECUTIVE work/intentional blocks, weave in a ~break_block_min break row (default 30 min; from working_style.break_block_min, fallback 30). Each break's activity is drawn from working_style.break_activities (e.g. short walk, a couple of games, prep + eat a light snack, stretch) — ROTATE through the menu so consecutive breaks differ; don't repeat the same one back-to-back. Tie column = Rest (or Rest / Eating for a snack break, Rest / Fit body for a walk). These breaks are part of how gaps between blocks get filled — so two adjacent blocks become: block → break → block. If working_style.break_activities is empty/absent, fall back to a generic "Break — short walk / rest, no screens" row. Don't force a break before the very first block of the day or after the last (those gaps are filled by meals/transitions/wind-down as usual). Respect anti_patterns: if a break activity is on the avoid list today (e.g. EAFC over cap), pick a different one from the menu.
-  Step 4c — Use 24h times throughout (HH:MM–HH:MM). Never use "Morning / Midday / Evening" labels. Every row must have both a start and end time. Maximum 15–30 min deviation from learned/stated anchors unless the user explicitly set a different time.
-  - GAP-FREE & OVERLAP-FREE: the table must account for every span of time from wake to bed with NO gaps and NO overlaps. No two rows may overlap (one row ends exactly where/before the next begins); no unexplained empty time between rows. Fill any gap with an explicit rest / transition / meal / decompress row rather than leaving a hole. Already-done backfilled rows (from q2) follow the same rule — they tile cleanly alongside the planned rows. If a backfilled item and a planned anchor would overlap, adjust to remove the overlap and flag it to the user.
-  - REQUIRED rows (every plan must include ALL of these if confirmed): wake/morning-start, workout, lunch, dinner, walk (if anchored), wind-down, bed. Missing any of these is a plan error.
-  - Include in the table: every named block (Block 1, Block 2, … however many, with time windows), the break blocks woven between them, the fitness anchor, every meal window (breakfast if present, lunch, dinner), post-work walk if surfaced, wind-down start, bed-by. Every row's "Tie" column maps back to a current_focus goal, a profile category (Fit body, Rest, Eating, Relationships, Creative, Social), or "—" if standalone.
-  - Keep the table tight — one line per action, no wrapped text. Time | Action | Tie.
-  - Named blocks (Block 1, Block 2, …) should tie to a current_focus goal or profile category in the Tie column where possible.
+  Table rules — ANCHOR-FIRST:
+  a. CALENDAR EVENTS + locked-in commitments + explicit user-stated times are
+     absolute — never shift them. Calendar items sit at their exact window.
+     Two overlapping calendar items → keep both, flag the conflict.
+  b. The day's anchors — fitness session, meal slots (at the diet-profile
+     times, workout-shifted), walk, wind-down, bed — are the skeleton,
+     scheduled around (a). Maximum 15–30 min variance from a profile/diet
+     anchor time; prefer the TIMING SIGNAL average when a needed anchor has
+     no profile time.
+  c. The table ALWAYS starts at the user's actual wake time today (from 2a) —
+     NEVER at current_time. Everything from 2b is backfilled as ✓ rows at its
+     real time. The plan spans wake → bed.
+  d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
+     no gaps, no overlapping rows. Fill holes with explicit rest / transition
+     / meal / decompress rows. Backfilled rows tile cleanly too.
+  e. Blocks: as many session_length_min blocks as 2c settled on, each labeled
+     with its task(s), break rows woven between consecutive blocks (rotating
+     break_activities). No break before the first block or after the last.
+  f. 24h times (HH:MM–HH:MM) on every row. REQUIRED rows: wake/morning-start,
+     workout (if any), every meal slot, walk (if anchored), wind-down, bed.
+  g. Every row's Tie column maps to a work_goal/life_goal name, a category
+     (Fit body, Rest, Eating, Relationships, Creative, Social), or "—".
 
   ---
   type: plan
   date: $TODAY
   day_of_week: $DOW
+  week_period: $ISO_WEEK
   status: planned
-  energy: {1-10 from q3}
-  sleep_hours: {computed from q1b and q1, e.g. 7.5 — omit if q1b not given}
-  focus_today: [{current_focus goal names that any of the q4 blocks tie back to — empty array if none}]
+  energy: {1-10 from 2b}
+  sleep_hours: {from fitness_sleep or 2a — omit if unknown}
+  focus_today: [{the work_goal/life_goal names today's blocks tie back to — empty array if none}]
   tags: []
   ---
 
   # Day Plan — $TODAY ($DOW)
 
-  > {one short coaching note tuned to today's energy, top 3 picks, fitness intent, and sleep if short (< 7h). 1-2 sentences. No platitudes. Tie back to a goal if natural.}
+  > {one short coaching note tuned to today's energy, the top block, fitness
+  intent, and sleep if short (< 7h). 1-2 sentences. No platitudes.}
 
   ## Today at a glance
 
   | Time | Action | Tie |
   |---|---|---|
-  | {HH:MM–HH:MM} | {concrete action — e.g. "Pbrain plugin install fix"} | {goal name or category} |
-  | {HH:MM–HH:MM} | {next action} | {tie} |
+  | {HH:MM–HH:MM} | {concrete action; ✓ prefix for backfilled done rows} | {tie} |
   | ... | ... | ... |
 
-  (Rows in chronological order. Use 24h or 12h consistently — match what's in the user's journal/fitness file.)
+  ## Task log
+
+  | Task | Tie | Priority | Difficulty | Done at | Status | Notes |
+  |---|---|---|---|---|---|---|
+  | {task from 2d} | {weekly goal id or profile goal name} | {priority from the goal} | {difficulty: easy/normal/hard/nightmare} | | planned | |
+
+  _(Done at and Status are filled by /end-of-day. One row per task. Tasks not tied to a goal: priority = — , difficulty = — .)_
 
   ## Anchoring on
 
-  - {bullet per focus_today goal — name + the concrete this-week move from the profile. If focus_today is empty (none of today's top 3 tie back to a focus area), write a single line: "Today's work isn't tied to a current focus area — that's fine, just noting it." Don't pad.}
+  - {bullet per goal today's blocks tie back to — name + why it matters this
+  week. If none tie back, one line: "Today's work isn't tied to a standing
+  goal — that's fine, just noting it."}
 
-  (All sections below are supporting detail — the schedule lives in the table above. Sections add the "how / what to watch for", not the "when".)
+  (Sections below are supporting detail — the schedule lives in the table.)
 
   ## Anchors
 
-  - {fitness session — note the focus + RPE / duration from the fitness journal, not the time (which is in the table)}
-  - {each locked-in commitment from q5 with brief context, not the time — skip if none}
+  - {fitness session — focus + intensity from the fitness journal, not the time}
+  - {each locked-in commitment with brief context — skip if none}
 
   ## Blocks
 
-  - {ONE bullet per block the user named in q4 — however many (Block 1, Block 2, Block 3, Block 4, …). For each: **Block N (HH:MM–HH:MM):** type (work/creative/social/etc), concrete description + what "done" looks like. Time window must match the table row exactly. Minimum deep_work_block_min wide. Annotate "→ <goal/category>" if it ties back. Don't pad to a fixed count and don't cap at 3 — list exactly the blocks that exist today.}
-  - {The 30-min break blocks woven between them live in the table; you don't need a bullet each here, but you may add one line noting the break rhythm, e.g. "Each block is separated by a 30-min break (walk / 2 games / snack prep) — the rhythm, not a quota."}
-  - Cap on intentional block time today: {q6 number}h — ceiling, not floor.
+  - {ONE bullet per block: **Block N (HH:MM–HH:MM):** task(s), concrete
+  description + what "done" looks like — pull project context from the WORK
+  LIBRARY. Annotate "→ <goal>" where it ties back.}
+  - {one line on the break rhythm, e.g. "30-min breaks between blocks (walk /
+  games / snack prep rotation)."}
+  - Cap on intentional block time today: {from 2c}h — ceiling, not floor.
 
   ## Breaks & movement
 
-  - {2-4 bullets: posture breaks, short walks, sunlight, stretches — describe the move, not the clock}
-  - {if walk cadence gap surfaced, include an outdoor walk}
+  - {2-4 bullets: posture, short walks, sunlight, stretches — the move, not the clock}
 
   ## Eating
 
-  - {breakfast — what to eat, not when}
-  - {lunch — what to eat}
-  - {dinner — what to eat}
-  - Hydration: {target, e.g. 3L water}
-  - {if today is a training day per fitness journal, note refuel timing relative to the gym session}
-
-  ## Relationships
-
-  - {only include items surfaced in Step 3 — if no gaps are due, write "Nothing urgent today" and skip the bullets}
-  - {format each as a checkbox: "- [ ] Call mom (8 days)"}
-
-  ## Creative
-
-  - {if yes/maybe in q8, suggest 1 concrete block tied to a craft from profile.personal_anchors.creative_pursuits — "30-60 min music practice", "Draft one section after dinner", "Edit 10 photos", etc. If creative was already named as one of the q4 tasks/blocks, just reference it here — don't double-list.}
-  - {if not today, write "Skipping creative today — recharge"}
+  - {breakfast/lunch/dinner — what to eat, not when; note the workout-shifted
+  slot if today trains}
+  - Hydration: {target}
 
   ## Rest
 
-  - {1-2 lines on what NOT to do in the wind-down, tied to q7 and profile.anti_patterns. Times for wind-down and bed live in the table above.}
+  - {1-2 lines on what NOT to do in the wind-down, tied to anti_patterns}
 
   ## Avoiding today
 
-  - {union of q7 answers + profile.anti_patterns relevant for today, deduped — one bullet each}
+  - {union of what the user said in 2d + relevant profile anti_patterns, deduped}
 
   ## Notes
 
-  - {1-3 bullets: anything else worth flagging — interaction between fitness + work, weather, anything from the daily journal, day-wrecker signals}
-
-  ## Declutter
-
-  - {q9: if the user named a tidy/declutter task, write it as a checkbox — "- [ ] Clear inbox to zero". If they said none, or q9 was dropped per their preferences, write "—". /end-of-day reads this section and ticks it off.}
+  - {1-3 bullets: fitness-work interactions, journal carryovers, day-wrecker
+  signals, short-sleep flag}
 
   ---
 
   ## How it went (fill at end of day)
 
-  ### What I actually did
-  -
-
-  ### Wins
-  -
-
-  ### What slipped
+  ### Executive summary
   -
 
   ### Goal progress (vs the focus_today goals above)
   -
 
-  ### Energy curve
-  - Morning:
-  - Afternoon:
-  - Evening:
-
-  ### Tomorrow seed
+  ### Sleep
   -
 
-Step 4d — Show the full **Today at a glance** table to the user and ask for confirmation:
-  Show the table, then briefly name how you split the tasks into blocks (e.g. "Lettuce got 2 blocks since it's the deep one, Spotify's tucked into Kickapp's tail, 30-min breaks between each"), then ask: "Does this look right? You can re-split the blocks, change any times, swap or drop rows — just tell me what to adjust. Say 'looks good' to save."
-  Wait for their response. Apply any edits they request (time changes, new rows, renamed actions, dropped rows). Repeat the updated table if changes were made.
-  Once the user says it looks good (or gives no objections), write the complete plan — table + all sections — to $OUT_FILE.
+  ### Carry-forward
+  -
+
+Step 4 — Show the full **Today at a glance** table and ask for confirmation:
+  Show the table, briefly name how you split the tasks into blocks, then ask:
+  "Does this look right? Re-split blocks, change times, swap or drop rows —
+  just tell me. Say 'looks good' to save." Apply requested edits; repeat the
+  updated table if changes were made. Once confirmed, write the complete
+  plan — table + all sections — to $OUT_FILE.
 
 Step 5 — After writing, confirm: "Saved → $OUT_FILE"
 
-Step 5b — Anchor profile update (only if anchors changed or profile has no daily_anchors yet):
-  If today's confirmed anchors from Step 1.5 differ from the profile's daily_anchors, OR the profile has no daily_anchors block at all:
-  Offer once: "Today's anchor times differ from your profile — want me to save these as your new defaults?"
-  On yes: read $PROFILE_FILE, parse the JSON block, update (or add) the "daily_anchors" keys with today's confirmed values, write the file back. Only update the keys the user touched today — do not wipe other keys. Keep all other profile fields and the markdown prose intact. The JSON block must remain valid.
-  On no or if anchors matched exactly: skip silently.
-
 Step 5c — Reschedule habit reminders to planned times (silent, best-effort):
-  Look at the plan table you just wrote. For any row whose action corresponds
-  to a habit from today's tracker AND the row has an explicit start time,
-  align that habit's one-shot Apple Reminder to the planned time:
+  For any table row whose action corresponds to a habit from today's tracker
+  AND has an explicit start time, align that habit's one-shot Apple Reminder:
     bash "$HABITS_CMD" reminders-reschedule --habit "<name>" --time "HH:MM" --date $TODAY
-  Only call this for habits that appear at a specific clock time in the plan.
-  Ignore habits with no explicit time slot. NOT_LINKED / NOT_FOUND responses
-  mean the habit has no reminder — skip silently. No user output for this step.
+  Only for habits at a specific clock time. NOT_LINKED / NOT_FOUND → skip
+  silently. No user output for this step.
 
 Step 6 — Reminders (only if relevant — don't force it):
-  If anything time-bound came up while planning (a call/appointment at a set
-  time, "pay X today", "don't forget Y at 6") and it isn't already a pending
-  reminder, offer ONCE to set it so it pings as a notification:
+  If anything time-bound came up while planning (a call at a set time, "pay X
+  today") and it isn't already a pending reminder, offer ONCE to set it:
     bash "$REMIND_CMD" add --text "<clean text>" --due "<YYYY-MM-DD HH:MM>" [--repeat daily|weekdays|weekly|monthly]
   Resolve the due time relative to today ($TODAY) + the current time. Set it
-  only on a yes. Don't pester — at most one short offer covering all of them.
+  only on a yes. At most one short offer covering all of them.
 
 Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very end:
   PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says not to nag /
-  ask about habits, skip this whole step — don't show the checklist or ask.
-  a) Today's tracker is ALREADY created — the command auto-builds it whenever a
-     habits profile exists, so there is NO offer to make and nothing to ask. Just
-     state it in one line: if \`habits_track_created\` == yes, "Set up today's
-     habit tracker."; if \`no\`, "Today's habit tracker is ready." (it already
-     existed). Never ask "Want me to set up today's habit tracker?" again.
-  b) Show the user today's habit checklist from TODAY'S HABIT TRACKER — just the
-     table rows, concise. Then ask ONCE:
-       "Any you've already done today? Name them and I'll mark them now (e.g.
-        'meditation, walked'). Or skip — run /habits anytime through the day to
-        check and mark more, or just leave it and /end-of-day consolidates."
+  ask about habits, skip this whole step.
+  a) Today's tracker is ALREADY created — nothing to offer. One line: if
+     \`habits_track_created\` == yes, "Set up today's habit tracker."; if
+     \`no\`, "Today's habit tracker is ready."
+  b) Show today's habit checklist from TODAY'S HABIT TRACKER — just the table
+     rows, concise. Then ask ONCE:
+       "Any you've already done today? Name them and I'll mark them now. Or
+        skip — run /habits anytime, or /end-of-day consolidates."
   c) On any named habits, mark each one:
        bash "$HABITS_CMD" mark --habit "<name>" --date $TODAY
-     Then push those marks to Apple Reminders (best-effort, silent on failure):
+     Then push marks to Apple Reminders (best-effort, silent on failure):
        bash "$HABITS_CMD" reminders-sync --date $TODAY
      Confirm what was marked. One round only — don't loop asking for more.
-  Don't force marking — the tracker is auto-created; marking is one ask, no loop.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the

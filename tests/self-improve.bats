@@ -11,8 +11,9 @@
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
-  export XDG_CONFIG_HOME="$TMP/config"
-  mkdir -p "$XDG_CONFIG_HOME/pbrain"
+  # Prefs/feedback live in the vault under .pbrain/ — give the lib a vault.
+  export VAULT_DIR="$TMP/vault"
+  mkdir -p "$VAULT_DIR/.pbrain"
   source "$REPO_ROOT/lib/self-improve.sh"
 }
 
@@ -87,6 +88,21 @@ make_dev_repo() {
 
 @test "no command name returns 0 with no output" {
   run pbrain_emit_self_improve
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "emitted block points at the vault .pbrain paths" {
+  run pbrain_emit_self_improve journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$VAULT_DIR/.pbrain/journal/prefs.md"* ]]
+  [[ "$output" == *"$VAULT_DIR/.pbrain/journal/feedback.md"* ]]
+  [[ "$output" == *"$VAULT_DIR/.pbrain/_global/prefs.md"* ]]
+}
+
+@test "no vault and no overrides emits nothing and returns 0" {
+  unset VAULT_DIR PBRAIN_PREFS_DIR PBRAIN_FEEDBACK_DIR
+  run pbrain_emit_self_improve journal
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }

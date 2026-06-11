@@ -429,14 +429,35 @@ final class Tracker {
     //     (2) VIDEO: an allowlisted media app (browser/player) holding the assertion
     //         directly — video keeping the Mac awake, possibly muted. Allowlisted
     //         to avoid false positives from non-media holders.
+    // Parent PID via libproc, for walking a helper child up to its main app.
+    private func parentPid(_ pid: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let sz = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let r = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sz)
+        guard r == sz else { return nil }
+        return pid_t(info.pbi_ppid)
+    }
+
+    // Resolve a PID to its owning app's bundle id. A browser plays audio/video in
+    // a HELPER child process which is NOT an NSRunningApplication (returns nil), so
+    // walk up the parent chain until we hit the real app (the main browser).
+    private func appBundle(forPid pid: pid_t) -> String? {
+        var cur: pid_t? = pid
+        var hops = 0
+        while let p = cur, p > 1, hops < 6 {
+            if let app = NSRunningApplication(processIdentifier: p), let b = app.bundleIdentifier {
+                return b
+            }
+            cur = parentPid(p); hops += 1
+        }
+        return nil
+    }
+
     private func scanAssertions() -> (all: Set<String>, media: Set<String>) {
         var byProc: Unmanaged<CFDictionary>?
         guard IOPMCopyAssertionsByProcess(&byProc) == kIOReturnSuccess,
               let dict = byProc?.takeRetainedValue() as? [AnyHashable: Any] else {
             return ([], [])
-        }
-        func bundle(forPid pid: pid_t) -> String? {
-            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
         }
         var all: Set<String> = []
         var media: Set<String> = []
@@ -448,19 +469,26 @@ final class Tracker {
                 guard type == "PreventUserIdleDisplaySleep" || type == "PreventUserIdleSystemSleep"
                 else { continue }
                 let onBehalf = (a["AssertionOnBehalfOfPID"] as? NSNumber)?.int32Value ?? -1
-                // Responsible app = the on-behalf-of app if present, else the owner.
-                let respBundle = (onBehalf > 0 ? bundle(forPid: onBehalf) : nil) ?? (ownerPid > 0 ? bundle(forPid: ownerPid) : nil)
+                // Responsible app = the on-behalf-of app if present, else the owner
+                // (helper PIDs are walked up to the main app).
+                let respPid = onBehalf > 0 ? onBehalf : ownerPid
+                let respBundle = respPid > 0 ? appBundle(forPid: respPid) : nil
                 if let rb = respBundle { all.insert(rb) }
-                // (1) Audio playback: owner is the audio daemon, on behalf of an app.
+                guard let rb = respBundle, mediaBase(of: rb) != nil else { continue }
+                // Only KNOWN media apps count as background media (rekordbox, DAWs,
+                // calls, etc. are excluded). Audio playback is signalled by
+                // coreaudiod asserting on behalf of the app; EXCLUDE assertions that
+                // also capture audio-in (recording / monitoring / a call — not
+                // passive media). Video (display-sleep) by a media app also counts.
                 let proc = (a["Process Name"] as? String) ?? ""
                 let aname = (a["AssertName"] as? String) ?? ""
                 let resources = ((a["ResourcesUsed"] as? [Any])?.map { "\($0)" } ?? []).joined(separator: ",")
                 let isAudio = proc == "coreaudiod" || aname.contains("com.apple.audio") || resources.contains("audio-out")
-                if isAudio, onBehalf > 0, let b = bundle(forPid: onBehalf) {
-                    media.insert(b)
-                } else if let rb = respBundle, mediaBase(of: rb) != nil {
-                    // (2) Video by an allowlisted media app.
-                    media.insert(rb)
+                let capturesInput = resources.contains("audio-in")
+                if isAudio {
+                    if !capturesInput { media.insert(rb) }
+                } else {
+                    media.insert(rb)   // video / display-sleep by a media app
                 }
             }
         }

@@ -10,6 +10,9 @@
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
+  export PBRAIN_MIGRATIONS=0   # keep the vault migration runner out of unit tests
+  export PBRAIN_UPDATE_CHECK=0  # never hit the network / nag in unit tests
+  export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"
   export PBRAIN_VAULT="$TMP/vault"
   export PBRAIN_PLAN_DIR="$TMP/plans"
   export PBRAIN_JOURNAL_DIR="$TMP/journal"
@@ -64,4 +67,22 @@ EOD() { bash "$SH" "$@"; }
   run EOD --date 2026-06-01
   [ "$status" -eq 0 ]
   [[ "$output" == *"Monday"* ]]
+}
+
+# ── task-log and weekly-goal rollup ─────────────────────────────────────────
+
+@test "end-of-day: iso_week is present in output" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"iso_week:"* ]]
+}
+
+@test "end-of-day: weekly_goals_file is (not set up) when no store exists" {
+  run EOD --date 2026-06-01
+  [[ "$output" == *"weekly_goals_file: (not set up)"* ]]
+}
+
+@test "end-of-day: task-log actuals instructions mention Done at and Status" {
+  run EOD --date 2026-06-01
+  [[ "$output" == *"Done at"* ]] && [[ "$output" == *"Status"* ]]
 }

@@ -14,6 +14,7 @@ set -euo pipefail
 #   PBRAIN_JOURNAL_DIR       — today's daily journal (cross-ref)
 #   PBRAIN_FITNESS_DIR       — today's fitness session (cross-ref)
 #   PBRAIN_DIET_DIR          — today's diet log (cross-ref)
+#   PBRAIN_THOUGHTS_DIR      — today's captured thoughts (cross-ref, summary feed)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -31,6 +32,7 @@ PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
+THOUGHTS_DIR="${PBRAIN_THOUGHTS_DIR:-$VAULT_DIR/life/thought-tracking}"
 
 TODAY="$(date +%Y-%m-%d)"
 # Optional target date — close a PAST day (e.g. "for previous day") with
@@ -50,9 +52,18 @@ if ! [[ "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
 fi
 # Day-of-week for the target date (not necessarily today). macOS `date -j`.
 DOW="$(date -j -f "%Y-%m-%d" "$TODAY" +%A 2>/dev/null || date +%A)"
+ISO_WEEK="$(python3 -c "import datetime; d=datetime.date.fromisoformat('$TODAY'); y,w,_=d.isocalendar(); print(f'{y}-W{w:02d}')")"
+# Boundary flags: is the target date the last day of its ISO week (Sunday) /
+# its calendar month? Drives the once-per-boundary review nudge at close.
+WEEK_END="$(python3 -c "import datetime; d=datetime.date.fromisoformat('$TODAY'); print('yes' if d.weekday()==6 else 'no')")"
+MONTH_END="$(python3 -c "import datetime; d=datetime.date.fromisoformat('$TODAY'); print('yes' if (d+datetime.timedelta(days=1)).month!=d.month else 'no')")"
 
 PLAN_FILE="$PLAN_DIR/$TODAY.md"
 JOURNAL_FILE="$DAILY_DIR/$TODAY.md"
+GRATITUDE_FILE="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}/$TODAY.md"
+THOUGHTS_FILE="$THOUGHTS_DIR/$TODAY.md"
+PLAN_STORE="$(pbrain_profile_store "$PLAN_DIR")"
+WEEKLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$PLAN_STORE" weekly-goals "$ISO_WEEK" || true)"
 FITNESS_FILE="$FITNESS_DIR/$TODAY.md"
 DIET_FILE="$DIET_DIR/$TODAY.md"
 
@@ -72,8 +83,8 @@ exists() {
 }
 
 # Detect whether the plan's "How it went" section is still on its template
-# placeholders (single "-" bullets and empty energy curve lines) so we can
-# warn the user if they're about to overwrite a filled close.
+# placeholders (bare "-" bullets) so we can warn the user if they're about to
+# overwrite a filled close.
 already_closed() {
   local f="$1"
   [[ -f "$f" ]] || { echo no; return; }
@@ -81,10 +92,9 @@ already_closed() {
     /^## How it went/ {in_sec=1; next}
     /^---$/ && in_sec {exit}
     in_sec {
-      # any non-empty line that is not a header, not the placeholder "-",
-      # and not a bare "Morning:"/"Afternoon:"/"Evening:" energy template
+      # any non-empty line that is not a header and not the placeholder "-"
       gsub(/^[ \t]+|[ \t]+$/, "", $0)
-      if ($0 == "" || $0 ~ /^#/ || $0 == "-" || $0 ~ /^- (Morning|Afternoon|Evening):$/) next
+      if ($0 == "" || $0 ~ /^#/ || $0 == "-") next
       print "filled"
       exit
     }
@@ -119,8 +129,15 @@ fi
 cat <<PROMPT
 END_OF_DAY_SESSION
 date: $TODAY ($DOW)
+is_today: $([[ "$TODAY" == "$(date +%Y-%m-%d)" ]] && echo yes || echo no)
+iso_week: $ISO_WEEK
+week_end: $WEEK_END
+month_end: $MONTH_END
 plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"), already_closed: $CLOSED)
+weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}
 journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
+gratitude_file: $GRATITUDE_FILE (exists: $(exists "$GRATITUDE_FILE"))
+thoughts_file: $THOUGHTS_FILE (exists: $(exists "$THOUGHTS_FILE"))
 fitness_file: $FITNESS_FILE (exists: $(exists "$FITNESS_FILE"))
 diet_file: $DIET_FILE (exists: $(exists "$DIET_FILE"))
 habits_setup_needed: $HABITS_SETUP_NEEDED
@@ -132,6 +149,9 @@ $(read_or_missing "$PLAN_FILE")
 --- JOURNAL ---
 $(read_or_missing "$JOURNAL_FILE")
 
+--- THOUGHTS ---
+$(read_or_missing "$THOUGHTS_FILE")
+
 --- FITNESS ---
 $(read_or_missing "$FITNESS_FILE")
 
@@ -142,81 +162,113 @@ $(read_or_missing "$DIET_FILE")
 $HABITS_ROLLUP
 --- END CONTEXT ---
 
-INSTRUCTIONS: Walk the user through a close-of-day reflection and fill the
-existing "## How it went" section of the plan file in place. The plan file
-is the single record for the day — no sibling close files.
+INSTRUCTIONS: This is a COMPLETION PASS, not a reflection journal. Take what
+the day's tables + tracker already record, ask ONLY specific gap-filling
+questions (NEVER open-ended "how did it go / what did you learn" prompts),
+make sure all the day's trackings are complete, then write a lean executive
+summary into the "## How it went" section of the plan file in place. The plan
+file is the single record for the day — no sibling close files.
 
 Step 0 — Preflight:
   - If plan_file exists == no: tell the user "No /plan-my-day for today — I'll
-    write a free-form close at the top of a new $PLAN_FILE." Then proceed.
+    write a free-form close at the top of a new $PLAN_FILE." Skip the Phase B
+    Q1 table walk (there's no table); still run Q2–Q5 and write the summary.
   - If already_closed == yes: tell the user "Today's plan already has a
     filled-in 'How it went'. Want me to overwrite, append a note, or skip?"
     Wait for direction.
 
-Step 1 — Skim every section above. Don't summarize generically. Note specific
-items the user planned, what their journal mentioned, whether they trained,
-whether they logged meals, whether the cross-ref files corroborate the day.
+Step 1 — PHASE A: reconcile silently, then recap. Skim every section above and
+pull what's already known WITHOUT asking — task-log rows already resolved (Status
+!= planned), backfilled "✓" rows in "## Today at a glance", diet rows already
+"eaten", the fitness session status, habit marks already in the rollup, the
+laptop report, and anything in the journal/thoughts. Print ONE compact recap —
+"Here's your day so far: …" (a few lines, no table dump) — so the user can just
+confirm by exception. Then ask only the gaps in Phase B.
 
-Step 2 — Ask, ONE question at a time. Wait for each answer before asking the next.
-  1) "Against today's plan — what got done?" (anchor explicitly to the plan
-     items so the user can confirm/deny each)
-  2) "What got dropped, and was that the right call?"
-  3) "Energy curve — morning / afternoon / evening? (1–10 each, or a word each)"
-  4) "One thing to carry into tomorrow."
-  5) DIET — ask ALWAYS if diet_file exists: "Anything to add to today's diet
-     log — dinner, evening snack, anything not in there yet? (Skip if it's
-     all logged.)" Use the answer in Step 4a. If the user says nothing /
-     skip / already done, note that and proceed without asking again.
-  6) HABITS — ask ONLY IF habits_setup_needed == no: From the HABITS block
-     above, collect (a) today's due BUILD habits — those marked "⏳" or
-     "not yet today" — and (b) today's LIMIT habits. Ask in ONE message:
-     "Habits check — {comma-separated due build habits}: which did you do?
-     And {limit habits}: anything to flag on those?"
-     Wait for the answer. Use ONLY this explicit answer in Step 4e — do
-     NOT infer habits from any other part of the conversation.
-  7) DECLUTTER — ask ONLY IF the plan above has a "## Declutter" section with an
-     unchecked item ("- [ ]"): "Did you get to the declutter task — {item}?"
-     SKIP this question entirely if there's no declutter item, it's already
-     ticked ("- [x]"), or the user's preferences (top of session) say not to ask
-     about decluttering.
+Step 2 — PHASE B: ask ONLY the gaps, ONE domain per message, waiting for each
+answer. Every question is SPECIFIC — list the actual unresolved items. Do NOT
+ask open-ended reflection questions.
+  Q1) DAILY PLANNING — from "## Today at a glance" + "## Task log", take every
+     already-resolved row as-is. For the REST, list them by name and ask in ONE
+     message: "Still open from today's plan — {task / block names}: which got
+     done, partial, not started, or n/a?" If every row is already resolved, skip
+     this question.
+  Q2) FITNESS + SLEEP — combine in ONE message:
+     - If the fitness session status is still "planned": "Did today's {activity}
+       session happen?"
+     - SLEEP, ONLY IF \`is_today\` == yes: "On track to sleep on time tonight
+       (bed ~{sleep_bed from the fitness frontmatter or profile})? If not, why?"
+       (This tonight-intention feeds the "### Sleep" line — it is NOT the
+       Sleep-well habit score, which is last night's logged data.) When
+       \`is_today\` == no (closing a past day), skip the tonight question.
+  Q3) DIET — ask ONLY IF diet_file exists == yes. List the meal rows not yet
+     "eaten": "Not logged yet — {slot names}. What did you have, or skip?" If
+     EVERY row is already "eaten": "Diet log looks complete — any snack/shake to
+     add?" Use the answer in Step 4a.
+  Q4) HABITS — ask ONLY IF habits_setup_needed == no: From the HABITS block,
+     collect (a) today's due BUILD habits marked "⏳" / "not yet today" and
+     (b) today's LIMIT habits. Ask in ONE message: "Habits check — {due build
+     habits}: which did you do? And {limit habits}: anything to flag?" Use ONLY
+     this explicit answer in Step 4e — do NOT infer habits from the rest of the
+     conversation.
+  Q5) OPEN QUESTIONS — ask ONLY IF the journal above contains unresolved open
+     questions (an "Open questions" section or "?"-terminated lines). List them:
+     "This morning you asked: {questions} — did any resolve? (skip any that
+     didn't)". Fold the answers into the executive summary; skip this question
+     silently when the journal has none.
 
-If Q1's answer makes it clear the day went sideways (illness, crisis,
-just-rough), skip Q2 and soften the rest.
+If a Phase B answer makes it clear the day went sideways (illness, crisis,
+just-rough), keep the remaining questions minimal and the summary soft.
 
 Step 3 — Use the Edit tool to replace the existing "## How it went" section
 of $PLAN_FILE in place. Match the section exactly as it appears in the file
 (headers may be "## How it went" or "## How it went (fill at end of day)").
-The new section must follow this shape:
+The new section is a LEAN executive summary — no energy curve, no open-ended
+reflection — in this exact shape:
 
   ## How it went
 
-  ### What I actually did
-  - {bullets from Q1, in the user's voice}
-
-  ### Wins
-  - {1–4 bullets derived from Q1 + cross-ref files — real wins only, no padding}
-
-  ### What slipped
-  - {bullets from Q2, in the user's voice}
+  ### Executive summary
+  - {2–5 bullets: small wins across work, diet, fitness, relationships —
+     synthesized from the filled tables + journal + thoughts + Q5 answers.
+     Omit any category with nothing logged. Concrete, in the user's voice.}
 
   ### Goal progress (vs the focus_today goals above)
-  - {one bullet per focus_today goal — net positive / flat / negative with a sentence of why,
-     drawing from Q1 + Q2 + cross-ref files}
+  - {one bullet per focus_today goal — net positive / flat / negative with a
+     sentence of why, drawing from the filled tables + cross-ref files}
 
-  ### Energy curve
-  - Morning: {from Q3}
-  - Afternoon: {from Q3}
-  - Evening: {from Q3}
+  ### Sleep
+  - {Q2 tonight-intention: target bed vs reality, the reason if running late.
+     When is_today == no, write last night's logged sleep instead.}
 
-  ### Tomorrow seed
-  - {verbatim from Q4}
+  ### Carry-forward
+  - {auto-derived in Step 3c — leave the bullets for that step to fill}
+
+Step 3b — Fill BOTH tables. Use the Edit tool on $PLAN_FILE in place.
+  - "## Task log": fill the \`Done at\` and \`Status\` columns for each row from
+    Q1 (and the already-resolved rows from Phase A):
+      Task completed → Done at: HH:MM, Status: done
+      Task partially done → Status: partial
+      Task not touched → Status: not started
+      Task not applicable today → Status: n/a
+  - "## Today at a glance": prefix each block that actually happened with "✓ "
+    in the Action cell (the table's existing done-row convention). Leave blocks
+    that didn't happen unprefixed.
+  Skip either silently if that section isn't in the plan.
+
+Step 3c — CARRY-FORWARD. From the filled "## Task log", collect every row with
+Status "not started" or "partial". Write them as the bullets of the
+"### Carry-forward" subsection (from Step 3) — one bullet per carried task,
+phrased as a ready-to-schedule task ("{task} (carried from $TODAY)"). This is
+auto-derived — do NOT ask the user for a "tomorrow seed". If no task slipped,
+write a single "- (nothing carried)" bullet. /plan-my-day reads this next day.
 
 Step 4 — Propagate the close into the cross-ref files. This is bookkeeping
 the user expects to be automatic — do all of these whenever the inputs apply,
 without re-asking. Use the Edit tool on each file.
 
-4a) DIET FILE (\$DIET_FILE) — if Q1 mentions food, OR diet_file has any meal
-    row with status != "eaten":
+4a) DIET FILE (\$DIET_FILE) — ONLY if diet_file exists == yes, driven by Q3's
+    answer (the unlogged-meals reply):
 
   • For every meal row whose status is "planned"/"planned (revise)"/"proposed":
     - If the user described what they actually ate for that slot → replace
@@ -227,7 +279,7 @@ without re-asking. Use the Edit tool on each file.
       zero out the macros.
   • Recompute the **Total (actual)** row and the **Net vs target** row.
     Header for that row should read "Total (actual)" — not "Total (so far)".
-  • Update the **Hydration** / **Late eating (after 9pm)** lines from Q1.
+  • Update the **Hydration** / **Late eating (after 9pm)** lines from Q3.
   • REBUILD the **Nutrition Analysis** table against actuals — don't leave
     stale notes referencing the planned dinner. Each row's note must reflect
     what actually happened today, with ✅/⚠️/❌ recalibrated to actual numbers.
@@ -239,24 +291,20 @@ without re-asking. Use the Edit tool on each file.
   • Update the **Coach note** at the bottom to reflect the day that actually
     happened — name the real wins + the real gaps, not the projected ones.
 
-4b) FITNESS FILE (\$FITNESS_FILE) — if Q1 mentions any movement at all:
+4b) FITNESS FILE (\$FITNESS_FILE) — from Q2's answer about the session (plus any
+    movement mentioned elsewhere):
 
   • If the planned session happened → flip frontmatter "status: planned" to
     "status: completed". Don't touch the logged sets the user already filled.
   • If the planned session was skipped → frontmatter "status: skipped" with a
     one-line reason in the body.
-  • If Q1 mentions ADDITIONAL movement beyond the planned session (walks,
+  • If the user mentions ADDITIONAL movement beyond the planned session (walks,
     ring closes, extra cardio, yoga, kickboxing, etc.) → append a section
     titled "## Other movement today" at the bottom with bullets for each
     item. Include rough timing if the user said it. Don't invent items.
 
 4c) JOURNAL FILE (\$JOURNAL_FILE) — leave alone. The journal is the user's
     own raw voice from earlier in the day; the close does not edit it.
-
-4d) DECLUTTER — if you asked Q5 and the user did the task, tick its checkbox in
-    the plan file: "- [ ] {item}" → "- [x] {item}". If they didn't get to it,
-    leave it unchecked (it surfaces in /loose-ends). No new section, just the
-    tick.
 
 4e) HABITS — read the HABITS block + \`habits_setup_needed\`:
     - If \`habits_setup_needed\` == yes: mention ONCE (unless prefs say not to
@@ -265,8 +313,31 @@ without re-asking. Use the Edit tool on each file.
     - If a rollup is present: note standouts in one line (a limit habit over
       cap, a high-priority build habit that lagged). Marking today's habits
       uses the HABIT EXTRACTION block below — but use ONLY the user's explicit
-      answer from Step 2 Q6 (not auto-inference from the rest of the
+      answer from Step 2 Q4 (not auto-inference from the rest of the
       conversation). Mark what they confirmed; leave everything else unmarked.
+    - SCORED DEFAULTS — end-of-day is the BACKSTOP that marks ALL FOUR scored
+      defaults from the day's data (do these AFTER Step 3b filled the task-log
+      actuals + the ✓ blocks, and 4a/4b updated diet/fitness — they read those,
+      not Q4). Each mark is idempotent (one cell/day): if /plan-my-day,
+      /diet-journal or /fitness-journal already marked it, re-marking just
+      reflects the closed value. Only mark a default that is actually a tracked
+      [scored] habit AND has its input data:
+      • "Work the plan" (weighted_completion) — if the plan has a "## Task log"
+        table, build the --items JSON from EVERY row (priority, difficulty,
+        status as filled in 3b) and mark it per the HABIT EXTRACTION block. No
+        task log → skip.
+      • "Train" (session_volume) — if a fitness session was logged or closed
+        today (4b), build the --session JSON (mode/status/planned/actual from
+        the session log vs the activity plan) and mark it per the session_volume
+        instructions. No movement today → skip.
+      • "Eat clean" (meal_ratio) — if diet_file exists and was reconciled in 4a,
+        count CLEAN vs UNCLEAN meals from the closed diet log and mark it with
+        --good <clean> --bad <unclean> per the HABIT EXTRACTION block. No diet
+        log → skip.
+      • "Sleep well" (deviation) — if the fitness frontmatter carries last
+        night's sleep, mark it with --actual-time <sleep_bed> --actual-hours
+        <sleep_hours> (this scores LAST night — the same data /fitness-journal
+        uses, distinct from Q2's tonight-intention). No sleep data → skip.
       THEN consolidate:
         bash "$HABITS_CMD" consolidate --date $TODAY
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
@@ -296,11 +367,30 @@ without re-asking. Use the Edit tool on each file.
     Reminders ONLY — a Calendar event has no "done" state, so never touch
     calendar items here.
 
+4h) WEEKLY-GOAL ROLLUP — if \`weekly_goals_file\` is a real path (not "(not set up)"),
+    update the weekly-goals draft in place based on today's task-log actuals:
+    - For each task-log row with Status = done: find the matching goal in the
+      weekly-goals JSON (match by "tie" or by goal text similarity) and set its
+      "status" to "in_progress" (if not already "done" for the period — a weekly
+      goal may take multiple days). If ALL tasks tied to a goal are done, set
+      "status": "done".
+    - For tasks with Status = partial: set "status": "in_progress" if it was "active".
+    - Leave goals with no matching done task unchanged.
+    Use the Edit tool to update the JSON block in $WEEKLY_GOALS_FILE in place.
+    Only edit if weekly_goals_file is a real path. Skip silently otherwise.
+
 4g) LAPTOP USAGE — if \`laptop_report_file\` is a path (not "(none)"), today's
     laptop-usage report was already rendered to that file. Read it and weave ONE
     grounded line into the close (e.g. "5h 12m active, mostly Chrome — 2h on
     github.com"). Don't paste the whole table. If it's "(none)", say nothing
     about laptop usage (the tracker isn't set up).
+
+4i) BOUNDARY REVIEW NUDGE — a once-per-boundary pointer, non-blocking:
+    - If \`week_end\` == yes: add ONE line — "That closes the week. /weekly-review
+      when you're ready." Skip if a weekly review for this ISO week already exists.
+    - If \`month_end\` == yes: add ONE line — "Last day of the month. /monthly-review
+      to zoom out." Skip if a monthly review for this month already exists.
+    Just the pointer — do NOT run the review here or block the close on it.
 
 Do these silently as part of writing the close — surface one short summary
 line per file you touched in your final message. Do NOT skip 4a/4b because
@@ -308,6 +398,12 @@ they feel like extra work; this is the entire point of the new flow.
 
 Don't go beyond what the user said — these updates are bookkeeping, not
 new analysis or new prescriptions.
+
+Step 4j — COMPLETENESS NOTE (silent unless something's missing): if no journal
+(journal_file exists == no) or no gratitude (gratitude_file exists == no) was
+written today, add ONE neutral line that the summary is thinner for it (e.g.
+"No journal today, so the summary is light."). This is a note, NOT a nag — never
+push the user to go back and write them.
 
 Step 5 — Print the plan file path and ONE line of warmth. Examples:
   "Locked in. Sleep well."

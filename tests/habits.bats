@@ -9,6 +9,9 @@
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
+  export PBRAIN_MIGRATIONS=0   # keep the vault migration runner out of unit tests
+  export PBRAIN_UPDATE_CHECK=0  # never hit the network / nag in unit tests
+  export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"
   export PBRAIN_DB_FILE="$TMP/pbrain.db"
   export PBRAIN_HABITS_PROFILE_FILE="$TMP/Habits Profile.md"
   export PBRAIN_HABIT_TRACK_DIR="$TMP/habit-tracking"
@@ -1219,4 +1222,558 @@ EOF
   [ "$status" -eq 0 ]
   # Apple Reminders is stubbed to UNAVAILABLE in test setup; any non-EDITED response is acceptable
   [[ "$output" != "NOT_LINKED" && "$output" != "NOT_FOUND" ]]
+}
+
+# ── new scoring types: meal_ratio + deviation ───────────────────────────────
+
+_write_v2_scored_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+date: 2026-06-03
+tags: []
+---
+
+# Habits profile
+
+```json
+{
+  "created": "2026-06-03",
+  "habits": [
+    { "id": "eat-clean",  "name": "Eat clean",  "schedule_type": "daily", "direction": "at_least", "target_count": null, "priority": "high", "archived": false,
+      "unit": "", "measure_target": 80, "scoring": { "type": "meal_ratio" } },
+    { "id": "sleep-well", "name": "Sleep well", "schedule_type": "daily", "direction": "at_least", "target_count": null, "priority": "high", "archived": false,
+      "unit": "", "measure_target": 80,
+      "scoring": { "type": "deviation", "normal_time": "23:00", "normal_hours": 8.0,
+                   "unit_minutes": 30, "unit_hours": 0.5, "ladder": [100, 90, 75, 50, 25, 0] } }
+  ]
+}
+```
+EOF
+}
+
+@test "score meal_ratio: 5 clean 1 unclean -> 83" {
+  _write_v2_scored_profile
+  run HABITS score --name "Eat clean" --good 5 --bad 1
+  [ "$status" -eq 0 ]
+  [ "$output" = "83" ]
+}
+
+@test "score meal_ratio: 2 clean 1 unclean -> 67 (fewer meals weigh slips more)" {
+  _write_v2_scored_profile
+  run HABITS score --name "Eat clean" --good 2 --bad 1
+  [ "$output" = "67" ]
+}
+
+@test "score meal_ratio: zero meals -> blank (caller falls back)" {
+  _write_v2_scored_profile
+  run HABITS score --name "Eat clean" --good 0 --bad 0
+  [ -z "$output" ]
+}
+
+@test "score deviation: exactly normal -> 100" {
+  _write_v2_scored_profile
+  run HABITS score --name "Sleep well" --actual-time 23:00 --actual-hours 8
+  [ "$output" = "100" ]
+}
+
+@test "score deviation: 1h late + 1h short -> 4 slips -> 25" {
+  _write_v2_scored_profile
+  run HABITS score --name "Sleep well" --actual-time 00:00 --actual-hours 7
+  [ "$output" = "25" ]
+}
+
+@test "score deviation: midnight crossing is circular (00:30 vs 23:00 = 90min)" {
+  _write_v2_scored_profile
+  # 90 min late -> 3 slips; hours on target -> ladder[3] = 50
+  run HABITS score --name "Sleep well" --actual-time 00:30 --actual-hours 8
+  [ "$output" = "50" ]
+}
+
+@test "mark with --actual-time/--actual-hours writes the deviation score as amount" {
+  _write_v2_scored_profile
+  run HABITS mark --name "Sleep well" --date 2026-06-03 --actual-time 00:00 --actual-hours 7
+  [ "$status" -eq 0 ]
+  amt="$(python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+row = con.execute(\"SELECT amount FROM habit_events WHERE habit_id='sleep-well' AND occurred_on='2026-06-03'\").fetchone()
+print(row[0] if row else 'none')
+" "$PBRAIN_DB_FILE")"
+  [ "$amt" = "25.0" ]
+}
+
+# ── default-habit seeding (eat-clean + sleep-well) ──────────────────────────
+
+_plant_source_profiles() {
+  mkdir -p "$PBRAIN_VAULT/fitness/diet-tracking/.profile" \
+           "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
+  cat > "$PBRAIN_VAULT/fitness/diet-tracking/.profile/diet-profile.v1.md" <<'EOF'
+---
+type: diet-profile
+version: 1
+committed: true
+---
+# Diet profile
+```json
+{"created": "2026-06-03", "meal_slots": ["Breakfast", "Lunch", "Dinner"]}
+```
+EOF
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-profile.v1.md" <<'EOF'
+---
+type: fitness-profile
+version: 1
+committed: true
+---
+# Fitness profile
+```json
+{"created": "2026-06-03",
+ "sleep": {"bed_time": "23:15", "wake_time": "07:15", "hours": 8.0},
+ "steps_per_day": 8000}
+```
+EOF
+}
+
+@test "dashboard seeds eat-clean + sleep-well when diet + fitness profiles exist" {
+  _write_profile
+  _plant_source_profiles
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added default habit: Eat clean"* ]]
+  [[ "$output" == *"Added default habit: Sleep well"* ]]
+  grep -q '"id": "eat-clean"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"id": "sleep-well"' "$PBRAIN_HABITS_PROFILE_FILE"
+  # sleep-well bakes the normal window from the fitness profile
+  grep -q '"normal_time": "23:15"' "$PBRAIN_HABITS_PROFILE_FILE"
+}
+
+@test "seeding is idempotent on re-run" {
+  _write_profile
+  _plant_source_profiles
+  HABITS >/dev/null
+  run HABITS
+  [[ "$output" != *"Added default habit"* ]]
+  [ "$(grep -c '"id": "eat-clean"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
+}
+
+@test "an archived default habit is never resurrected" {
+  _write_profile
+  _plant_source_profiles
+  HABITS >/dev/null
+  HABITS archive --id eat-clean >/dev/null
+  run HABITS
+  [[ "$output" != *"Added default habit: Eat clean"* ]]
+}
+
+@test "no seeding without the source profiles" {
+  _write_profile
+  run HABITS
+  [[ "$output" != *"Added default habit"* ]]
+}
+
+@test "extraction emitter explains meal_ratio and deviation marking" {
+  _write_v2_scored_profile
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract test-cmd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--actual-time HH:MM"* ]]
+  [[ "$output" == *"clean vs unclean MEALS"* ]]
+}
+
+# ── bootstrap + profile subcommand (versioned store) ────────────────────────
+
+@test "add bootstrap without override lands in the versioned store, committed" {
+  unset PBRAIN_HABITS_PROFILE_FILE
+  run HABITS add --name "Meditate" --type daily
+  [ "$status" -eq 0 ]
+  local store_file="$PBRAIN_HABIT_TRACK_DIR/.profile/habits-profile.v1.md"
+  [ -f "$store_file" ]
+  grep -q '^version: 1$' "$store_file"
+  grep -q '^committed: true$' "$store_file"
+  grep -q '"id": "meditate"' "$store_file"
+}
+
+@test "profile subcommand: new mints a draft, commit freezes it" {
+  unset PBRAIN_HABITS_PROFILE_FILE
+  HABITS add --name "Meditate" --type daily >/dev/null
+  run HABITS profile new
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HABITS_PROFILE_NEW"* ]]
+  [ -f "$PBRAIN_HABIT_TRACK_DIR/.profile/habits-profile.v2.md" ]
+  run HABITS profile commit
+  [[ "$output" == *"HABITS_PROFILE_COMMITTED"* ]]
+  grep -q '^committed: true$' "$PBRAIN_HABIT_TRACK_DIR/.profile/habits-profile.v2.md"
+}
+
+@test "profile show reports committed/draft/active paths" {
+  unset PBRAIN_HABITS_PROFILE_FILE
+  HABITS add --name "Meditate" --type daily >/dev/null
+  run HABITS profile show
+  [[ "$output" == *"HABITS_PROFILE_SHOW"* ]]
+  [[ "$output" == *"habits-profile.v1.md"* ]]
+  [[ "$output" == *'"id": "meditate"'* ]]
+}
+
+# ── new scoring types: weighted_completion + session_volume ──────────────────
+
+_write_wc_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+date: 2026-06-03
+tags: []
+---
+
+# Habits profile
+
+```json
+{
+  "created": "2026-06-03",
+  "habits": [
+    { "id": "work-the-plan", "name": "Work the plan", "schedule_type": "daily",
+      "direction": "at_least", "target_count": null, "priority": "high",
+      "archived": false, "unit": "", "measure_target": 70,
+      "scoring": { "type": "weighted_completion",
+        "difficulty_weights": {"easy":1,"normal":2,"hard":3,"nightmare":5},
+        "status_credit": {"done":1.0,"partial":0.5,"dropped":0.0,"carried":0.0},
+        "priority_pivot": 3, "priority_step": 0.25 } },
+    { "id": "train", "name": "Train", "schedule_type": "daily",
+      "direction": "at_least", "target_count": null, "priority": "high",
+      "archived": false, "unit": "", "measure_target": 80,
+      "scoring": { "type": "session_volume",
+        "status_credit": {"completed":1.0,"partial":0.5,"skipped":0.0},
+        "volume_cap": 1.0 } }
+  ]
+}
+```
+PEOF
+}
+
+@test "score weighted_completion: all done tasks -> 100" {
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":1,"difficulty":"hard","status":"done"},{"priority":2,"difficulty":"normal","status":"done"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score weighted_completion: all dropped -> 0" {
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":1,"difficulty":"hard","status":"dropped"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "score weighted_completion: empty items list -> blank" {
+  _write_wc_profile
+  run HABITS score --name "Work the plan" --items '[]'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "score weighted_completion: nightmare p1 done + easy p3 dropped -> 88" {
+  # nightmare(5) * (1+(3-1)*0.25)=1.5 -> 7.5 earned; easy(1)*1.0=1.0 dropped -> 0
+  # score = round_half_up(100 * 7.5 / 8.5) = round(88.235) = 88
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":1,"difficulty":"nightmare","status":"done"},{"priority":3,"difficulty":"easy","status":"dropped"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "88" ]
+}
+
+@test "score weighted_completion: partial task counts half credit -> 50" {
+  # normal(2) * p3_boost(1.0) = 2.0 possible; partial credit 0.5 -> earned 1.0; score = 50
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":3,"difficulty":"normal","status":"partial"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "50" ]
+}
+
+@test "score weighted_completion: half-up rounding -> 67" {
+  # normal(2)*1.0=2 done + easy(1)*1.0=1 dropped: earned=2, possible=3 -> 66.67 -> rounds to 67
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":3,"difficulty":"normal","status":"done"},{"priority":3,"difficulty":"easy","status":"dropped"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "67" ]
+}
+
+@test "score session_volume: skipped -> 0" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"strength","status":"skipped","planned":100,"actual":0}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "score session_volume: completed binary -> 100" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"binary","status":"completed"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score session_volume: partial binary -> 50" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"binary","status":"partial"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "50" ]
+}
+
+@test "score session_volume: 90 pct of planned strength volume -> 90" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"strength","status":"completed","planned":100,"actual":90}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "90" ]
+}
+
+@test "score session_volume: actual over planned is capped at 100" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"strength","status":"completed","planned":100,"actual":150}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score session_volume: duration mode ratio -> 75" {
+  # duration is the second volume mode (alongside strength): 45/60 -> 75.
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"duration","status":"completed","planned":60,"actual":45}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "75" ]
+}
+
+@test "score session_volume: strength with no planned falls through to binary credit -> 100" {
+  # planned missing -> the volume-ratio guard fails -> binary status credit.
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"strength","status":"completed"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score session_volume: skipped wins before the mode branch (binary, no volume) -> 0" {
+  _write_wc_profile
+  run HABITS score --name "Train" \
+    --session '{"mode":"binary","status":"skipped"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "score weighted_completion: a non-dict item is skipped, not counted" {
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":1,"difficulty":"hard","status":"done"}, "junk"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score weighted_completion: unknown difficulty + status fall back to default weight / 0 credit" {
+  # difficulty 'weird' -> default weight 2; status 'mystery' -> 0 credit: 0/2 -> 0.
+  _write_wc_profile
+  run HABITS score --name "Work the plan" \
+    --items '[{"priority":3,"difficulty":"weird","status":"mystery"}]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "mark with --items writes the weighted_completion score as amount" {
+  _write_wc_profile
+  run HABITS mark --name "Work the plan" --date 2026-06-03 \
+    --items '[{"priority":1,"difficulty":"hard","status":"done"}]'
+  [ "$status" -eq 0 ]
+  amt="$(python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+row = con.execute(\"SELECT amount FROM habit_events WHERE habit_id='work-the-plan' AND occurred_on='2026-06-03'\").fetchone()
+print(row[0] if row else 'none')
+" "$PBRAIN_DB_FILE")"
+  [ "$amt" = "100.0" ]
+}
+
+@test "mark with --session writes the session_volume score as amount" {
+  _write_wc_profile
+  run HABITS mark --name "Train" --date 2026-06-03 \
+    --session '{"mode":"strength","status":"completed","planned":100,"actual":80}'
+  [ "$status" -eq 0 ]
+  amt="$(python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+row = con.execute(\"SELECT amount FROM habit_events WHERE habit_id='train' AND occurred_on='2026-06-03'\").fetchone()
+print(row[0] if row else 'none')
+" "$PBRAIN_DB_FILE")"
+  [ "$amt" = "80.0" ]
+}
+
+# ── default-habit seeding: work-the-plan + train ─────────────────────────────
+
+_plant_goals_profile() {
+  mkdir -p "$PBRAIN_VAULT/life/daily-planning/.profile"
+  cat > "$PBRAIN_VAULT/life/daily-planning/.profile/goals-profile.v1.md" <<'EOF'
+---
+type: goals-profile
+version: 1
+committed: true
+---
+# Goals profile
+```json
+{"created": "2026-06-03", "work_goals": [{"id": "ship", "goal": "Ship pbrain", "priority": 1}],
+ "life_goals": [], "maintenance_mode": []}
+```
+EOF
+}
+
+_plant_fitness_library() {
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-library.v1.md" <<'EOF'
+---
+type: fitness-library
+version: 1
+committed: true
+---
+# Fitness library
+```json
+{"created": "2026-06-03", "activities": [{"id": "gym", "name": "Gym", "occurrence": "4x/week"}]}
+```
+EOF
+}
+
+@test "dashboard seeds work-the-plan when goals-profile exists" {
+  _write_profile
+  _plant_goals_profile
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added default habit: Work the plan"* ]]
+  grep -q '"id": "work-the-plan"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"type": "weighted_completion"' "$PBRAIN_HABITS_PROFILE_FILE"
+}
+
+@test "dashboard seeds train when fitness-library exists" {
+  _write_profile
+  _plant_fitness_library
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added default habit: Train"* ]]
+  grep -q '"id": "train"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"type": "session_volume"' "$PBRAIN_HABITS_PROFILE_FILE"
+}
+
+@test "train seeds with weekdays schedule from activity profile days" {
+  # Per-activity profiles store fixed days in FRONTMATTER as weekday NAMES
+  # (the format fitness-journal actually writes) — NOT as a JSON block.
+  _write_profile
+  _plant_fitness_library
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md" <<'EOF'
+---
+type: activity-profile
+activity: Gym
+days: [Mon, Wed, Fri]
+version: 1
+committed: true
+---
+# Gym
+EOF
+  run HABITS
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json, re
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+data = json.loads(m.group(1))
+train = next((h for h in data['habits'] if h['id'] == 'train'), None)
+assert train is not None
+sched = train.get('schedule', {})
+# Stored schedules key on 'type' (same as the add path / build_schedule),
+# NOT 'kind' — otherwise derive_schedule/is_due ignore it and the habit
+# collapses to a legacy floating schedule.
+assert sched.get('type') == 'weekdays', repr(sched)
+assert sched.get('days') == ['mon', 'wed', 'fri'], repr(sched)
+"
+}
+
+@test "seeded train is genuinely schedule-aware (is_due honors its weekdays)" {
+  # Regression: the seeded schedule must be readable by the schedule engine,
+  # i.e. is_due must treat it as weekdays — due on Mon, off on Tue.
+  _write_profile
+  _plant_fitness_library
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
+  printf -- '---\nactivity: Gym\ndays: [Mon, Wed, Fri]\nversion: 1\ncommitted: true\n---\n# Gym\n' \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md"
+  run HABITS
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json, re, sys
+sys.path.insert(0, '$REPO_ROOT/lib')
+from habit_schedule import is_due
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+train = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'train')
+sched = train['schedule']
+assert is_due(sched, '2026-06-08') is True, 'Mon 2026-06-08 should be due'   # Monday
+assert is_due(sched, '2026-06-09') is False, 'Tue 2026-06-09 should be off'  # Tuesday
+"
+}
+
+@test "train unions the fixed days across activities (highest committed version per slug)" {
+  _write_profile
+  _plant_fitness_library
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
+  # gym v1 Mon/Thu, superseded by a committed v2 Tue/Fri — only v2's days count.
+  printf -- '---\nactivity: Gym\ndays: [Mon, Thu]\nversion: 1\ncommitted: true\n---\n# Gym v1\n' \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md"
+  printf -- '---\nactivity: Gym\ndays: [Tue, Fri]\nversion: 2\ncommitted: true\n---\n# Gym v2\n' \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v2.md"
+  # a separate activity adds Sunday; an open draft must NOT contribute.
+  printf -- '---\nactivity: Yoga\ndays: [Sun]\nversion: 1\ncommitted: true\n---\n# Yoga\n' \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/yoga.v1.md"
+  printf -- '---\nactivity: Run\ndays: [Sat]\nversion: 1\ncommitted: false\n---\n# Run draft\n' \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/run.v1.md"
+  run HABITS
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json, re
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+data = json.loads(m.group(1))
+train = next((h for h in data['habits'] if h['id'] == 'train'), None)
+sched = train.get('schedule', {})
+# gym v2 (tue,fri) + yoga (sun); gym v1 superseded; run draft excluded.
+assert sched.get('type') == 'weekdays', repr(sched)
+assert sched.get('days') == ['tue', 'fri', 'sun'], repr(sched)
+"
+}
+
+@test "train seeds with daily schedule when no activity profiles exist" {
+  _write_profile
+  _plant_fitness_library
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added default habit: Train"* ]]
+  python3 -c "
+import json, re
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+data = json.loads(m.group(1))
+train = next((h for h in data['habits'] if h['id'] == 'train'), None)
+assert train is not None
+assert train.get('schedule', {}).get('type') == 'daily', repr(train.get('schedule'))
+"
+}
+
+@test "work-the-plan and train seeding is idempotent" {
+  _write_profile
+  _plant_goals_profile
+  _plant_fitness_library
+  HABITS >/dev/null
+  run HABITS
+  [[ "$output" != *"Added default habit: Work the plan"* ]]
+  [[ "$output" != *"Added default habit: Train"* ]]
+  [ "$(grep -c '"id": "work-the-plan"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
+  [ "$(grep -c '"id": "train"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
 }

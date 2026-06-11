@@ -5,12 +5,13 @@
 #
 #   pbrain_emit_self_improve <command-name> [plan-file] [plan-label]
 #
-# When a command owns a core plan (e.g. /diet-journal owns Diet Plan.md), it
-# passes the plan's path + a human label as the 2nd/3rd args. The reflection
-# then gains a PLAN UPDATE route: lasting plan changes the user raised in-session
-# are proposed against that plan file under the same propose->explicit-yes->write
-# discipline used for preference capture. Commands with no plan call it with just
-# the command name, and the plan route is omitted.
+# When a command owns a core profile (e.g. /diet-journal owns the diet
+# profile), it passes the profile's path + a human label as the 2nd/3rd args.
+# The reflection then gains a PLAN UPDATE route: lasting profile changes the
+# user raised in-session are proposed against that file under the same
+# propose->explicit-yes->write discipline used for preference capture.
+# Commands with no profile call it with just the command name, and the route
+# is omitted.
 #
 # Emitted at the END of a command's output (after its work/INSTRUCTIONS), it
 # prints a terse "reflect on feedback" instruction block that tells the calling
@@ -32,11 +33,19 @@
 #            when PBRAIN_DEV_DIR is set (points at the editable repo); otherwise
 #            it silently degrades to `prefs`.
 #
+# Preferences + feedback live IN THE VAULT under the hidden .pbrain control
+# dir (so they sync across devices), one subdir per command:
+#   $VAULT_DIR/.pbrain/_global/prefs.md     global preferences
+#   $VAULT_DIR/.pbrain/<cmd>/prefs.md       per-command preferences
+#   $VAULT_DIR/.pbrain/<cmd>/feedback.md    per-command quality-fix notes
+# (Moved from ~/.config/pbrain/{prefs,feedback}/ — migration 0001 copies any
+# existing files across automatically.)
+#
 # Env knobs:
 #   PBRAIN_SELF_IMPROVE   off | prefs | dev   (default prefs)
 #   PBRAIN_DEV_DIR        live repo path; required for `dev` mode source edits
-#   PBRAIN_PREFS_DIR      override prefs dir    (default ~/.config/pbrain/prefs)
-#   PBRAIN_FEEDBACK_DIR   override feedback dir (default ~/.config/pbrain/feedback)
+#   PBRAIN_PREFS_DIR      override the prefs ROOT    (default $VAULT_DIR/.pbrain)
+#   PBRAIN_FEEDBACK_DIR   override the feedback ROOT (default $VAULT_DIR/.pbrain)
 #
 # Like lib/prefs.sh, this NEVER exits non-zero — it is sourced into commands
 # running under `set -euo pipefail`. Call sites still append `|| true`.
@@ -73,11 +82,13 @@ pbrain_emit_self_improve() {
       ;;
   esac
 
-  prefs_dir="${PBRAIN_PREFS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/prefs}"
-  feedback_dir="${PBRAIN_FEEDBACK_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/feedback}"
-  prefs_file="$prefs_dir/$cmd.md"
-  global_file="$prefs_dir/_global.md"
-  feedback_file="$feedback_dir/$cmd.md"
+  # No override and no vault → emit nothing (mirrors lib/prefs.sh).
+  [[ -n "${PBRAIN_PREFS_DIR:-}" || -n "${PBRAIN_FEEDBACK_DIR:-}" || -n "${VAULT_DIR:-}" ]] || return 0
+  prefs_dir="${PBRAIN_PREFS_DIR:-${VAULT_DIR:-}/.pbrain}"
+  feedback_dir="${PBRAIN_FEEDBACK_DIR:-${VAULT_DIR:-}/.pbrain}"
+  prefs_file="$prefs_dir/$cmd/prefs.md"
+  global_file="$prefs_dir/_global/prefs.md"
+  feedback_file="$feedback_dir/$cmd/feedback.md"
 
   printf '%s\n' ""
   printf '%s\n' "--- SELF-IMPROVE CHECK (mode: $mode) ---"
