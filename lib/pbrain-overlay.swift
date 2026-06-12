@@ -15,7 +15,20 @@
 // things ends the overlay:
 //   • Hold CONTROL   → SKIPPED (a deliberate hold, so it can't be hit by accident)
 //   • Countdown ends → DONE    (you waited out the full break)
-//   • Sleep / lock   → MISSED  (you never engaged with it; it self-dismisses)
+// The countdown is WALL-CLOCK, so locking the screen OR sleeping the Mac (the Touch
+// ID / power button sleeps rather than locks) does not pause or cancel the break —
+// stepping away genuinely spends the time. App Nap is disabled so the timer keeps
+// firing behind a lock screen; across true system sleep the process is suspended and
+// resumes on wake, where the fixed finish line is re-checked. So if the full break
+// elapses while you're away it resolves DONE on its own (at wake / unlock); come
+// back early and the overlay reappears showing the time that's ACTUALLY left, not
+// where it stood when you stepped away. Walking away is a legitimate way to take the
+// break, not an escape hatch from it.
+// "MISSED" is NOT a full-overlay outcome: it is set only (a) by the poller, for an
+// occurrence that was overdue past its grace window and never fired, and (b) if you
+// sleep/lock during the short pre-roll WARNING, before the break UI ever appears.
+// (The skip gesture is Control ALONE; Control+Command is left alone so the system
+// ⌃⌘Q Lock-Screen shortcut still locks instead of being eaten as a skip.)
 // There is deliberately NO "mark done" gesture: `done` means only that the
 // allotted time elapsed. The status write happens here via the SQLite3 C API,
 // enabled by passing --id and --db. Every occurrence is its OWN row (the recurring
@@ -58,6 +71,7 @@
 import Cocoa
 import QuartzCore
 import SQLite3
+import CoreGraphics
 
 // ---------------------------------------------------------------------------
 // Args. Values come straight from argv — never interpolated into an interpreted
@@ -92,6 +106,15 @@ func colorFromHex(_ hex: String?) -> NSColor {
         alpha: 1)
 }
 let background = colorFromHex(argValue("--background"))
+
+// Authoritative lock-state poll. The lock/unlock distributed notifications are a
+// fast path, but macOS can drop them (notably with Touch ID / Apple Watch unlock);
+// a dropped screenIsUnlocked would strand the overlay with a frozen countdown. So
+// we also ASK every tick — CGSessionCopyCurrentDictionary always reports the truth.
+func screenIsCurrentlyLocked() -> Bool {
+    guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return (dict["CGSSessionScreenIsLocked"] as? Int) == 1
+}
 
 // ---------------------------------------------------------------------------
 // SQLite write-back — set this occurrence's terminal status directly. No-op
@@ -298,9 +321,11 @@ final class Controller: NSObject {
     private var warningTimer: Timer?
     private var warningEnd: Date?
 
-    // Lock/unlock state — hide the overlay while locked, restore on unlock
+    // Lock/unlock state — hide the overlay while locked, restore on unlock (the
+    // break clock keeps running either way).
     private var isLocked = false
-    private var lockStartTime: Date?
+    private var lockPollTimer: Timer?       // polls real lock state every tick (notification-independent)
+    private var activityToken: NSObjectProtocol?   // keeps App Nap off so timers fire while hidden
 
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
     private let doneColor = NSColor(calibratedRed: 0.3,  green: 0.85, blue: 0.45, alpha: 0.95)
@@ -408,6 +433,13 @@ final class Controller: NSObject {
     }
 
     func start() {
+        // Disable App Nap so the countdown / lock-poll timers keep firing while the
+        // overlay is hidden behind a lock screen. We still ALLOW idle system sleep —
+        // sleeping mid-break is fine: the process is suspended and resumes on wake,
+        // where the fixed wall-clock finish line is re-checked (handleWake).
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "blocking break overlay")
         if totalSeconds > 0 {
             countdownEnd = Date().addingTimeInterval(Double(totalSeconds))
             startCountdownTimer()
@@ -418,19 +450,54 @@ final class Controller: NSObject {
             self?.handle(ev)
             return nil
         }
-        // Machine sleep → missed (process won't survive sleep anyway).
-        // Screen lock → hide and restore on unlock (TODO 3: overlay persists across lock/unlock).
+        // Sleeping the Mac (e.g. the Touch ID / power button SLEEPS rather than
+        // locks) does NOT cancel the break — the wall-clock countdown keeps its
+        // finish line across sleep, so on wake it either resolves DONE (the break
+        // elapsed while away) or shows the real time left. Screen lock is the same:
+        // hide while locked, restore on unlock. Neither resolves "missed" — that's
+        // only the poller's outcome for an occurrence that never fired at all.
         let wsnc = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(
-            wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
-                             object: nil, queue: .main) { [weak self] _ in self?.resolve("missed") })
+            wsnc.addObserver(forName: NSWorkspace.didWakeNotification,
+                             object: nil, queue: .main) { [weak self] _ in self?.handleWake() })
+        // The lock/unlock notifications are the FAST path; pollLockState() is the
+        // safety net for when macOS drops one. Both funnel through the same
+        // idempotent handlers, so a double-fire is harmless.
         let dnc = DistributedNotificationCenter.default()
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
-                            object: nil, queue: .main) { [weak self] _ in self?.hideLocked() })
+                            object: nil, queue: .main) { [weak self] _ in self?.handleLock() })
         distributedObservers.append(
             dnc.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"),
-                            object: nil, queue: .main) { [weak self] _ in self?.showUnlocked() })
+                            object: nil, queue: .main) { [weak self] _ in self?.handleUnlock() })
+        // Always-on poll: catches a lock/unlock even if its notification never
+        // arrives, for both countdown and mark-done modes.
+        let pt = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.pollLockState()
+        }
+        RunLoop.main.add(pt, forMode: .common)
+        lockPollTimer = pt
+    }
+
+    private func pollLockState() {
+        guard !isDismissing else { return }
+        let locked = screenIsCurrentlyLocked()
+        if locked && !isLocked { handleLock() }
+        else if !locked && isLocked { handleUnlock() }
+    }
+
+    // Woke from system sleep. The countdown was frozen while asleep but its finish
+    // line is fixed wall-clock, so if the break elapsed during sleep, resolve DONE
+    // immediately; otherwise re-sync lock state (wake usually lands on the login
+    // screen) and let the live timer carry the remaining time. The repeating timers
+    // resume on their own — this just makes the resolution instant instead of
+    // waiting for the next tick.
+    private func handleWake() {
+        guard !isDismissing else { return }
+        if totalSeconds > 0, let end = countdownEnd, end.timeIntervalSinceNow <= 0 {
+            resolve("done"); return
+        }
+        pollLockState()
     }
 
     private func handle(_ ev: NSEvent) {
@@ -440,7 +507,11 @@ final class Controller: NSObject {
         // The two gestures are mutually exclusive: starting one cancels the other.
         if ev.type == .flagsChanged {
             let flags = ev.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let ctrl  = flags.contains(.control)
+            // Control ALONE = skip. Control+Command must NOT trigger skip, so the
+            // system Lock-Screen shortcut (⌃⌘Q) can lock instead of being captured
+            // as a skip-hold. Adding Command mid-hold cancels the skip (via the
+            // !ctrl branch below) and the keystroke passes through to lock.
+            let ctrl  = flags.contains(.control) && !flags.contains(.command)
             let opt   = flags.contains(.option) && markDone
 
             if ctrl && !holding {
@@ -520,8 +591,10 @@ final class Controller: NSObject {
         warningTimer?.invalidate(); warningTimer = nil
         warningWindow?.close(); warningWindow = nil
         countdownTimer?.invalidate()
+        lockPollTimer?.invalidate(); lockPollTimer = nil
         holdTimer?.invalidate()
         doneHoldTimer?.invalidate()
+        if let tok = activityToken { ProcessInfo.processInfo.endActivity(tok); activityToken = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         let wsnc = NSWorkspace.shared.notificationCenter
         for tok in workspaceObservers { wsnc.removeObserver(tok) }
@@ -533,9 +606,14 @@ final class Controller: NSObject {
         NSApp.terminate(nil)
     }
 
-    // Extract countdown start so it can be called from both start() and showUnlocked().
+    // The countdown timer runs for the overlay's whole life — it is NEVER torn down
+    // on lock. The countdown is pure WALL-CLOCK (driven by the fixed countdownEnd),
+    // so it keeps elapsing while the screen is locked; App Nap is disabled so the
+    // timer keeps firing behind the lock screen. If the break runs out while locked
+    // it resolves DONE then and there; if the user unlocks first, the very next tick
+    // shows the correctly-decremented time. Locking is taking the break, not pausing it.
     private func startCountdownTimer() {
-        guard totalSeconds > 0 else { return }
+        guard totalSeconds > 0, countdownTimer == nil else { return }
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             guard let s = self, let end = s.countdownEnd else { return }
             let left = Int(ceil(end.timeIntervalSinceNow))
@@ -545,31 +623,24 @@ final class Controller: NSObject {
         if let t = countdownTimer { RunLoop.main.add(t, forMode: .common) }
     }
 
-    // Hide windows on lock (don't resolve — the overlay persists for when the user unlocks).
-    private func hideLocked() {
-        guard !isLocked else { return }
+    // Hide windows on lock (don't resolve — the break clock keeps running behind the
+    // lock screen; see startCountdownTimer). Cosmetic only: the lock screen already
+    // covers everything, so this just avoids a flash on the unlock transition.
+    private func handleLock() {
+        guard !isLocked, !isDismissing else { return }
         isLocked = true
-        lockStartTime = Date()
-        countdownTimer?.invalidate()
-        countdownTimer = nil
         for w in windows { w.orderOut(nil) }
     }
 
-    // Restore windows after unlock, adjusting the countdown end time by the locked duration.
-    private func showUnlocked() {
+    // Restore windows after unlock. The countdown was never paused, so there's no
+    // time to credit back and nothing to restart — the live timer already reflects
+    // the real time remaining.
+    private func handleUnlock() {
         guard isLocked, !isDismissing else { return }
         isLocked = false
-        if let locked = lockStartTime, totalSeconds > 0, let end = countdownEnd {
-            countdownEnd = end.addingTimeInterval(Date().timeIntervalSince(locked))
-        }
-        lockStartTime = nil
         for w in windows { w.orderFrontRegardless() }
         (windows.first(where: { $0.contentView != nil }) ?? windows.first)?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        if totalSeconds > 0 {
-            countdownTimer?.invalidate(); countdownTimer = nil
-            startCountdownTimer()
-        }
     }
 
     // Show a small non-kiosk warning panel before the full overlay fires.

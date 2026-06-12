@@ -18,7 +18,7 @@ set -euo pipefail
 #   PBRAIN_JOURNAL_DIR        — daily journals (open questions)
 #   PBRAIN_BRAINSTORMS_DIR    — brainstorms parent (tbd/ is the active bucket)
 #   PBRAIN_PLAN_DIR           — daily plans (todos, tomorrow-seeds)
-#   PBRAIN_PLAN_PROFILE_FILE  — goals profile markdown, JSON in a fenced block (focus drift)
+#   PBRAIN_PLAN_PROFILE_FILE  — plans profile markdown, JSON in a fenced block (focus drift)
 #
 # Usage:
 #   /loose-ends
@@ -39,11 +39,11 @@ JOURNAL_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 BRAINSTORMS_DIR="${PBRAIN_BRAINSTORMS_DIR:-$VAULT_DIR/agent-work/brainstorms}"
 TBD_DIR="$BRAINSTORMS_DIR/tbd"
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
-# Goals profile: explicit override file, else latest committed in the plan
+# Plans profile: explicit override file, else latest committed in the plan
 # store (legacy life/Goals Profile.md as a last resort for pre-migration vaults).
 PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-}"
 if [[ -n "$PROFILE_FILE" && ! -f "$PROFILE_FILE" ]]; then PROFILE_FILE=""; fi
-[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$(pbrain_profile_store "$PLAN_DIR")" goals-profile)"
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$(pbrain_profile_store "$PLAN_DIR")" plans-profile)"
 [[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$VAULT_DIR/life/Goals Profile.md"
 
 STALE_DAYS="${PBRAIN_STALE_DAYS:-7}"
@@ -290,12 +290,22 @@ goals = []
 if ptext:
     try:
         pdata = json.loads(ptext)
-        # The goals profile IS the focus: work_goals first, then life_goals.
-        # (Legacy pre-migration profiles fall back to horizon_goals.)
+        # Plans profile uses current_focus; legacy profiles may still have
+        # work_goals/life_goals/horizon_goals — read all, deduplicate.
+        seen = set()
+        for item in pdata.get("current_focus", []):
+            name = item.get("name") or item.get("goal", "")
+            if name and name not in seen:
+                goals.append(name)
+                seen.add(name)
         for key in ("work_goals", "life_goals", "horizon_goals"):
-            goals.extend(g.get("goal", "") for g in pdata.get(key, []) if g.get("goal"))
+            for g in pdata.get(key, []):
+                name = g.get("goal", "")
+                if name and name not in seen:
+                    goals.append(name)
+                    seen.add(name)
     except Exception:
-        focus_lines.append("(goals profile present but its JSON block is unreadable — skipping focus drift)")
+        focus_lines.append("(plans profile present but its JSON block is unreadable — skipping focus drift)")
 
 if goals:
     drift_cutoff = today - datetime.timedelta(days=stale_days)
@@ -319,7 +329,7 @@ if goals:
         if last_seen is None:
             focus_lines.append(f'- "{goal}" — not mentioned in plans for the last {stale_days}d')
 elif not focus_lines:
-    focus_lines.append("(no goals in the goals profile — nothing to check)")
+    focus_lines.append("(no goals in the plans profile — nothing to check)")
 
 emit(f"FOCUS DRIFT (profile goals quiet >= {stale_days}d)", focus_lines)
 PYEOF

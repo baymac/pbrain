@@ -13,7 +13,7 @@ set -euo pipefail
 #  "long run" = monthly/at_least/5; "alcohol" = weekly/at_most/2.)
 #
 # The profile is a vault markdown note carrying its data in a fenced ```json
-# block — same discipline as the goals profile, browsable in Obsidian. Each
+# block — same discipline as the plans profile, browsable in Obsidian. Each
 # habit has a STABLE id (slug) minted once and never changed: renames touch only
 # the display name, so event history (in SQLite, keyed by habit_id) stays
 # attached. Removing a habit soft-archives it (history preserved).
@@ -122,7 +122,7 @@ _habits_seed_defaults() {
   dietp="$(pbrain_profile_latest "$diet_store" diet-profile)"
   fitp="$(pbrain_profile_latest "$fit_store" fitness-profile)"
   fitlibp="$(pbrain_profile_latest "$fit_store" fitness-library)"
-  goalsp="$(pbrain_profile_latest "$plan_store" goals-profile)"
+  goalsp="$(pbrain_profile_latest "$plan_store" plans-profile)"
   act_store="$fit_store/activities"
   [[ -n "$dietp$fitp$goalsp$fitlibp" ]] || return 0
   python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$dietp" "$fitp" "$TODAY" "$goalsp" "$fitlibp" "$act_store" <<'PYEOF' 2>/dev/null || true
@@ -202,7 +202,7 @@ with ProfileLock(path) as lock:
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 70, "archived": False,
-            "notes": ("Default scored habit (from the goals profile). Daily score = "
+            "notes": ("Default scored habit (from the plans profile). Daily score = "
                       "weighted task completion (difficulty=load, priority=importance, "
                       "status=credit). Mark at end-of-day with "
                       "--items JSON array of {priority,difficulty,status}; target 70+."),

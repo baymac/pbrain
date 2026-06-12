@@ -2,38 +2,43 @@
 set -euo pipefail
 
 # plan-my-day.sh
-# Adaptive daily planner anchored on your goals. The goals profile is the
-# COMBINATION VIEW over two living libraries:
+# Adaptive daily planner anchored on your plans profile. The plans profile is
+# the active focus view backed by two living libraries:
 #
-#   <plan-dir>/.profile/goals-profile.vN.md — work_goals + life_goals (refs
-#       into the libraries) + working_style (session length, breaks, work
-#       hours/day, focus hours, last-block ceiling) + daily_anchors +
-#       anti_patterns + personal_anchors. THE day-planning lens.
-#   <plan-dir>/.profile/work-library.vN.md  — every project/thing worked on,
-#       with rich context; enriched over time (LIVING document).
-#   <plan-dir>/.profile/goals-library.vN.md — non-work goals (health,
-#       creative, relationships…); LIVING document.
+#   <plan-dir>/.profile/plans-profile.vN.md — current_focus (all active focus
+#       items, work + life, with rich context) + working_style (session length,
+#       breaks, work hours/day, focus hours, last-block ceiling) +
+#       planning_guidelines + daily_anchors + anti_patterns +
+#       personal_anchors. THE day-planning lens.
+#   <plan-dir>/.profile/work-library.vN.md  — stable project reference cards
+#       (id, shortcut, summary, metadata); enriched over time (LIVING document).
+#   <plan-dir>/.profile/goals-library.vN.md — stable non-work goal cards;
+#       LIVING document.
 #
 # Daily flow: wake time (read from today's fitness entry when present) →
 # what's done since waking (backfilled, gap-free) → how many focus hours from
 # now → block layout around the day's anchors (meal times from the diet
 # profile, today's fitness session, habit reminders, calendar events) →
-# allocate work from the goals onto the blocks → confirm → write.
+# allocate work from the focus onto the blocks → confirm → write.
 #
 # `plan-my-day.sh profile show|new|commit [base]` manages versions: drafts
-# are editable, committed versions are final. Migration 0002 rebuilds the old
-# Goals Profile.md into this store.
+# are editable, committed versions are final. Rebuild flow 0002 rebuilds the
+# old Goals Profile.md into this store.
 #
 # `plan-my-day.sh task add|remove|list` revises TODAY'S already-written plan
 # without rebuilding it: add/remove a task-log row and re-flow "Today at a
 # glance" around the fixed anchors (both tables rewritten together). A no-op
 # pointing at /plan-my-day when today's plan doesn't exist yet.
 #
+# `plan-my-day.sh focus list|add|archive|restore` manages current_focus items.
+# `plan-my-day.sh library [work|goals] [show|edit <id|shortcut>]` views/edits
+# a stable library card.
+#
 # Default destination:  $VAULT_DIR/life/daily-planning
 # Overrides:
 #   PBRAIN_VAULT             — vault root
 #   PBRAIN_PLAN_DIR          — daily-plan dir (the .profile store lives inside)
-#   PBRAIN_PLAN_PROFILE_FILE — explicit goals-profile file (bypasses the store)
+#   PBRAIN_PLAN_PROFILE_FILE — explicit plans-profile file (bypasses the store)
 #   PBRAIN_FITNESS_DIR       — today's fitness entry + fitness store (cross-ref)
 #   PBRAIN_DIET_DIR          — diet store, for meal times (cross-ref)
 #   PBRAIN_JOURNAL_DIR       — today's daily journal (cross-ref)
@@ -73,15 +78,15 @@ mkdir -p "$PLAN_DIR"
 # ---------------------------------------------------------------------------
 # `profile` subcommand — manage the versioned planning profiles.
 #   profile show | profile new [base] | profile commit [base]
-#   base ∈ goals-profile (default) | work-library | goals-library
+#   base ∈ plans-profile (default) | work-library | goals-library
 # ---------------------------------------------------------------------------
 if [[ "${1:-}" == "profile" ]]; then
   ACTION="${2:-show}"
-  BASE="${3:-goals-profile}"
+  BASE="${3:-plans-profile}"
   case "$ACTION" in
     show)
       echo "PLAN_PROFILE_SHOW"
-      for b in goals-profile work-library goals-library monthly-goals weekly-goals; do
+      for b in plans-profile work-library goals-library monthly-goals weekly-goals; do
         f="$(pbrain_profile_latest "$STORE" "$b")"
         d="$(pbrain_profile_draft "$STORE" "$b")"
         echo ""
@@ -93,7 +98,7 @@ if [[ "${1:-}" == "profile" ]]; then
       echo "INSTRUCTIONS: Present the profiles above as a short human-readable summary"
       echo "(work goals with deadlines, life goals, working-style numbers, anchors)."
       echo "Do not dump raw JSON. Committed profiles are final — to change one:"
-      echo "  /plan-my-day profile new [goals-profile|work-library|goals-library]"
+      echo "  /plan-my-day profile new [plans-profile|work-library|goals-library]"
       exit 0
       ;;
     new)
@@ -126,7 +131,7 @@ if [[ "${1:-}" == "profile" ]]; then
       exit 0
       ;;
     *)
-      echo "usage: plan-my-day.sh profile show|new|commit [goals-profile|work-library|goals-library|monthly-goals|weekly-goals]" >&2
+      echo "usage: plan-my-day.sh profile show|new|commit [plans-profile|work-library|goals-library|monthly-goals|weekly-goals]" >&2
       exit 2
       ;;
   esac
@@ -151,16 +156,16 @@ if [[ "${1:-}" == "task" && ! -f "$OUT_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Staged migration 0002 — rebuild the old Goals Profile.md (or legacy
-# plan-profile.json) into the store. An EXPLICIT profile override that points
-# at a real file wins outright — the user told us which file to use.
+# Rebuild flow 0002 — (re)build the plans profile from the old Goals
+# Profile.md (or legacy plan-profile.json). An EXPLICIT profile override
+# pointing at a real file wins outright — the user told us which file to use.
 # ---------------------------------------------------------------------------
 if [[ ! -f "${PBRAIN_PLAN_PROFILE_FILE:-/nonexistent}" ]] \
    && declare -F pbrain_migration_pending >/dev/null \
-   && pbrain_migration_pending 0002_goals_profile_restructure; then
+   && pbrain_migration_pending 0002_plans_profile_rebuild; then
   OLD_PROFILE="$VAULT_DIR/life/Goals Profile.md"
   OLD_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/plan-profile.json"
-  echo "PLAN_MY_DAY_MIGRATION"
+  echo "PLAN_MY_DAY_REBUILD"
   echo "store: $STORE"
   echo "backup_dir: $VAULT_DIR/.pbrain/backup"
   echo ""
@@ -170,7 +175,7 @@ if [[ ! -f "${PBRAIN_PLAN_PROFILE_FILE:-/nonexistent}" ]] \
   echo "=== LEGACY JSON PROFILE ($OLD_JSON) ==="
   cat "$OLD_JSON" 2>/dev/null || echo "(none)"
   echo ""
-  echo "=== RECENT DAY PLANS (project names for the work library) ==="
+  echo "=== RECENT DAY PLANS (project names for the libraries) ==="
   python3 - "$PLAN_DIR" <<'PYEOF' 2>/dev/null || true
 import glob, os, sys
 d = sys.argv[1]
@@ -182,65 +187,90 @@ for f in sorted(glob.glob(os.path.join(d, "*.md")))[-10:]:
     except Exception:
         pass
 PYEOF
-  cat <<MIGRATE
+  cat <<REBUILD
 
 ---
-INSTRUCTIONS — one-time migration to the new planning profile store. Do not
-plan any day yet. Tell the user: pbrain now splits the goals lens into a
-goals profile + a work library + a goals library, all versioned; you'll walk
-their existing profile across (a few minutes, their data carries over — plus
-a few new questions).
+INSTRUCTIONS — let's rebuild your planning foundation. Do not plan any day yet.
+Tell the user: "Let's (re)build your plan — I'll carry your existing data across
+and set up a plans profile (what you're focused on, your working style), a work
+library (project cards), and a goals library (non-work goals). We'll also lock
+in this month's and this week's focus while we're here."
 
-Step 1 — Validate the old data PART BY PART (not in one go):
-  - Each old horizon goal: confirm, update, or drop — quote it back. Classify
-    every kept goal as WORK (projects, career, money) or LIFE (health, body,
-    creative, relationships, inner work). For each kept goal, ask the user to
-    assign a priority (1 = most important, higher = lower priority).
-  - Note: the old "current focus" concept is GONE — the goals profile itself
-    is the focus now. Do not carry it over.
-  - working_style: confirm what exists, then ASK what the old data lacks:
-      - preferred work-session length (minutes) if not present
-      - break preference: how long between sessions, and what break
-        activities they actually like (the menu the plan rotates through)
-      - total work hours per day they realistically want
-      - the important focus hours of their day (e.g. "9-12, 15-17")
-      - the LAST block time of day — when the final work block must end
-  - daily_anchors: carry over what exists (wake/workout/lunch/dinner/walk/
-    bed); confirm briefly.
-  - anti_patterns + personal_anchors: confirm, prune anything stale.
+Part A — Overall plans profile. Walk PART BY PART (not all at once):
 
-Step 2 — From the recent day plans above + the old work goals, seed the WORK
-LIBRARY: one entry per project/initiative the user actually works on — id,
-name, one-line summary, status, and a context paragraph rich enough that a
-future plan can pull it in for block descriptions. Confirm the list with the
-user.
+  1. Working style. Confirm what the old profile has, then ask for anything
+     missing:
+     - preferred work-session length (minutes)
+     - break preference: how long between sessions, what break activities they
+       actually like (the rotation the plan uses)
+     - total work hours per day they realistically want
+     - their important focus hours (e.g. "9-12, 15-17")
+     - the LAST block time of day — when the final work block must end
+     - energy peak (morning/afternoon/night/mixed), day wreckers, and any other
+       /plan-my-day preferences (e.g. "always surface carry-forward tasks first")
+     Then confirm a short planning_guidelines paragraph — "Here's how I'll plan
+     your day: [block sizing, anchor philosophy, what it optimises for]."
 
-Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1:
+  2. current_focus. Walk each old goal PART BY PART — quote it back, confirm /
+     update / drop. For each kept item:
+     - classify as work (lib: "work") or life (lib: "goals")
+     - track: professional | personal
+     - horizon: short (3–6 months) | long (6+ months)
+     - priority (1 = most important), deadline (YYYY-MM or "ongoing")
+     - success_looks_like (short phrase)
+     - context (working-notes paragraph — what it is, where it stands, what kind
+       of effort it needs)
+     Write the item into plans-profile current_focus AND register a short library
+     card in work-library or goals-library:
+       work-library card: id, name, shortcut (suggest a 2-3-letter alias,
+         e.g. "lt" → Lettuce), category: "work", one-line summary, stable
+         metadata (repo, stack, links), timeline: null
+       goals-library card: id, name, shortcut, category (health|creative|
+         relationships|financial|personal), one-line summary, timeline: null
+     Old "current_focus" this-week-move entries are NOT carried (now weekly
+     focus, Part C).
 
-  $STORE/goals-profile.v1.md:
+  3. daily_anchors: carry over (wake/workout/lunch/dinner/walk/bed); confirm.
+  4. anti_patterns + personal_anchors: confirm, prune anything stale.
+
+Part B — Monthly focus. Mint this month's monthly goals:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile new monthly-goals
+  Set "period": "$MONTH_YEAR", then derive from current_focus (priority only;
+  one item at a time: "Include '[name]' in $MONTH_YEAR goals? If yes — what's
+  the one-month milestone?"). Commit when confirmed:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
+
+Part C — Weekly focus. Mint this ISO week's weekly goals:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile new weekly-goals
+  Set "period": "$ISO_WEEK", derive from the monthly focus (priority +
+  difficulty, one at a time). Commit when confirmed:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit weekly-goals
+
+Write THREE profile files into $STORE (mkdir -p first), all committed v1:
+
+  $STORE/plans-profile.v1.md:
   ---
-  type: goals-profile
+  type: plans-profile
   date: $TODAY
   tags: []
   version: 1
   committed: true
   ---
 
-  # Goals profile
+  # Plans profile
 
   \`\`\`json
   {"created": "$TODAY",
-   "work_goals": [{"id": "<work-library id>", "goal": "...",
-                   "deadline": "YYYY-MM or ongoing", "success_looks_like": "...",
-                   "priority": 1}],
-   "life_goals": [{"id": "<goals-library id>", "goal": "...",
-                   "deadline": "ongoing", "success_looks_like": "...",
-                   "priority": 1}],
-   "maintenance_mode": [],
    "working_style": {"session_length_min": 90, "break_min": 30,
      "break_activities": ["..."], "work_hours_per_day": 7,
      "focus_hours": "9-12,15-17", "last_block_end": "HH:MM",
-     "energy_peak": "...", "day_wreckers": ["..."]},
+     "energy_peak": "...", "day_wreckers": ["..."], "other_prefs": ["..."]},
+   "planning_guidelines": "Prose: how /plan-my-day will plan the day...",
+   "current_focus": [
+     {"id": "<library-id>", "lib": "work|goals", "name": "...",
+      "track": "professional|personal", "horizon": "short|long",
+      "priority": 1, "deadline": "YYYY-MM | ongoing",
+      "success_looks_like": "...", "context": "...", "status": "active"}],
    "daily_anchors": {"wake_time": "HH:MM", "workout_time": "HH:MM",
      "lunch_time": "HH:MM", "dinner_time": "HH:MM",
      "walk_time": "HH:MM or null", "bed_target": "HH:MM"},
@@ -253,34 +283,35 @@ Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1:
   $STORE/work-library.v1.md (type: work-library):
   \`\`\`json
   {"created": "$TODAY", "projects": [
-    {"id": "<slug>", "name": "...", "summary": "...", "status": "active",
-     "context": "rich working context, enriched over time",
-     "last_worked": "YYYY-MM-DD"}]}
+    {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
+     "summary": "...", "category": "work",
+     "metadata": {"repo": "...", "stack": "...", "links": []},
+     "timeline": null}]}
   \`\`\`
 
   $STORE/goals-library.v1.md (type: goals-library):
   \`\`\`json
   {"created": "$TODAY", "goals": [
-    {"id": "<slug>", "goal": "...",
+    {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
      "category": "health|creative|relationships|financial|personal",
-     "deadline": "ongoing", "success_looks_like": "..."}]}
+     "summary": "...", "timeline": null}]}
   \`\`\`
 
-  Every work_goals entry references a work-library project id; every
-  life_goals entry references a goals-library goal id. The profile is the
-  combination view over the two libraries.
+  Every current_focus entry references a library card by id (lib: "work" →
+  work-library; lib: "goals" → goals-library).
 
-Step 4 — Park the old profile so nothing is lost (do NOT delete):
+Park the old profile so nothing is lost (do NOT delete):
   mkdir -p "$VAULT_DIR/.pbrain/backup"
   mv "$OLD_PROFILE" "$VAULT_DIR/.pbrain/backup/" 2>/dev/null
   (Leave $OLD_JSON in place if it exists — superseded, not harmful.)
 
-Step 5 — Record the migration so it never re-runs:
-  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0002_goals_profile_restructure
+Record so this never re-runs:
+  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0002_plans_profile_rebuild
 
-Step 6 — Confirm: "Goals profile migrated → $STORE (profile + work library +
-goals library). Re-run /plan-my-day to plan today." Stop here.
-MIGRATE
+Confirm: "Plans profile rebuilt → $STORE (plans profile + work library +
+goals library + this month's + this week's focus). Re-run /plan-my-day
+to plan today." Stop here.
+REBUILD
   exit 0
 fi
 
@@ -289,13 +320,13 @@ fi
 # ---------------------------------------------------------------------------
 PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-}"
 if [[ -n "$PROFILE_FILE" && ! -f "$PROFILE_FILE" ]]; then PROFILE_FILE=""; fi
-[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$STORE" goals-profile)"
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$STORE" plans-profile)"
 
 # ---------------------------------------------------------------------------
-# PHASE 0 — first-run setup (no committed goals profile anywhere).
+# PHASE 0 — first-run setup (no committed plans profile anywhere).
 # ---------------------------------------------------------------------------
 if [[ -z "$PROFILE_FILE" ]]; then
-  DRAFT="$(pbrain_profile_draft "$STORE" goals-profile)"
+  DRAFT="$(pbrain_profile_draft "$STORE" plans-profile)"
   if [[ -n "$DRAFT" ]]; then
     echo "PLAN_PROFILE_DRAFT_OPEN"
     echo "draft: $DRAFT"
@@ -303,9 +334,9 @@ if [[ -z "$PROFILE_FILE" ]]; then
     cat "$DRAFT"
     echo ""
     echo "---"
-    echo "A goals-profile draft is already open (shown above). Review it with the user,"
+    echo "A plans-profile draft is already open (shown above). Review it with the user,"
     echo "apply any edits they want (keep the fenced JSON valid), then finalize with:"
-    echo "  bash \"$_SCRIPT_DIR/plan-my-day.sh\" profile commit goals-profile"
+    echo "  bash \"$_SCRIPT_DIR/plan-my-day.sh\" profile commit plans-profile"
     echo "Daily planning starts once the profile is committed."
     exit 0
   fi
@@ -314,70 +345,71 @@ PLAN_MY_DAY_SETUP_PROFILE
 store: $STORE
 
 INSTRUCTIONS — first-time setup. Do not generate any plan yet. You're helping
-the user lay down the goals lens that every future /plan-my-day will use:
-a goals profile (the lens) built on a work library + a goals library.
+the user build the plans profile that every future /plan-my-day will use: a
+detailed focus list + working-style contract, backed by a work library and a
+goals library.
 
-Step 1 — Tell the user this is a one-time setup (changeable later with
-/plan-my-day profile new). Frame it warmly: "Let's get a clear picture of
-what you're trying to push forward right now — that way each daily plan is
-actually anchored on what matters to you, not just a generic to-do list."
+Step 1 — Frame it warmly: "Let's get a clear picture of what you're pushing
+forward right now — that way each daily plan is anchored on what matters to
+you, not just a generic to-do list."
 
-Step 2 — Interview the user. Ask in 2–3 batches (not all at once, not one at
-a time). Cover everything below — skip a sub-question only if it clearly
-doesn't apply.
-
-  Work goals (projects, career, money — 3–12 months out)
-  - What are the 1–5 things you're actively trying to build or achieve?
-    Phrase each as a concrete outcome. For each: rough deadline or "ongoing",
-    what success looks like, and a priority (1 = most important).
-  - For each, capture the PROJECT behind it for the work library: a one-line
-    summary plus a short context paragraph (what it is, where it stands,
-    what kind of work it needs).
-
-  Life goals (the non-work side)
-  - Health/body, creative pursuits, relationships, inner work, finances —
-    what are you building there? Each with a category and what success
-    looks like. These seed the goals library.
+Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
 
   Working style
-  - Typical weekday: when do you actually do focused work? Which hours of
-    the day are your IMPORTANT focus hours (e.g. "9-12, 15-17")?
+  - Typical weekday: which hours are your IMPORTANT focus hours?
   - How many total work hours per day do you realistically want?
   - Preferred work-session length? (45 / 60 / 90 / 120 min)
-  - Break preference: how long between sessions, and what restful break
-    activities do you actually like (short walk, a couple of games, snack
-    prep, stretch — the menu the plan rotates through)?
+  - Break preference: how long between sessions, what restful activities
+    do you actually like (the rotation the plan uses)?
   - When must the LAST work block of the day end?
   - Energy peak: morning / afternoon / night / mixed?
   - Anything that wrecks your day if it slips?
+  - Any other /plan-my-day preferences (e.g. "always surface carry-forward
+    tasks first", "keep Sundays block-free")?
+  Once you have the above, draft a short planning_guidelines paragraph:
+  "Here's how I'll plan your day: [block sizing, anchor philosophy, what
+  it optimises for]." Read it back and confirm with the user.
 
-  Daily time anchors (the fixed skeleton)
-  - Usual wake time, workout time, lunch time, dinner time, walk (if any),
-    bed target.
+  Current focus — what are you actively trying to build or achieve?
+  Work focus (projects, career, money) and life focus (health/body, creative
+  pursuits, relationships, inner work, finances). For each item:
+  - classify: lib = "work" (project/career) | "goals" (life goal)
+  - track: professional | personal
+  - horizon: short (3–6 months) | long (6+ months)
+  - priority (1 = most important), deadline or "ongoing"
+  - success_looks_like — short phrase
+  - context — a working-notes paragraph (what it is, where it stands, what
+    kind of effort it needs)
+  Register each as a short library card too:
+    work-library card — id, name, shortcut (2-3 letters, e.g. "pb" → pbrain),
+      category: "work", one-line summary, stable metadata (repo/stack/links)
+    goals-library card — id, name, shortcut, category (health|creative|
+      relationships|financial|personal), one-line summary
 
-  Anti-patterns to actively avoid
-  - What behaviours sabotage you? (doomscrolling, late nights, gaming
-    benders, …) These feed the "Avoiding today" block when relevant.
+  Daily time anchors — usual wake time, workout time, lunch time, dinner time,
+    walk (if any), bed target.
 
-  Personal anchors
-  - Relationships to stay close to (first names/labels), creative pursuits,
-    health/movement non-negotiables.
+  Anti-patterns — behaviours that sabotage you (doomscrolling, late nights…).
+
+  Personal anchors — relationships to stay close to, creative pursuits,
+    health non-negotiables.
 
 Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1,
 each with frontmatter (type, date: $TODAY, tags: [], version: 1,
 committed: true), a heading, and a fenced json block:
 
-  goals-profile.v1.md — json:
+  plans-profile.v1.md — json:
   {"created": "$TODAY",
-   "work_goals": [{"id": "<work-library id>", "goal": "...", "deadline": "...",
-                   "success_looks_like": "...", "priority": 1}],
-   "life_goals": [{"id": "<goals-library id>", "goal": "...", "deadline": "...",
-                   "success_looks_like": "...", "priority": 1}],
-   "maintenance_mode": [],
    "working_style": {"session_length_min": 90, "break_min": 30,
      "break_activities": ["..."], "work_hours_per_day": 7,
      "focus_hours": "...", "last_block_end": "HH:MM",
-     "energy_peak": "...", "day_wreckers": ["..."]},
+     "energy_peak": "...", "day_wreckers": ["..."], "other_prefs": ["..."]},
+   "planning_guidelines": "...",
+   "current_focus": [
+     {"id": "<library-id>", "lib": "work|goals", "name": "...",
+      "track": "professional|personal", "horizon": "short|long",
+      "priority": 1, "deadline": "...", "success_looks_like": "...",
+      "context": "...", "status": "active"}],
    "daily_anchors": {"wake_time": "", "workout_time": "", "lunch_time": "",
      "dinner_time": "", "walk_time": null, "bed_target": ""},
    "anti_patterns": ["..."],
@@ -387,23 +419,23 @@ committed: true), a heading, and a fenced json block:
 
   work-library.v1.md — json:
   {"created": "$TODAY", "projects": [
-    {"id": "<slug>", "name": "...", "summary": "...", "status": "active",
-     "context": "...", "last_worked": null}]}
+    {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
+     "summary": "...", "category": "work",
+     "metadata": {"repo": "...", "stack": "...", "links": []},
+     "timeline": null}]}
 
   goals-library.v1.md — json:
   {"created": "$TODAY", "goals": [
-    {"id": "<slug>", "goal": "...", "category": "...", "deadline": "...",
-     "success_looks_like": "..."}]}
+    {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
+     "category": "...", "summary": "...", "timeline": null}]}
 
-  - Every work_goals/life_goals entry references a library id — the profile
-    is the combination view over the two libraries.
-  - Use the user's actual words where possible — don't sanitize their voice.
-  - Fewer goals than the maximum is fine. Don't pad.
-  - The libraries are LIVING documents: entries are appended/enriched in
-    place over time; versions only mint on structural rebuilds.
+  - Every current_focus entry references a library card by id.
+  - Libraries are LIVING documents: entries appended/enriched in place;
+    versions only mint on structural rebuilds.
+  - Use the user's actual words — don't sanitize their voice.
 
-Step 4 — Confirm: "Goals profile saved → $STORE (profile + work library +
-goals library). Edit any time with /plan-my-day profile new. Now re-run
+Step 4 — Confirm: "Plans profile saved → $STORE (plans profile + work library
++ goals library). Edit any time with /plan-my-day profile new. Now re-run
 /plan-my-day and I'll plan today against these goals."
 SETUP
   exit 0
@@ -417,9 +449,9 @@ if [[ -z "$PROFILE_JSON" ]]; then
 PLAN_MY_DAY_CONFIG_ERROR
 profile_file: $PROFILE_FILE
 
-The goals profile at $PROFILE_FILE has no readable JSON block (or it is
+The plans profile at $PROFILE_FILE has no readable JSON block (or it is
 malformed). Fix the fenced JSON manually, or mint a fresh version with
-/plan-my-day profile new goals-profile.
+/plan-my-day profile new plans-profile.
 ERR
   exit 1
 fi
@@ -474,7 +506,7 @@ if [[ "${1:-}" == "task" ]]; then
   echo "=== TODAY'S PLAN ($OUT_FILE) ==="
   cat "$OUT_FILE"
   echo ""
-  echo "=== GOALS PROFILE (working_style + work/life goals) ==="
+  echo "=== PLANS PROFILE (working_style + current focus) ==="
   echo "$PROFILE_JSON"
   echo ""
   echo "=== WEEKLY GOALS ==="
@@ -511,7 +543,7 @@ The plan carries TWO tables that must stay in sync:
   • "## Task log" — one row per task: Task | Tie | Priority | Difficulty |
     Done at | Status | Notes. /end-of-day fills Done at + Status.
 
-WORKING STYLE (from the goals profile above): use working_style.session_length_min
+WORKING STYLE (from the plans profile above): use working_style.session_length_min
 for block size, working_style.break_min for the gap between blocks (rotate
 working_style.break_activities, never the same one back-to-back, respect
 anti_patterns), and NEVER schedule a work block past working_style.last_block_end.
@@ -523,7 +555,7 @@ TASKEDIT
 For `task add`:
 1. TIE the new task to a goal. Default menu = this week's WEEKLY GOALS (above),
    ordered priority then difficulty; fall back to MONTHLY GOALS, then the
-   profile's work_goals/life_goals. Set Tie to the matched goal id/name.
+   profile's current_focus list. Set Tie to the matched item id/name.
 2. SUGGEST-TIER when the task ties to no weekly goal (same flow as a normal
    plan):
      • A clear, scoped, one-week piece of work → offer once: "This isn't in
@@ -533,8 +565,8 @@ For `task add`:
        fenced JSON valid). If weekly_goals_file is "(not set up yet)", say they
        can run /weekly-review to set the week up — don't block.
      • A broader new direction → offer: "add it to this month's monthly goals
-       (profile new monthly-goals) or the goals profile (profile new
-       goals-profile)?" Take their pick. One sentence, never block.
+       (profile new monthly-goals) or the plans profile (profile new
+       plans-profile)?" Take their pick. One sentence, never block.
    A task tied to nothing is fine: Tie = "—", priority = "—", difficulty = "—".
 3. PRIORITY + DIFFICULTY. Inherit priority from the tied goal when there is one;
    otherwise ask (1 = most important). Ask for difficulty
@@ -587,6 +619,158 @@ TASKWRITE
 fi
 
 # ---------------------------------------------------------------------------
+# `focus` subcommand — manage current_focus items in the plans profile.
+# `library` subcommand — view/amend a stable library card.
+#   focus list | focus add | focus archive <id|shortcut>
+#   focus restore <id|shortcut>
+#   library [work|goals] [show | edit <id|shortcut>]
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "focus" || "${1:-}" == "library" ]]; then
+  FOCUS_VERB="${1:-focus}"
+  FOCUS_ACTION="${2:-list}"
+
+  if [[ "$FOCUS_VERB" == "focus" ]]; then
+    case "$FOCUS_ACTION" in
+      list|add|archive|restore) ;;
+      *)
+        echo "usage: plan-my-day.sh focus list|add|archive|restore" >&2
+        exit 2
+        ;;
+    esac
+    echo "PLAN_MY_DAY_FOCUS"
+    echo "action: $FOCUS_ACTION"
+    echo "profile_file: $PROFILE_FILE"
+    echo "work_library_file: ${WORK_LIB_FILE:-(none)}"
+    echo "goals_library_file: ${GOALS_LIB_FILE:-(none)}"
+    echo ""
+    echo "=== PLANS PROFILE (current_focus + working_style) ==="
+    echo "$PROFILE_JSON"
+    echo ""
+    echo "=== WORK LIBRARY ==="
+    echo "$WORK_LIB_CONTENT"
+    echo ""
+    echo "=== GOALS LIBRARY ==="
+    echo "$GOALS_LIB_CONTENT"
+    echo ""
+    cat <<FOCUSINSTR
+---
+INSTRUCTIONS — focus $FOCUS_ACTION. You are managing the user's current_focus
+list in their plans profile ($PROFILE_FILE). The plans profile is a LIVING
+document — amend the latest version in place (do NOT mint a new version unless
+the user explicitly asks for a structural redesign). Keep the fenced JSON block
+valid and the frontmatter intact throughout.
+
+FOCUSINSTR
+    if [[ "$FOCUS_ACTION" == "list" ]]; then
+      cat <<'FOCUSLIST'
+Show the user's current_focus entries as a numbered list. For each entry show:
+  name (shortcut from library if set) | track | horizon | priority | deadline | status
+  context (one-line summary)
+If current_focus is empty, say so and suggest /plan-my-day focus add. Stop here.
+FOCUSLIST
+    elif [[ "$FOCUS_ACTION" == "add" ]]; then
+      cat <<'FOCUSADD'
+The user's message describes a new focus item to add. Gather:
+  - name + one-line description
+  - lib: "work" (project/career/money) or "goals" (health/creative/
+    relationships/financial/personal)
+  - track: professional | personal
+  - horizon: short (3–6 months) | long (6+ months)
+  - priority (1 = most important; ask if not obvious — show current list)
+  - deadline: YYYY-MM or "ongoing"
+  - success_looks_like (short phrase)
+  - context (working-notes paragraph — what it is, where it stands, what effort
+    it needs — the rich detail that makes plan blocks useful)
+Suggest a 2-3-letter shortcut (e.g. "lt" for Lettuce); confirm with the user.
+After gathering:
+1. APPEND the new entry to current_focus in the profile file (in-place edit).
+2. REGISTER a short library card in the appropriate library:
+   lib: "work" → work-library: {id, name, shortcut, category:"work",
+     summary, metadata:{}, timeline:null}
+   lib: "goals" → goals-library: {id, name, shortcut, category, summary,
+     timeline:null}
+   Edit the library file in place (living document).
+3. AUTO-APPEND OFFER: if there is no existing library card, remind the user
+   that the shortcut can be used to reference this item tersely in any entry.
+4. Confirm: "Added '[name]' (shortcut: xx) to current_focus and registered a
+   card in the [work|goals] library."
+FOCUSADD
+    elif [[ "$FOCUS_ACTION" == "archive" ]]; then
+      cat <<'FOCUSARCHIVE'
+The user named an item to archive (id or shortcut in their message). Identify it
+from the current_focus list, quote it back to confirm, then:
+1. Remove the entry from current_focus in the profile file (in-place edit).
+2. In the library card (work-library or goals-library per lib), set
+   "timeline": {"started": "<created date or best estimate>", "ended": "$TODAY"}
+3. Confirm: "Archived '[name]' — library card stamped with end date."
+FOCUSARCHIVE
+    else
+      cat <<'FOCUSRESTORE'
+The user named an item to restore (id or shortcut). Find it in the work-library
+or goals-library (a card with a non-null timeline), quote it back to confirm:
+1. Clear its timeline: set "timeline": null in the library file.
+2. Ask the user for updated context + any field changes (priority, deadline).
+3. APPEND a new entry to current_focus in the profile with status: "active".
+4. Confirm: "Restored '[name]' to current_focus."
+FOCUSRESTORE
+    fi
+    exit 0
+  else
+    # library subcommand
+    LIB_TARGET="${2:-work}"
+    LIB_OP="${3:-show}"
+    LIB_ID="${4:-}"
+    case "$LIB_TARGET" in
+      work|goals) ;;
+      *) echo "usage: plan-my-day.sh library [work|goals] [show|edit <id|shortcut>]" >&2; exit 2 ;;
+    esac
+    case "$LIB_OP" in
+      show|edit) ;;
+      *) echo "usage: plan-my-day.sh library [work|goals] [show|edit <id|shortcut>]" >&2; exit 2 ;;
+    esac
+
+    LIB_FILE=""
+    LIB_CONTENT=""
+    if [[ "$LIB_TARGET" == "work" ]]; then
+      LIB_FILE="${WORK_LIB_FILE:-}"
+      LIB_CONTENT="$WORK_LIB_CONTENT"
+    else
+      LIB_FILE="${GOALS_LIB_FILE:-}"
+      LIB_CONTENT="$GOALS_LIB_CONTENT"
+    fi
+
+    echo "PLAN_MY_DAY_LIBRARY"
+    echo "target: $LIB_TARGET"
+    echo "action: $LIB_OP"
+    echo "library_file: ${LIB_FILE:-(none)}"
+    [[ -n "$LIB_ID" ]] && echo "item: $LIB_ID"
+    echo ""
+    echo "=== $(echo "$LIB_TARGET" | tr '[:lower:]' '[:upper:]') LIBRARY ==="
+    echo "$LIB_CONTENT"
+    echo ""
+    if [[ "$LIB_OP" == "show" ]]; then
+      cat <<'LIBSHOW'
+---
+INSTRUCTIONS — library show. Present the library cards as a readable list.
+For each card: shortcut (if set) | name | category | summary | metadata
+(key facts only) | timeline status (active or archived with date). Stop here.
+LIBSHOW
+    else
+      cat <<LIBEDIT
+---
+INSTRUCTIONS — library edit. The user wants to update a card in the $LIB_TARGET
+library (${LIB_FILE:-(no library yet)}). If no library file exists, say so and stop.
+Find the card by id or shortcut (item: $LIB_ID if set; otherwise the user's
+message names it). Display its current fields, ask what to change, then edit
+the library file in place (living document — no version mint). Keep the fenced
+JSON valid. Confirm what changed.
+LIBEDIT
+    fi
+    exit 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # PHASE 1 — today's plan already exists → review/update mode.
 # ---------------------------------------------------------------------------
 if [[ -f "$OUT_FILE" ]]; then
@@ -605,6 +789,10 @@ fi
 # ---------------------------------------------------------------------------
 FITNESS_TODAY="$(cat "$FITNESS_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 DAILY_TODAY="$(cat "$DAILY_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
+
+# Existence-only flag for the end-of-session diet nudge — we only need yes/no,
+# not the file contents.
+DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
 
 # Sleep data recorded by today's fitness check-in (frontmatter sleep_* fields)
 # — when present, the wake-time question is skipped (confirm in passing).
@@ -652,7 +840,7 @@ times = p.get("meal_times") or {}
 print(", ".join(f"{k} {v}" for k, v in times.items()))
 PYEOF
 )"
-[[ -n "${DIET_MEAL_TIMES//[[:space:]]/}" ]] || DIET_MEAL_TIMES="(no diet profile — use the goals-profile daily_anchors / timing signal)"
+[[ -n "${DIET_MEAL_TIMES//[[:space:]]/}" ]] || DIET_MEAL_TIMES="(no diet profile — use the plans-profile daily_anchors / timing signal)"
 
 # Today's scheduled fitness activity + its typical time, from the fitness
 # store (activity profiles carry fixed days; the library carries times).
@@ -988,9 +1176,10 @@ laptop_tracking_state: $LAPTOP_TRACKING_STATE
 laptop_tracking_cmd: $LAPTOP_CMD
 fitness_sleep: $FITNESS_SLEEP
 diet_meal_times: $DIET_MEAL_TIMES
+diet_today_exists: $DIET_TODAY_EXISTS
 fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
 
-=== GOALS PROFILE ===
+=== PLANS PROFILE ===
 $PROFILE_JSON
 
 === WORK LIBRARY (project context for block descriptions) ===
@@ -1033,26 +1222,20 @@ $HABITS_TODAY_MD
 INSTRUCTIONS — follow these steps in order. Keep the tone warm and concise.
 
 Step 0 — Preflight checks (do these silently, then surface in one short message):
-  - PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
-    (global or per-command) says to skip the fitness-journal gate/nudge, SKIP
-    the FITNESS GATE entirely — go straight to Step 1/Step 2 and just ask once
-    "Roughly when's your physical activity today, and what is it?" if you need
-    it for the plan. A standing preference always overrides this gate.
-  - FITNESS GATE (do this BEFORE anything in Step 1 or Step 2): If TODAY'S
-    FITNESS JOURNAL == "MISSING", your first message must be ONLY about the
-    fitness journal — do NOT show the Step 1 lens or start the Step 2 check-in
-    yet. Ask: "Your fitness journal isn't done yet — running /fitness-journal
-    first means I can slot your workout into the day (and it captures your
-    wake time for me). Want to do that first, or plan around it?" Then STOP
-    and wait for their answer.
-      - If they choose the fitness journal first: let them run it. When they
-        come back (the fitness file now exists), proceed to Step 1 + Step 2.
-      - If they say plan around it: ask once "Roughly when's your physical
-        activity today, and what is it? (e.g. gym 4pm, football 7pm, rest
-        day)", take their answer, and proceed.
-    The daily-journal nudge and weekly-review nudge below may ride along in
-    this same first message; the Step 1 lens and Step 2 questions never do.
-  - If TODAY'S FITNESS JOURNAL exists, there is no gate — go straight through.
+  - FITNESS NUDGE (soft, non-blocking — like the daily-journal nudge):
+    PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
+    (global or per-command) says to skip the fitness-journal nudge, SKIP this
+    entirely. A standing preference always wins.
+      - If TODAY'S FITNESS JOURNAL == "MISSING": mention it ONCE, folded into
+        the same first message as the other Step 0 nudges — e.g. "Heads up:
+        today's /fitness-journal isn't done. Running it captures your wake time
+        and slots your workout into the day — want to? Either way I'll plan
+        now." Do NOT make it a separate turn; do NOT STOP and wait; do NOT ask
+        whether any session is complete/logged (that's /end-of-day's job, not
+        the planner's). Just plan. If you genuinely need the workout time and
+        \`fitness_today_schedule\` is empty, ask it inline in Step 2c, not here.
+      - If TODAY'S FITNESS JOURNAL exists: say nothing about it; still read its
+        \`sleep_*\` fields (Step 2a) and treat its scheduled session as today's.
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's
     /journal is empty too — you can fill it in later." Do not block.
   - WEEKLY REVIEW (Mondays only) — read \`weekly_review_signal\` above:
@@ -1109,7 +1292,7 @@ Step 1 — Show the user their current week's lens, briefly:
     show those goals as bullets ordered by priority (1 = most important),
     noting difficulty where relevant. One line: the week (iso_week).
   - If no weekly goals but MONTHLY GOALS are set: show monthly goals bullets.
-  - If neither: fall back to work_goals (priority order) + life_goals.
+  - If neither: fall back to current_focus items (priority order).
   Example:
     "Week W24 — anchoring on:
      • Ship Lettuce VC application — algo module (normal)
@@ -1148,25 +1331,40 @@ Step 2 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
         working_style.work_hours_per_day.
     Present: "That gives you N blocks: {compact list with times}. Want to add
     or reduce?" Adjust until they're happy.
-  2d — WHAT TO WORK ON. Ask what goes into the blocks.
-    FIRST, if the CARRY-FORWARD section above is not "(none)": surface those
-    unfinished tasks up top — "Carried from {date}: {tasks}. Pull any of these
-    into today?" Let the user keep, drop, or re-scope each. Carried tasks the
-    user keeps go into the blocks (and the Task log) like any other task,
-    inheriting their original tie/priority where known.
-    THEN the menu, in priority order:
-      1. WEEKLY GOALS (from the WEEKLY GOALS section), sorted by priority
-         then difficulty (nightmare → hard → normal → easy). This is the
-         default menu when the week is set up.
-      2. If no weekly goals: fall back to MONTHLY GOALS (if set), then the
-         profile's work_goals + life_goals (priority order).
-    Pull CONTEXT from the WORK LIBRARY for block descriptions (what the
-    project is, where it stands). Allocate tasks to blocks proportional to
-    complexity/priority — a deep task gets 2–3 blocks, small things share one.
-    Honor any explicit time the user states. Also collect, in passing: any
-    locked-in commitments not already on the calendar, and anything to
-    specifically avoid today (defaults to profile anti_patterns).
-    SUGGEST-TIER: When the user names a task that ties to no weekly goal:
+  2d — WHAT TO WORK ON. PROPOSE, don't ask. Assume the user may not yet know
+    what they want to do today — your job is to show them what would move this
+    week's targets, sized to the blocks they have, and let them react. Never
+    open with a blank "what do you want to work on?".
+    FIRST, BUILD a candidate task slate from data already injected above (the
+    user does NOT supply this — you derive it):
+      1. WEEKLY GOALS (from the WEEKLY GOALS section), ordered priority → then
+         difficulty (nightmare → hard → normal → easy). For each, draw a
+         concrete next-action using the WORK LIBRARY / GOALS LIBRARY card
+         context (what the project is, where it stands). This is the default
+         source when the week is set up.
+      2. CARRY-FORWARD tasks (from the CARRY-FORWARD section, if not "(none)")
+         — surface these at the TOP of the slate as "still open from {date}".
+      3. Fallbacks when the week is thin: MONTHLY GOALS (if set), then the
+         profile's current_focus list (priority order).
+    SIZE the slate to the focus hours settled in 2c — propose only as many
+    candidate tasks as the available blocks can hold, biggest-rock first (a
+    deep weekly goal gets 2–3 blocks; small things share one). Don't overflow
+    the blocks with more than they fit.
+    PRESENT it as a menu to react to, not a blank prompt:
+      "Here's what would move this week's targets today, in your {N} blocks:
+         • {task} → {block(s)}  ({tie + 1-line why})
+         • ...
+       Still open from {date}: {carry-forward}
+       Want all of these, or swap/drop/add?"
+    The user picks, drops, re-scopes, or adds their own. Carried tasks the user
+    keeps go into the blocks (and the Task log) like any other task, inheriting
+    their original tie/priority where known. Lead with the proposal, make
+    accepting it the path of least resistance, keep adjustment one sentence
+    away — never interrogate.
+    AFTER the slate, collect in passing (not before it): any locked-in
+    commitments not already on the calendar, and anything to specifically
+    avoid today (defaults to profile anti_patterns).
+    SUGGEST-TIER: When the user adds a task that ties to no weekly goal:
       - A clear, scoped, one-week piece of work → offer briefly: "This isn't
         in your weekly goals — want me to add it to this week's weekly-goals
         draft?" If yes, edit the draft at weekly_goals_file in place (add an
@@ -1174,36 +1372,48 @@ Step 2 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
         weekly-goals file exists yet, say they can run /weekly-review to set
         that up.
       - A broader new direction → offer: "This sounds like a new direction —
-        add it to the goals profile (profile new goals-profile) or to this
+        add it to the plans profile (profile new plans-profile) or to this
         month's monthly goals (profile new monthly-goals)?" Take their pick.
       Keep the offer short — one sentence. Never block the planning on it.
+    AUTO-LIBRARY: when the user names a project or goal not in the work-library
+    or goals-library, offer once: "Add '[name]' to your library? I'll suggest
+    a shortcut." On yes, append a short card in place to the appropriate library
+    file (no version mint; living document). Suggest a 2-3-letter shortcut.
+    Skip silently if no library files exist yet.
 
 Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet).
   STRUCTURE: lead with a consolidated **Today at a glance** table (time range
   + action + tie). All subjective detail comes AFTER the table as supporting
   sections. The table is the operating doc.
 
-  Table rules — ANCHOR-FIRST:
-  a. CALENDAR EVENTS + locked-in commitments + explicit user-stated times are
-     absolute — never shift them. Calendar items sit at their exact window.
-     Two overlapping calendar items → keep both, flag the conflict.
-  b. The day's anchors — fitness session, meal slots (at the diet-profile
-     times, workout-shifted), walk, wind-down, bed — are the skeleton,
-     scheduled around (a). Maximum 15–30 min variance from a profile/diet
-     anchor time; prefer the TIMING SIGNAL average when a needed anchor has
-     no profile time.
+  Table rules — LIFE-ANCHORS-FIRST:
+  ANCHORS are LIFE structure ONLY — calendar events, the fitness session, meal
+  slots, the walk / wind-down / bed, and any habit reminder times. Work and
+  tasks are NEVER anchors; they are allocated into the gaps the life anchors
+  leave. Build the life-anchor skeleton first, then place work blocks around it.
+  a. CALENDAR EVENTS + explicit user-stated times are absolute — never shift
+     them. Calendar items sit at their exact window. Two overlapping calendar
+     items → keep both, flag the conflict. (Locked-in WORK commitments are also
+     fixed in time, but they are work in the gaps, not life anchors.)
+  b. The day's LIFE ANCHORS — fitness session, meal slots (at the diet-profile
+     times, workout-shifted), walk, wind-down, bed, habit reminder times — are
+     the skeleton, scheduled around (a). Work blocks are placed AROUND these,
+     never among them. Maximum 15–30 min variance from a profile/diet anchor
+     time; prefer the TIMING SIGNAL average when a needed anchor has no profile
+     time.
   c. The table ALWAYS starts at the user's actual wake time today (from 2a) —
      NEVER at current_time. Everything from 2b is backfilled as ✓ rows at its
      real time. The plan spans wake → bed.
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
      no gaps, no overlapping rows. Fill holes with explicit rest / transition
      / meal / decompress rows. Backfilled rows tile cleanly too.
-  e. Blocks: as many session_length_min blocks as 2c settled on, each labeled
-     with its task(s), break rows woven between consecutive blocks (rotating
-     break_activities). No break before the first block or after the last.
+  e. WORK BLOCKS: as many session_length_min blocks as 2c settled on, placed
+     into the gaps the life anchors leave, each labeled with its task(s), break
+     rows woven between consecutive blocks (rotating break_activities). No break
+     before the first block or after the last. Work is never an anchor row.
   f. 24h times (HH:MM–HH:MM) on every row. REQUIRED rows: wake/morning-start,
      workout (if any), every meal slot, walk (if anchored), wind-down, bed.
-  g. Every row's Tie column maps to a work_goal/life_goal name, a category
+  g. Every row's Tie column maps to a current_focus item name, a category
      (Fit body, Rest, Eating, Relationships, Creative, Social), or "—".
 
   ---
@@ -1214,7 +1424,7 @@ Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet)
   status: planned
   energy: {1-10 from 2b}
   sleep_hours: {from fitness_sleep or 2a — omit if unknown}
-  focus_today: [{the work_goal/life_goal names today's blocks tie back to — empty array if none}]
+  focus_today: [{the current_focus item names today's blocks tie back to — empty array if none}]
   tags: []
   ---
 
@@ -1238,7 +1448,7 @@ Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   _(Done at and Status are filled by /end-of-day. One row per task. Tasks not tied to a goal: priority = — , difficulty = — .)_
 
-  ## Anchoring on
+  ## Today's focus
 
   - {bullet per goal today's blocks tie back to — name + why it matters this
   week. If none tie back, one line: "Today's work isn't tied to a standing
@@ -1248,8 +1458,10 @@ Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet)
 
   ## Anchors
 
+  (LIFE structure only — fitness, meals, walk, calendar events. NEVER work.)
   - {fitness session — focus + intensity from the fitness journal, not the time}
-  - {each locked-in commitment with brief context — skip if none}
+  - {meal slots worth surfacing, the walk / wind-down — skip any not worth a line}
+  - {each calendar event with brief context — skip if none}
 
   ## Blocks
 
@@ -1337,9 +1549,17 @@ Step 7 — Habit check-in (only if \`habits_setup_needed\` == no). At the very e
      Then push marks to Apple Reminders (best-effort, silent on failure):
        bash "$HABITS_CMD" reminders-sync --date $TODAY
      Confirm what was marked. One round only — don't loop asking for more.
+
+Step 8 — Diet nudge (the very end, non-blocking). Read \`diet_today_exists\` above:
+  PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
+  diet nudge, skip this step.
+  - If \`no\`: one short line — "Today's /diet-journal isn't logged yet — want to
+    capture your meals? Otherwise the day's all set." Don't block; don't ask
+    whether anything is complete. Just the offer.
+  - If \`yes\`: say nothing.
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the
 # user said they did / will do today. Self-improvement capture runs after.
 pbrain_emit_habits_extract "plan-my-day" || true
-pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "goals profile" || true
+pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "plans profile" || true

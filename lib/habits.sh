@@ -5,7 +5,7 @@
 # from data:
 #   - The habits PROFILE (which habits to track, their kind / priority / cap)
 #     is a vault markdown note carrying its structured data in a fenced ```json
-#     block — same discipline as the goals profile, so pbrain_profile_json reads
+#     block — same discipline as the plans profile, so pbrain_profile_json reads
 #     it and it stays browsable/editable in Obsidian.
 #   - The habit EVENT LOG lives in the shared SQLite DB (lib/db.sh), so weekly /
 #     monthly counts and cap checks are a cheap query.

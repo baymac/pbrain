@@ -20,7 +20,7 @@ A weekly cadence is the missing layer between daily journaling (too noisy) and q
 
 **Improvements (Step 4):**
 
-After the synthesis and the three questions, the review builds a **per-command improvement list** from the week's evidence — one list each for `/plan-my-day` (goals profile + work/goals libraries), `/diet-journal` (diet profile), `/fitness-journal` (fitness profile, library, activity profiles), and `/habits` (the habit set). Each improvement is one evidence-tied line — "you skipped legs twice", "protein landed under target 5/7 days", "the Lettuce goal wasn't touched in any plan". It proposes nothing when the week gives no clear signal.
+After the synthesis and the three questions, the review builds a **per-command improvement list** from the week's evidence — one list each for `/plan-my-day` (plans profile + work/goals libraries), `/diet-journal` (diet profile), `/fitness-journal` (fitness profile, library, activity profiles), and `/habits` (the habit set). Each improvement is one evidence-tied line — "you skipped legs twice", "protein landed under target 5/7 days", "the Lettuce goal wasn't touched in any plan". It proposes nothing when the week gives no clear signal.
 
 You then walk the list **one item at a time** — approve or reject each, no batch approvals. For every profile with at least one approved improvement, a **new version is minted** through the owning command's `profile` subcommand (`profile new` → the approved edits land in the draft → `profile commit`); the old version stays on disk as history. Libraries (work, goals, food, fitness) are living documents — approved library edits apply in place with no version mint. Everything proposed, decided, and committed (with the new version path) is recorded in the review's `## Improvements` section.
 
@@ -35,7 +35,7 @@ You then walk the list **one item at a time** — approve or reject each, no bat
 | `PBRAIN_PLAN_DIR` | Daily plans + the plan profile store inside it (read) |
 | `PBRAIN_FITNESS_DIR` | Fitness sessions + the fitness profile store (read) |
 | `PBRAIN_DIET_DIR` | Diet logs + the diet profile store (read) |
-| `PBRAIN_PLAN_PROFILE_FILE` | Explicit goals-profile file, bypassing the store |
+| `PBRAIN_PLAN_PROFILE_FILE` | Explicit plans-profile file, bypassing the store |
 
 **Example:**
 

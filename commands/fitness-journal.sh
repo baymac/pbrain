@@ -215,7 +215,8 @@ Step 3 — Write the new profiles (mkdir -p first). ALL committed v1 files:
   fitness-library), JSON:
   \`\`\`json
   {"created": "$TODAY", "activities": [
-    {"id": "<slug>", "name": "<Name>", "occurrence": {"per": "week", "times": N},
+    {"id": "<slug>", "name": "<Name>", "shortcut": "<2-3 letters>",
+     "occurrence": {"per": "week", "times": N},
      "equipment": "...", "location": "...", "typical_time": "HH:MM",
      "duration_min": N, "notes": "stable metadata"}]}
   \`\`\`
@@ -330,7 +331,8 @@ Step 2 — Write BOTH files (mkdir -p "$STORE" first), committed v1:
 
   \`\`\`json
   {"created": "$TODAY", "activities": [
-    {"id": "<slug>", "name": "<Name>", "occurrence": {"per": "week", "times": N},
+    {"id": "<slug>", "name": "<Name>", "shortcut": "<2-3 letters>",
+     "occurrence": {"per": "week", "times": N},
      "days": ["Mon", "Thu"], "equipment": "...", "location": "...",
      "typical_time": "HH:MM", "duration_min": N, "notes": "..."}]}
   \`\`\`
@@ -718,12 +720,12 @@ INSTRUCTIONS — follow these steps in order.
 Step 1 — Ask all state questions at once, exactly like this:
   "Quick check-in before we plan today:"
   1. Energy level? (1–10)
-  2. Soreness? Which muscles? (1–10)
+  2. Soreness, pain, or injury? Which muscles (1–10), and flag anything acute
+     or any movement to work around.
   3. Sleep: what time did you get to bed, what time did you wake up, and
      quality 1–10?
   4. Stress? (low / medium / high)
-  5. Any pain or injury?
-  6. Bodyweight today? (kg — skip if you don't have it)
+  5. Bodyweight today? (kg — skip if you don't have it)
   From the bed + wake times, INFER sleep hours (add 24h when bed time is
   after midnight crossing, e.g. bed 23:30 wake 07:00 → 7.5h). Compare against
   the profile's normal sleep window and mention a notable deviation in one

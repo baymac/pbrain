@@ -546,13 +546,13 @@ new rows are appended in place; the version only bumps on a structural rebuild.
 
 ## Home / regular foods
 
-| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
-|---|---|---|---|---|---|---|---|---|
+| Item | Shortcut | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
+|---|---|---|---|---|---|---|---|---|---|
 
 ## Junk / outside food
 
-| Item | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
-|---|---|---|---|---|---|---|---|---|
+| Item | Shortcut | Description | Serving | Cals | P (g) | C (g) | F (g) | Fiber (g) | Meal type |
+|---|---|---|---|---|---|---|---|---|---|
 
 ## Supplements
 
@@ -725,7 +725,9 @@ Step 6 — FOOD LIBRARY upkeep:
   section — **Home / regular foods** for things they make/eat normally,
   **Junk / outside food** for takeout / treats / restaurant items — with a
   brief description (enough to estimate macros), a serving, Cals/P/C/F/Fiber,
-  and a **Meal type** value. Meal type values: breakfast, lunch, dinner,
+  a **Shortcut** (2-3 letter alias the user can type instead of the full name —
+  suggest one, let the user override; e.g. "ps" for protein shake), and a
+  **Meal type** value. Meal type values: breakfast, lunch, dinner,
   snack, post-workout, omad, any — comma-separated when an item fits multiple
   slots. Keep columns aligned. Append IN PLACE — the library is a living
   document, never mint a new version for new rows.
@@ -923,10 +925,11 @@ Step 6 — FOOD LIBRARY upkeep:
   once per item: "Want me to save '<item>' to your food library so you can
   just say the name next time?" On a yes, append a row to $FOOD_LIBRARY_FILE
   under **Home / regular foods** or **Junk / outside food**, with a brief
-  description, serving, Cals/P/C/F/Fiber, and a **Meal type** value
-  (breakfast, lunch, dinner, snack, post-workout, omad, any — comma-separated
-  for multi-slot items). Append IN PLACE — the library is a living document;
-  never mint a new version for new rows.
+  description, serving, Cals/P/C/F/Fiber, a **Shortcut** (2-3 letter alias —
+  suggest one, let the user override; e.g. "ps" for protein shake), and a
+  **Meal type** value (breakfast, lunch, dinner, snack, post-workout, omad,
+  any — comma-separated for multi-slot items). Append IN PLACE — the library
+  is a living document; never mint a new version for new rows.
   Only genuine repeat items, never one-offs. Never write without a yes.
 
   Supplements: if the user mentioned a NEW regular supplement not in the FOOD

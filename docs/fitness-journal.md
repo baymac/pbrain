@@ -33,7 +33,7 @@ If you had the old setup (`fitness-activities.json`, `Gym Plan.md`, `fitness/pla
 
 After setup, every run:
 
-1. Asks your state in one batch — energy, soreness, **sleep as bed time + wake time + quality** (hours inferred, midnight crossing handled), stress, pain, bodyweight. The session file records `sleep_bed`, `sleep_wake`, `sleep_quality`, `sleep_hours` in its frontmatter (`/plan-my-day` reads your wake time from here so it doesn't re-ask).
+1. Asks your state in one batch — energy, soreness/pain/injury, **sleep as bed time + wake time + quality** (hours inferred, midnight crossing handled), stress, bodyweight. The session file records `sleep_bed`, `sleep_wake`, `sleep_quality`, `sleep_hours` in its frontmatter (`/plan-my-day` reads your wake time from here so it doesn't re-ask).
 2. Proposes today's activity from your fixed days ("Today is Thu — your schedule says Gym. Go with that, or override?"). The full menu plus Recovery / Walk / Rest stays available.
 3. Asks 2–4 follow-ups tailored to the chosen activity (kickoff/location for football, time available for gym — equipment is never re-asked; it's in the profile).
 4. Applies adaptive coaching (downgrade on bad sleep + soreness + stress; flag neglected muscle groups or focus areas).

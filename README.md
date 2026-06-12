@@ -140,7 +140,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/plan-my-day` | Goal-anchored daily planner | `$VAULT/life/daily-planning/` |
 | `/end-of-day` | Close-of-day completion pass (bookend to `/plan-my-day`) | fills `## How it went` (executive summary + carry-forward) in `$VAULT/life/daily-planning/<date>.md` (in place) |
 | `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet; weekly goals lifecycle | `$VAULT/life/weekly-tracking/YYYY-Www.md` |
-| `/monthly-review` | Month-end synthesis across weekly reviews; monthly goals versioning; goals-profile hygiene pass | `$VAULT/life/monthly-tracking/YYYY-MM.md` |
+| `/monthly-review` | Month-end synthesis across weekly reviews; monthly goals versioning; plans-profile hygiene pass | `$VAULT/life/monthly-tracking/YYYY-MM.md` |
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
 | `/discuss <topic>` | Personal dilemma discussion — Socratic, one question at a time, saves insight note | `$VAULT/agent-work/notes/` |
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
@@ -212,7 +212,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_GYM_PLAN_FILE` / `PBRAIN_FITNESS_PLANS_DIR` / `PBRAIN_FITNESS_ACTIVITIES_FILE` | legacy paths — read only by the one-time fitness migration (0003) | — |
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
 | `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
-| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/discuss`, `/weekly-review` (explicit override) | latest committed `goals-profile.vN.md` in `$VAULT/life/daily-planning/.profile/` |
+| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/discuss`, `/weekly-review` (explicit override) | latest committed `plans-profile.vN.md` in `$VAULT/life/daily-planning/.profile/` |
 | `PBRAIN_HABITS_PROFILE_FILE` | `/habits`, read by `/plan-my-day`, `/end-of-day`, `/weekly-review` (explicit override) | latest committed `habits-profile.vN.md` in `$VAULT/life/habit-tracking/.profile/` |
 | `PBRAIN_HABIT_TRACK_DIR` | `/habits` (dated tracking files), synced→DB by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/habit-tracking/` |
 | `PBRAIN_HABIT_SUGGEST_FILE` | `/habits` + journaling commands (new-habit nudge suppress-list) | `~/.config/pbrain/habit-suggest-seen` |
@@ -301,7 +301,7 @@ pbrain/
 │   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
 │   ├── prefs.sh                        ← per-command preference injection
 │   ├── self-improve.sh                 ← end-of-session feedback capture
-│   ├── profile.sh                      ← goals-profile JSON extractor
+│   ├── profile.sh                      ← plans-profile JSON extractor
 │   ├── db.sh                           ← shared SQLite store (habit events + reminders)
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
 │   ├── habit_schedule.py               ← habit schedule engine (is_due, derive_schedule, spacing helpers)

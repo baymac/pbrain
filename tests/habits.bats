@@ -1614,16 +1614,19 @@ print(row[0] if row else 'none')
 
 _plant_goals_profile() {
   mkdir -p "$PBRAIN_VAULT/life/daily-planning/.profile"
-  cat > "$PBRAIN_VAULT/life/daily-planning/.profile/goals-profile.v1.md" <<'EOF'
+  cat > "$PBRAIN_VAULT/life/daily-planning/.profile/plans-profile.v1.md" <<'EOF'
 ---
-type: goals-profile
+type: plans-profile
 version: 1
 committed: true
 ---
-# Goals profile
+# Plans profile
 ```json
-{"created": "2026-06-03", "work_goals": [{"id": "ship", "goal": "Ship pbrain", "priority": 1}],
- "life_goals": [], "maintenance_mode": []}
+{"created": "2026-06-03",
+ "working_style": {"session_length_min": 90, "break_min": 30, "break_activities": [], "work_hours_per_day": 7},
+ "current_focus": [{"id": "ship", "lib": "work", "name": "Ship pbrain", "track": "professional",
+                    "horizon": "short", "priority": 1, "deadline": "ongoing",
+                    "success_looks_like": "shipped", "context": "pbrain tooling", "status": "active"}]}
 ```
 EOF
 }

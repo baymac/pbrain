@@ -30,28 +30,37 @@ teardown() {
 
 PMD() { bash "$REPO_ROOT/commands/plan-my-day.sh" "$@"; }
 
-write_goals_profile() {
+write_plans_profile() {
   mkdir -p "$STORE"
-  cat > "$STORE/goals-profile.v1.md" <<EOF
+  cat > "$STORE/plans-profile.v1.md" <<EOF
 ---
-type: goals-profile
+type: plans-profile
 date: $TODAY
 version: 1
 committed: true
 ---
 
-# Goals profile
+# Plans profile
 
 \`\`\`json
 {"created": "$TODAY",
- "work_goals": [{"id": "lettuce", "goal": "Ship Lettuce", "deadline": "2026-08",
-                 "success_looks_like": "VC application out"}],
- "life_goals": [{"id": "fit-body", "goal": "Build a fit body", "deadline": "ongoing",
-                 "success_looks_like": "consistent training"}],
  "working_style": {"session_length_min": 90, "break_min": 30,
    "break_activities": ["short walk", "stretch"], "work_hours_per_day": 7,
    "focus_hours": "9-12,15-17", "last_block_end": "20:00",
-   "energy_peak": "morning", "day_wreckers": ["poor sleep"]},
+   "energy_peak": "morning", "day_wreckers": ["poor sleep"], "other_prefs": []},
+ "planning_guidelines": "Blocks of 90 min, 30-min breaks, life anchors first.",
+ "current_focus": [
+   {"id": "lettuce", "lib": "work", "name": "Ship Lettuce",
+    "track": "professional", "horizon": "short",
+    "priority": 1, "deadline": "2026-08",
+    "success_looks_like": "VC application out",
+    "context": "Autonomous trading platform; algo module is the hard bit.",
+    "status": "active"},
+   {"id": "fit-body", "lib": "goals", "name": "Build a fit body",
+    "track": "personal", "horizon": "long",
+    "priority": 2, "deadline": "ongoing",
+    "success_looks_like": "consistent training",
+    "context": "Gym 4x/week, track metrics.", "status": "active"}],
  "daily_anchors": {"wake_time": "07:30", "workout_time": "17:00",
    "lunch_time": "13:00", "dinner_time": "20:30", "walk_time": null,
    "bed_target": "23:30"},
@@ -62,6 +71,9 @@ committed: true
 \`\`\`
 EOF
 }
+
+# Keep backward-compat alias used by many tests below.
+write_goals_profile() { write_plans_profile; }
 
 write_libraries() {
   mkdir -p "$STORE"
@@ -74,9 +86,9 @@ committed: true
 # Work library
 \`\`\`json
 {"created": "$TODAY", "projects": [
-  {"id": "lettuce", "name": "Lettuce", "summary": "autonomous trading platform",
-   "status": "active", "context": "VC apps due; algo part is the hard bit",
-   "last_worked": null}]}
+  {"id": "lettuce", "name": "Lettuce", "shortcut": "lt",
+   "summary": "autonomous trading platform", "category": "work",
+   "metadata": {"repo": "gh/lettuce"}, "timeline": null}]}
 \`\`\`
 EOF
   cat > "$STORE/goals-library.v1.md" <<EOF
@@ -88,41 +100,41 @@ committed: true
 # Goals library
 \`\`\`json
 {"created": "$TODAY", "goals": [
-  {"id": "fit-body", "goal": "Build a fit body", "category": "health",
-   "deadline": "ongoing", "success_looks_like": "consistent training"}]}
+  {"id": "fit-body", "name": "Build a fit body", "shortcut": "fb",
+   "category": "health", "summary": "consistent training", "timeline": null}]}
 \`\`\`
 EOF
 }
 
 # ── migration gating ─────────────────────────────────────────────────────────
 
-@test "migration block fires when the old Goals Profile exists and store is empty" {
+@test "rebuild block fires when the old Goals Profile exists and store is empty" {
   mkdir -p "$PBRAIN_VAULT/life"
   echo "old goals profile" > "$PBRAIN_VAULT/life/Goals Profile.md"
   PBRAIN_MIGRATIONS=1 run PMD
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_MIGRATION"* ]]
-  [[ "$output" == *"record 0002_goals_profile_restructure"* ]]
+  [[ "$output" == *"PLAN_MY_DAY_REBUILD"* ]]
+  [[ "$output" == *"record 0002_plans_profile_rebuild"* ]]
   [[ "$output" == *"work-library.v1.md"* ]]
   [[ "$output" == *"goals-library.v1.md"* ]]
 }
 
-@test "no migration block once the store is populated" {
+@test "no rebuild block once the store is populated" {
   mkdir -p "$PBRAIN_VAULT/life"
   echo "old goals profile" > "$PBRAIN_VAULT/life/Goals Profile.md"
-  write_goals_profile
+  write_plans_profile
   write_libraries
   PBRAIN_MIGRATIONS=1 run PMD
-  [[ "$output" != *"PLAN_MY_DAY_MIGRATION"* ]]
+  [[ "$output" != *"PLAN_MY_DAY_REBUILD"* ]]
   [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
 }
 
-@test "explicit profile override bypasses the migration prompt" {
+@test "explicit profile override bypasses the rebuild prompt" {
   mkdir -p "$PBRAIN_VAULT/life"
   echo "old goals profile" > "$PBRAIN_VAULT/life/Goals Profile.md"
-  write_goals_profile
-  PBRAIN_MIGRATIONS=1 PBRAIN_PLAN_PROFILE_FILE="$STORE/goals-profile.v1.md" run PMD
-  [[ "$output" != *"PLAN_MY_DAY_MIGRATION"* ]]
+  write_plans_profile
+  PBRAIN_MIGRATIONS=1 PBRAIN_PLAN_PROFILE_FILE="$STORE/plans-profile.v1.md" run PMD
+  [[ "$output" != *"PLAN_MY_DAY_REBUILD"* ]]
 }
 
 # ── setup / draft phases ─────────────────────────────────────────────────────
@@ -131,34 +143,50 @@ EOF
   run PMD
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_DAY_SETUP_PROFILE"* ]]
-  [[ "$output" == *"goals-profile.v1.md"* ]]
+  [[ "$output" == *"plans-profile.v1.md"* ]]
   [[ "$output" == *"work-library.v1.md"* ]]
   [[ "$output" == *"goals-library.v1.md"* ]]
 }
 
-@test "open goals-profile draft short-circuits to the draft block" {
+@test "open plans-profile draft short-circuits to the draft block" {
   mkdir -p "$STORE"
-  printf -- '---\nversion: 1\ncommitted: false\n---\n# Goals profile\n```json\n{}\n```\n' \
-    > "$STORE/goals-profile.v1.md"
+  printf -- '---\nversion: 1\ncommitted: false\n---\n# Plans profile\n```json\n{}\n```\n' \
+    > "$STORE/plans-profile.v1.md"
   run PMD
   [[ "$output" == *"PLAN_PROFILE_DRAFT_OPEN"* ]]
 }
 
 # ── daily flow ───────────────────────────────────────────────────────────────
 
-@test "daily session has no current_focus, declutter, or cadence signal" {
-  write_goals_profile
+@test "daily session has plans profile context and no declutter or cadence signal" {
+  write_plans_profile
   write_libraries
   run PMD
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
-  [[ "$output" != *"current_focus"* ]]
+  [[ "$output" == *"PLANS PROFILE"* ]]
   [[ "$output" != *"eclutter"* ]]
   [[ "$output" != *"CADENCE SIGNAL"* ]]
 }
 
+@test "daily INSTRUCTIONS propose a brainstorm slate and define anchors as life-only" {
+  write_plans_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  # Step 2d flips from ASK to PROPOSE
+  [[ "$output" == *"PROPOSE, don't ask"* ]]
+  [[ "$output" == *"candidate task slate"* ]]
+  # anchors are life structure only, never work
+  [[ "$output" == *"ANCHORS are LIFE structure ONLY"* ]]
+  [[ "$output" == *"Work and"* && "$output" == *"NEVER anchors"* ]]
+  # the GOALS-section rename landed
+  [[ "$output" == *"## Today's focus"* ]]
+  [[ "$output" != *"## Anchoring on"* ]]
+}
+
 @test "daily session injects work + goals libraries" {
-  write_goals_profile
+  write_plans_profile
   write_libraries
   run PMD
   [[ "$output" == *"WORK LIBRARY"* ]]
@@ -254,8 +282,8 @@ EOF
 
 @test "env-override profile file is honored" {
   cp_profile="$TMP/custom-profile.md"
-  write_goals_profile
-  cp "$STORE/goals-profile.v1.md" "$cp_profile"
+  write_plans_profile
+  cp "$STORE/plans-profile.v1.md" "$cp_profile"
   rm -rf "$STORE"
   write_libraries
   PBRAIN_PLAN_PROFILE_FILE="$cp_profile" run PMD
@@ -267,15 +295,15 @@ EOF
 # ── profile subcommand ───────────────────────────────────────────────────────
 
 @test "profile new mints a draft and commit freezes it" {
-  write_goals_profile
+  write_plans_profile
   run PMD profile new
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_PROFILE_NEW"* ]]
-  [ -f "$STORE/goals-profile.v2.md" ]
-  grep -q '^committed: false$' "$STORE/goals-profile.v2.md"
+  [ -f "$STORE/plans-profile.v2.md" ]
+  grep -q '^committed: false$' "$STORE/plans-profile.v2.md"
   run PMD profile commit
   [[ "$output" == *"PLAN_PROFILE_COMMITTED"* ]]
-  grep -q '^committed: true$' "$STORE/goals-profile.v2.md"
+  grep -q '^committed: true$' "$STORE/plans-profile.v2.md"
 }
 
 @test "profile new for a library targets that base" {
@@ -287,11 +315,11 @@ EOF
 }
 
 @test "profile show cats all three profiles" {
-  write_goals_profile
+  write_plans_profile
   write_libraries
   run PMD profile show
   [[ "$output" == *"PLAN_PROFILE_SHOW"* ]]
-  [[ "$output" == *"goals-profile"* ]]
+  [[ "$output" == *"plans-profile"* ]]
   [[ "$output" == *"work-library"* ]]
   [[ "$output" == *"goals-library"* ]]
 }
@@ -509,6 +537,78 @@ EOF
   run PMD task frobnicate
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: plan-my-day.sh task add|remove|list"* ]]
+}
+
+# ── focus / library subcommands ──────────────────────────────────────────────
+
+@test "focus list emits PLAN_MY_DAY_FOCUS with plans profile context" {
+  write_plans_profile
+  write_libraries
+  run PMD focus list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_FOCUS"* ]]
+  [[ "$output" == *"action: list"* ]]
+  [[ "$output" == *"PLANS PROFILE"* ]]
+  [[ "$output" == *"WORK LIBRARY"* ]]
+}
+
+@test "focus add emits PLAN_MY_DAY_FOCUS with add action" {
+  write_plans_profile
+  write_libraries
+  run PMD focus add
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_FOCUS"* ]]
+  [[ "$output" == *"action: add"* ]]
+}
+
+@test "focus archive emits PLAN_MY_DAY_FOCUS with archive action" {
+  write_plans_profile
+  write_libraries
+  run PMD focus archive
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_FOCUS"* ]]
+  [[ "$output" == *"action: archive"* ]]
+}
+
+@test "focus with unknown action fails with usage" {
+  write_plans_profile
+  write_libraries
+  run PMD focus frobnicate
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"usage: plan-my-day.sh focus"* ]]
+}
+
+@test "focus with no profile triggers setup, not a crash" {
+  run PMD focus list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SETUP_PROFILE"* ]]
+}
+
+@test "library work show emits PLAN_MY_DAY_LIBRARY" {
+  write_plans_profile
+  write_libraries
+  run PMD library work show
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_LIBRARY"* ]]
+  [[ "$output" == *"target: work"* ]]
+  [[ "$output" == *"action: show"* ]]
+}
+
+@test "library goals show emits PLAN_MY_DAY_LIBRARY" {
+  write_plans_profile
+  write_libraries
+  run PMD library goals show
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_LIBRARY"* ]]
+  [[ "$output" == *"target: goals"* ]]
+}
+
+@test "library with unknown target fails with usage" {
+  write_plans_profile
+  write_libraries
+  run PMD library other show
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"usage: plan-my-day.sh library"* ]]
 }
 
 @test "an open activity draft does not hide today's committed schedule" {

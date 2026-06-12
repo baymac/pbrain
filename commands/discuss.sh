@@ -3,7 +3,7 @@ set -euo pipefail
 
 # discuss.sh <topic>
 # Personal dilemma discussion — a Socratic thinking partner that reads your
-# pbrain context (journal, gratitude, goals profile) before engaging. Saves
+# pbrain context (journal, gratitude, plans profile) before engaging. Saves
 # a short note with the insight/resolution to agent-work/notes/.
 #
 # Default destination:  $VAULT_DIR/agent-work/notes
@@ -30,11 +30,11 @@ pbrain_emit_prefs "discuss" || true
 NOTES_DIR="${PBRAIN_NOTES_DIR:-$VAULT_DIR/agent-work/notes}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 GRATITUDE_DIR="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}"
-# Goals profile: explicit override file, else latest committed in the plan
+# Plans profile: explicit override file, else latest committed in the plan
 # store (legacy life/Goals Profile.md as a last resort for pre-migration vaults).
 PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-}"
 if [[ -n "$PROFILE_FILE" && ! -f "$PROFILE_FILE" ]]; then PROFILE_FILE=""; fi
-[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$(pbrain_profile_store "${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}")" goals-profile)"
+[[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$(pbrain_profile_latest "$(pbrain_profile_store "${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}")" plans-profile)"
 [[ -n "$PROFILE_FILE" ]] || PROFILE_FILE="$VAULT_DIR/life/Goals Profile.md"
 
 mkdir -p "$NOTES_DIR"

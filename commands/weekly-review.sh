@@ -22,7 +22,7 @@ set -euo pipefail
 #   PBRAIN_PLAN_DIR          — daily plans (the plan profile store lives inside)
 #   PBRAIN_FITNESS_DIR       — fitness sessions (+ fitness profile store)
 #   PBRAIN_DIET_DIR          — diet logs (+ diet profile store)
-#   PBRAIN_PLAN_PROFILE_FILE — explicit goals-profile file (bypasses the store)
+#   PBRAIN_PLAN_PROFILE_FILE — explicit plans-profile file (bypasses the store)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -150,15 +150,15 @@ fi
 
 # Core profiles, for the Step 4 improvements pass. All versioned (committed =
 # final; changes mint the next version through the owning command's `profile`
-# subcommand). The explicit goals-profile override is respected.
+# subcommand). The explicit plans-profile override is respected.
 echo ""
 echo "--- CORE PROFILES (for Step 4 improvements) ---"
 if [[ -n "${PBRAIN_PLAN_PROFILE_FILE:-}" && -f "${PBRAIN_PLAN_PROFILE_FILE:-}" ]]; then
   echo ""
-  echo "### Goals profile [override: $PBRAIN_PLAN_PROFILE_FILE]"
+  echo "### Plans profile [override: $PBRAIN_PLAN_PROFILE_FILE]"
   cat "$PBRAIN_PLAN_PROFILE_FILE"
 else
-  cat_profile "Goals profile" "$PLAN_STORE" goals-profile
+  cat_profile "Plans profile" "$PLAN_STORE" plans-profile
 fi
 cat_profile "Work library"    "$PLAN_STORE" work-library
 cat_profile "Goals library"   "$PLAN_STORE" goals-library
@@ -326,7 +326,7 @@ proposals and what the user decided. If habit tracking isn't set up, write
 Step 4 — Improvements. Build a PER-COMMAND improvement list from the week's
 evidence, using the CORE PROFILES above as the baseline. One list per command:
 
-  - plan-my-day  → goals-profile / work-library / goals-library
+  - plan-my-day  → plans-profile / work-library / goals-library
   - diet-journal → diet-profile (food-library for library rows)
   - fitness-journal → fitness-profile / fitness-library / activity profiles
   - habits → the habit set (handled in Step 4d below)
@@ -343,7 +343,7 @@ record the decision. No batch approvals.
 After the walk, apply the approved improvements:
   - For each PROFILE with at least one approved improvement, mint a NEW
     VERSION via the owning command (paths use commands_dir above):
-      bash "<commands_dir>/plan-my-day.sh"    profile new [goals-profile]
+      bash "<commands_dir>/plan-my-day.sh"    profile new [plans-profile]
       bash "<commands_dir>/diet-journal.sh"   profile new
       bash "<commands_dir>/fitness-journal.sh" profile new [fitness-profile|fitness-library|activity <name>]
       bash "<commands_dir>/habits.sh"          profile new
@@ -373,14 +373,14 @@ Step 4b — Weekly Goals lifecycle. Walk this for every weekly review.
          * If monthly_goals_file is set and its period is the current month
            ($MONTH_YEAR): derive from monthly goals (copy goal text/tie/priority,
            ask user to confirm each + set difficulty: easy|normal|hard|nightmare).
-         * Else: derive from the goals-profile's work_goals + life_goals (use their
+         * Else: derive from the plans-profile's current_focus list (use their
            priority, ask difficulty).
        Walk goals ONE BY ONE — each round ask: "Include '{goal}' next week?
        If yes, what difficulty? (easy/normal/hard/nightmare)". Allow adding new
        goals not in the profile.
        The final JSON shape is:
        {"created": "TODAY", "period": "NEXT_ISO_WEEK",
-        "derived_from": "monthly-goals MONTH_YEAR or goals-profile vN",
+        "derived_from": "monthly-goals MONTH_YEAR or plans-profile vN",
         "goals": [{"id": "<slug>", "goal": "...", "tie": "<profile/monthly id>",
                    "priority": 1, "difficulty": "normal",
                    "success_looks_like": "...", "status": "active"}]}

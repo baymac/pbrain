@@ -1,5 +1,5 @@
 ---
-description: Adaptive daily planner anchored on your goals. First run builds a versioned goals profile (work goals + life goals, working style, anti-patterns). Daily runs plan against that profile — or against this week's weekly goals if /weekly-review is set up. Includes a per-day task log table (/end-of-day fills Done at/Status). Mid-day, `task add`/`task remove`/`task list` revises an existing day's tasks and re-flows the schedule. Supports profile new/commit for goals-profile, work-library, goals-library, monthly-goals, and weekly-goals.
+description: Adaptive daily planner anchored on your plans. First run builds a versioned plans profile (current_focus list with deadline + context per item, working style, planning guidelines, anti-patterns). Daily runs plan against that profile — or against this week's weekly goals if /weekly-review is set up. Includes a per-day task log table (/end-of-day fills Done at/Status). Mid-day, `task add`/`task remove`/`task list` revises an existing day's tasks and re-flows the schedule. `focus` subcommand manages the current_focus list; `library` subcommand shows/edits the work and goals reference cards. Supports profile new/commit for plans-profile, work-library, goals-library, monthly-goals, and weekly-goals.
 ---
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
@@ -7,17 +7,18 @@ Run this with the Bash tool first, then follow the INSTRUCTIONS block in its out
 bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/plan-my-day.sh"
 ```
 
-**Run bash immediately.** The script injects today's goals profile, work/goals libraries, fitness sleep data, diet meal times, and today's scheduled session as context. Follow the INSTRUCTIONS in its output. If the user passed arguments (e.g. `profile show`, `profile new work-library`, `profile commit`, or `task add` / `task remove` / `task list`), append them to the command. The fitness session is the one hard anchor — always place it in the plan. Don't plan beyond today.
+**Run bash immediately.** The script injects today's plans profile (with `current_focus` list), work/goals libraries, fitness sleep data, diet meal times, and today's scheduled session as context. Follow the INSTRUCTIONS in its output. If the user passed arguments (e.g. `profile show`, `profile new work-library`, `profile commit`, `task add` / `task remove` / `task list`, `focus list` / `focus add` / `focus archive`, or `library work show`), append them to the command. The fitness session is the one hard anchor — always place it in the plan. Don't plan beyond today.
 
 **Mid-day task edits.** When the user wants to revise *today's already-written plan* — "add a task to ship the diet refactor", "drop the email cleanup", "what's on my list?" — map it to `plan-my-day.sh task add` / `task remove` / `task list` (do NOT rebuild the day). The script emits a `PLAN_MY_DAY_TASK` block with today's plan + goals context, or `PLAN_MY_DAY_TASK_NO_PLAN` if today hasn't been planned yet (tell the user to run `/plan-my-day` first). On add/remove, follow its INSTRUCTIONS: edit the task-log row AND re-flow "Today at a glance" around the fixed anchors, then rewrite both tables together.
 
 Key hard rules:
-- Migration (`PLAN_MY_DAY_MIGRATION`): rebuild the old goals profile part by part with the user — confirm/update/drop each goal, classify work vs life, ask the new working-style questions. Never import silently. The old current-focus concept is gone — the goals profile is the focus.
+- Rebuild (`PLAN_MY_DAY_REBUILD`): build the plans profile part by part with the user — confirm/update/drop each current_focus item, ask working-style questions, set planning_guidelines. Never import silently. The plans profile IS the focus: `current_focus` is the heart; the libraries are stable reference cards.
 - Wake time comes from today's fitness entry when recorded — confirm it in passing instead of re-asking.
 - Backfill the morning yourself from what the user says — gap-free, no overlaps; they correct, you place.
 - Show the computed block layout (blocks + breaks around the anchors) before asking what goes in the blocks.
 - Committed profiles are final — changes go through `profile new` → edit draft → `profile commit`. The work/goals libraries are living documents (enrich in place). For weekly-goals and monthly-goals, use `profile new weekly-goals` / `profile new monthly-goals`.
 - The daily task-log table (in Step 3) is one row per task from 2d. /end-of-day fills Done at / Status at close. Mid-day, `task add`/`task remove` revise this table and re-flow "Today at a glance" together — `task remove` confirms first if the row is already closed (Status filled), so end-of-day's rollup isn't lost.
+- **AUTO-LIBRARY**: when the user mentions a project or goal not in any library card, offer to register a shortcut card (name + shortcut + context) so future sessions can reference it by name.
 
 ## Morning sequence check (do this first)
 

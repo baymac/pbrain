@@ -272,13 +272,13 @@ EOF
 @test "0002 pending when an old goals profile exists and the store is empty" {
   mkdir -p "$VAULT_DIR/life"
   echo "old profile" > "$VAULT_DIR/life/Goals Profile.md"
-  run pbrain_migration_pending 0002_goals_profile_restructure
+  run pbrain_migration_pending 0002_plans_profile_rebuild
   [ "$status" -eq 0 ]
   # populate the store → no longer applicable → vacuous-record on next run
   mkdir -p "$VAULT_DIR/life/daily-planning/.profile"
   printf -- '---\nversion: 1\ncommitted: true\n---\nx\n' \
-    > "$VAULT_DIR/life/daily-planning/.profile/goals-profile.v1.md"
-  run pbrain_migration_pending 0002_goals_profile_restructure
+    > "$VAULT_DIR/life/daily-planning/.profile/plans-profile.v1.md"
+  run pbrain_migration_pending 0002_plans_profile_rebuild
   [ "$status" -ne 0 ]
 }
 
@@ -309,7 +309,7 @@ EOF
   run pbrain_run_migrations
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  for id in 0001_prefs_feedback_to_vault 0002_goals_profile_restructure \
+  for id in 0001_prefs_feedback_to_vault 0002_plans_profile_rebuild \
             0003_fitness_profiles 0004_diet_profile_combine \
             0005_habits_profile_to_store 0006_food_library_to_store; do
     [ -f "$LEDGER/$id.done" ]

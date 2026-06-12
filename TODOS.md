@@ -9,6 +9,12 @@ Sources studied:
 
 ---
 
+## Bugs / regressions
+
+- [ ] **`/end-of-day` not nudging to close `/diet-journal`** — end-of-day should prompt the user to wrap up their diet log if it hasn't been closed for the day, but the nudge is missing. *(reported 2026-06-12)*
+
+---
+
 ## High priority (small effort, real lift)
 
 - [x] **`/monthly-review`** — natural extension above `/weekly-review`. Pull all 4-5 weekly reviews in the calendar month, plus monthly aggregates of fitness/diet/plans. Synthesize themes that only show up at a month's resolution. Writes to `life/monthly-tracking/YYYY-MM.md`. *(inspired by ballred — they have `/monthly` with quarterly milestone tracking.)* **Completed: v0.21.0 (2026-06-12)** — also drives monthly-goals versioning + optional goals-profile hygiene pass.

@@ -24,81 +24,81 @@ teardown() {
 }
 
 @test "latest/latest_any/draft are silent on a missing store" {
-  run pbrain_profile_latest "$STORE" goals-profile
+  run pbrain_profile_latest "$STORE" plans-profile
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  run pbrain_profile_latest_any "$STORE" goals-profile
+  run pbrain_profile_latest_any "$STORE" plans-profile
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  run pbrain_profile_draft "$STORE" goals-profile
+  run pbrain_profile_draft "$STORE" plans-profile
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
 @test "new on an empty store mints v1 as an editable draft" {
-  run pbrain_profile_new "$STORE" goals-profile
+  run pbrain_profile_new "$STORE" plans-profile
   [ "$status" -eq 0 ]
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
-  [ -f "$STORE/goals-profile.v1.md" ]
-  grep -q '^version: 1$' "$STORE/goals-profile.v1.md"
-  grep -q '^committed: false$' "$STORE/goals-profile.v1.md"
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
+  [ -f "$STORE/plans-profile.v1.md" ]
+  grep -q '^version: 1$' "$STORE/plans-profile.v1.md"
+  grep -q '^committed: false$' "$STORE/plans-profile.v1.md"
   # a draft is not committed
-  ! pbrain_profile_is_committed "$STORE/goals-profile.v1.md"
+  ! pbrain_profile_is_committed "$STORE/plans-profile.v1.md"
   # and latest (committed-only) still returns nothing
-  run pbrain_profile_latest "$STORE" goals-profile
+  run pbrain_profile_latest "$STORE" plans-profile
   [ -z "$output" ]
-  run pbrain_profile_draft "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
+  run pbrain_profile_draft "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
 }
 
 @test "commit freezes the draft and latest starts returning it" {
-  pbrain_profile_new "$STORE" goals-profile >/dev/null
-  run pbrain_profile_commit "$STORE" goals-profile
+  pbrain_profile_new "$STORE" plans-profile >/dev/null
+  run pbrain_profile_commit "$STORE" plans-profile
   [ "$status" -eq 0 ]
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
-  pbrain_profile_is_committed "$STORE/goals-profile.v1.md"
-  grep -q '^committed: true$' "$STORE/goals-profile.v1.md"
-  run pbrain_profile_latest "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
+  pbrain_profile_is_committed "$STORE/plans-profile.v1.md"
+  grep -q '^committed: true$' "$STORE/plans-profile.v1.md"
+  run pbrain_profile_latest "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
   # no draft remains
-  run pbrain_profile_draft "$STORE" goals-profile
+  run pbrain_profile_draft "$STORE" plans-profile
   [ -z "$output" ]
 }
 
 @test "commit is idempotent" {
-  pbrain_profile_new "$STORE" goals-profile >/dev/null
-  pbrain_profile_commit "$STORE" goals-profile >/dev/null
-  run pbrain_profile_commit "$STORE" goals-profile
+  pbrain_profile_new "$STORE" plans-profile >/dev/null
+  pbrain_profile_commit "$STORE" plans-profile >/dev/null
+  run pbrain_profile_commit "$STORE" plans-profile
   [ "$status" -eq 0 ]
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
   # exactly one committed: line survived the double-commit
-  [ "$(grep -c '^committed:' "$STORE/goals-profile.v1.md")" -eq 1 ]
+  [ "$(grep -c '^committed:' "$STORE/plans-profile.v1.md")" -eq 1 ]
 }
 
 @test "new after commit mints v2 copying v1 content; latest stays v1 until v2 commits" {
-  pbrain_profile_new "$STORE" goals-profile >/dev/null
-  cat >> "$STORE/goals-profile.v1.md" <<'EOF'
+  pbrain_profile_new "$STORE" plans-profile >/dev/null
+  cat >> "$STORE/plans-profile.v1.md" <<'EOF'
 UNIQUE-CONTENT-MARKER
 EOF
-  pbrain_profile_commit "$STORE" goals-profile >/dev/null
-  run pbrain_profile_new "$STORE" goals-profile
+  pbrain_profile_commit "$STORE" plans-profile >/dev/null
+  run pbrain_profile_new "$STORE" plans-profile
   [ "$status" -eq 0 ]
-  [ "$output" = "$STORE/goals-profile.v2.md" ]
-  grep -q '^version: 2$' "$STORE/goals-profile.v2.md"
-  grep -q '^committed: false$' "$STORE/goals-profile.v2.md"
-  grep -q 'UNIQUE-CONTENT-MARKER' "$STORE/goals-profile.v2.md"
+  [ "$output" = "$STORE/plans-profile.v2.md" ]
+  grep -q '^version: 2$' "$STORE/plans-profile.v2.md"
+  grep -q '^committed: false$' "$STORE/plans-profile.v2.md"
+  grep -q 'UNIQUE-CONTENT-MARKER' "$STORE/plans-profile.v2.md"
   # latest committed is still v1; latest_any is the v2 draft
-  run pbrain_profile_latest "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v1.md" ]
-  run pbrain_profile_latest_any "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v2.md" ]
+  run pbrain_profile_latest "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v1.md" ]
+  run pbrain_profile_latest_any "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v2.md" ]
   # commit v2 → latest moves to v2, v1 stays on disk as history
-  pbrain_profile_commit "$STORE" goals-profile >/dev/null
-  run pbrain_profile_latest "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v2.md" ]
-  [ -f "$STORE/goals-profile.v1.md" ]
+  pbrain_profile_commit "$STORE" plans-profile >/dev/null
+  run pbrain_profile_latest "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v2.md" ]
+  [ -f "$STORE/plans-profile.v1.md" ]
 }
 
 @test "new refuses while a draft is open" {
-  pbrain_profile_new "$STORE" goals-profile >/dev/null
-  run pbrain_profile_new "$STORE" goals-profile
+  pbrain_profile_new "$STORE" plans-profile >/dev/null
+  run pbrain_profile_new "$STORE" plans-profile
   [ "$status" -ne 0 ]
   [[ "$output" == *"draft already exists"* ]]
 }
@@ -107,10 +107,10 @@ EOF
   mkdir -p "$STORE"
   for i in 1 2 3 4 5 6 7 8 9 10; do
     printf -- '---\nversion: %s\ncommitted: true\n---\nbody v%s\n' "$i" "$i" \
-      > "$STORE/goals-profile.v$i.md"
+      > "$STORE/plans-profile.v$i.md"
   done
-  run pbrain_profile_latest "$STORE" goals-profile
-  [ "$output" = "$STORE/goals-profile.v10.md" ]
+  run pbrain_profile_latest "$STORE" plans-profile
+  [ "$output" = "$STORE/plans-profile.v10.md" ]
 }
 
 @test "latest skips an uncommitted head and falls back to the highest committed" {

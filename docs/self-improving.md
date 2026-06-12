@@ -32,7 +32,7 @@ The commands that own a core profile also watch for lasting *profile* changes â€
 
 | Command | Profile it can update |
 |---|---|
-| `/plan-my-day` | goals profile (+ work/goals libraries) |
+| `/plan-my-day` | plans profile (+ work/goals libraries) |
 | `/diet-journal` | diet profile |
 | `/fitness-journal` | fitness profile, library + per-activity profiles |
 | `/weekly-review` | all of the above (its richer Step 4 improvements pass, which mints new profile versions) |

@@ -4,9 +4,9 @@ set -euo pipefail
 # monthly-review.sh
 # Synthesizes the month across all weekly reviews, fitness/diet/habit aggregates.
 # Drives monthly-goals versioning: commit closing month → mint next month's
-# draft (derived from goals-profile, priority only) → walk goals 1-by-1.
-# Optionally runs a goals-profile hygiene pass (move mostly-done to
-# maintenance_mode, drop finished goals).
+# draft (derived from plans-profile, priority only) → walk goals 1-by-1.
+# Optionally runs a plans-profile hygiene pass (archive completed items,
+# refresh stale context).
 #
 # Default destination:  $VAULT_DIR/life/monthly-tracking/YYYY-MM.md
 # Overrides:
@@ -17,7 +17,7 @@ set -euo pipefail
 #   PBRAIN_PLAN_DIR          — daily plans + profile store
 #   PBRAIN_FITNESS_DIR       — fitness sessions + profile store
 #   PBRAIN_DIET_DIR          — diet logs + profile store
-#   PBRAIN_PLAN_PROFILE_FILE — explicit goals-profile override
+#   PBRAIN_PLAN_PROFILE_FILE — explicit plans-profile override
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -119,10 +119,10 @@ echo ""
 echo "--- CORE PROFILES (for Step 4 improvements) ---"
 if [[ -n "${PBRAIN_PLAN_PROFILE_FILE:-}" && -f "${PBRAIN_PLAN_PROFILE_FILE:-}" ]]; then
   echo ""
-  echo "### Goals profile [override: $PBRAIN_PLAN_PROFILE_FILE]"
+  echo "### Plans profile [override: $PBRAIN_PLAN_PROFILE_FILE]"
   cat "$PBRAIN_PLAN_PROFILE_FILE"
 else
-  cat_profile "Goals profile" "$PLAN_STORE" goals-profile
+  cat_profile "Plans profile" "$PLAN_STORE" plans-profile
 fi
 cat_profile "Work library"    "$PLAN_STORE" work-library
 cat_profile "Goals library"   "$PLAN_STORE" goals-library
@@ -231,46 +231,45 @@ Step 4 — Monthly goals lifecycle. Walk this for every monthly review.
   i) Show current monthly goals with their status (from MONTHLY GOALS above).
      If none, ask: "Want to set up monthly goals? It's optional — they let
      /weekly-review derive its weekly goals from something more focused than
-     the whole goals profile. One-minute setup."
+     the whole plans profile. One-minute setup."
   ii) COMMIT the closing month: if monthly_goals_file is a real path, commit it:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
   iii) MINT next month's draft for $NEXT_MONTH_YEAR:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile new monthly-goals
        Edit the file to set "period": "$NEXT_MONTH_YEAR" in the JSON block, then
-       derive goals from the goals-profile's work_goals + life_goals (priority only,
+       derive goals from the plans-profile's current_focus list (priority only,
        no difficulty at this tier). Walk goals ONE BY ONE:
          "Include '{goal}' next month? (yes/no) If yes — what's your one-month
           milestone for it?"
        Allow adding goals not in the profile. Keep "status": "active" for all new goals.
        Final JSON shape:
        {"created": "$TODAY", "period": "$NEXT_MONTH_YEAR",
-        "derived_from": "goals-profile vN",
+        "derived_from": "plans-profile vN",
         "goals": [{"id": "<slug>", "goal": "...", "tie": "<profile id or null>",
                    "priority": 1, "success_looks_like": "...", "status": "active"}]}
        Commit the draft once confirmed:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
-  iv) GOALS-PROFILE HYGIENE PASS. Offer once, don't force:
-       "Want a quick hygiene pass on your goals profile? We can move mostly-done
-        work to maintenance mode and drop anything that's shipped."
-       If yes → mint a new goals-profile version:
-         bash "$_SCRIPT_DIR/plan-my-day.sh" profile new goals-profile
-       Walk each work_goal:
-         - Mostly done, still tending? → move to maintenance_mode array:
-           {"id": "...", "goal": "...", "note": "mostly done — just tending"}
-         - Fully finished / dropped? → remove from work_goals (history in prior version)
-         - Still active → keep as-is
-       Same pass for life_goals if warranted.
+  iv) PLANS-PROFILE HYGIENE PASS. Offer once, don't force:
+       "Want a quick hygiene pass on your plans profile? We can archive completed
+        items and refresh context on anything stale."
+       If yes → mint a new plans-profile version:
+         bash "$_SCRIPT_DIR/plan-my-day.sh" profile new plans-profile
+       For each current_focus entry:
+         - Completed / shipped? → set status: "done" in the draft, note the end
+           date; the library card keeps the history via timeline stamping.
+         - Still active but stale context? → update the context paragraph.
+         - Still active, unchanged → keep as-is.
        Commit the hygiene-passed profile:
-         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit goals-profile
+         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit plans-profile
   v) OPTIONAL path: if the user declines monthly goals entirely → lighter synthesis
      only. Write "Monthly goals not configured." in the "## Monthly goals" section.
-     /weekly-review will fall back to the goals profile for weekly-goal derivation.
+     /weekly-review will fall back to the plans profile for weekly-goal derivation.
   Record in "## Monthly goals — $MONTH_YEAR" what goals were set up (or "not configured").
 
 Step 4b — Improvements. Build a PER-COMMAND improvement list from the month's
 evidence, using the CORE PROFILES above as the baseline. One list per command:
 
-  - plan-my-day  → goals-profile / work-library / goals-library
+  - plan-my-day  → plans-profile / work-library / goals-library
   - diet-journal → diet-profile (food-library for library rows)
   - fitness-journal → fitness-profile / fitness-library / activity profiles
   - habits → the habit set (handled in Step 4c below)
@@ -285,7 +284,7 @@ decision. No batch approvals.
 After the walk, apply the approved improvements:
   - For each PROFILE with at least one approved improvement, mint a NEW VERSION via
     the owning command:
-      bash "$_SCRIPT_DIR/plan-my-day.sh"    profile new [goals-profile]
+      bash "$_SCRIPT_DIR/plan-my-day.sh"    profile new [plans-profile]
       bash "$_SCRIPT_DIR/diet-journal.sh"   profile new
       bash "$_SCRIPT_DIR/fitness-journal.sh" profile new [fitness-profile|fitness-library|activity <name>]
       bash "$_SCRIPT_DIR/habits.sh"          profile new

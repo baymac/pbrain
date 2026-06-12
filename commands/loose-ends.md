@@ -16,7 +16,7 @@ The five signal sections:
 2. **UNANSWERED QUESTIONS** — `## Open questions` from journals with an empty/`—` answer, plus open-question bullets sitting in `tbd/` brainstorms.
 3. **OPEN TODOS** — unchecked `- [ ]` boxes in recent daily plans.
 4. **RECURRING TOMORROW-SEEDS** — `### Tomorrow seed` bullets that repeated across plans (something that keeps getting deferred).
-5. **FOCUS DRIFT** — goals from the goals profile (work + life) that haven't shown up in recent plans.
+5. **FOCUS DRIFT** — `current_focus` items from the plans profile that haven't shown up in recent plans.
 
 **Your job:**
 1. Read every populated section.
