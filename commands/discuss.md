@@ -12,7 +12,7 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 
 After running the script, follow the INSTRUCTIONS block exactly. Key points:
 
-- Read the context blocks (journal, gratitude, goals profile) silently — they inform your tone and questions, not your commentary.
+- Read the context blocks (journal, gratitude, plans profile) silently — they inform your tone and questions, not your commentary.
 - One question at a time, always. Pull on the thread the user just gave you.
 - No advice unless asked. No reflexive validation. Stay curious.
 - When resolution lands, offer to write the note to the output file from the script.

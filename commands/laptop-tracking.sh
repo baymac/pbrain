@@ -9,6 +9,11 @@
 #   laptop-tracking status             # is it running? today's quick numbers
 #   laptop-tracking access             # one-time per-browser Automation grant
 #   laptop-tracking report [<date>]    # render life/laptop-tracking/<date>.md (default today)
+#   laptop-tracking focus-breakdown --date D --windows "HH:MM-HH:MM,..."
+#                                      # active-minutes-per-category over work blocks
+#                                      #   (+ AFK + uncategorized keys); for the Deep-work score
+#   laptop-tracking categorize --set "github.com=work,x.com=social" | --list
+#                                      # the reusable domain/app → category map
 #   laptop-tracking decline            # opt out of the /plan-my-day setup nudge
 #   laptop-tracking help
 #
@@ -29,6 +34,7 @@
 #   PBRAIN_TRACKER_POLL     — daemon poll seconds (default 10)
 #   PBRAIN_TRACKER_IDLE     — idle-away threshold seconds (default 300)
 #   PBRAIN_TRACKER_TOPN     — rows in the top apps/domains tables (default 12)
+#   PBRAIN_LAPTOP_CATEGORIES_FILE — domain/app → category map (default $TRACKER_DIR/categories.md)
 
 set -euo pipefail
 
@@ -57,6 +63,10 @@ TRACKER_DIR="${PBRAIN_TRACKER_DIR:-$VAULT_DIR/life/laptop-tracking}"
 POLL="${PBRAIN_TRACKER_POLL:-10}"
 IDLE="${PBRAIN_TRACKER_IDLE:-300}"
 TOPN="${PBRAIN_TRACKER_TOPN:-12}"
+# Reusable category map (domain/app → work|social|entertainment|neutral), the
+# taxonomy behind the "Deep work" focus score. A living markdown doc with a
+# fenced json block (browsable/editable in Obsidian, synced like the food library).
+CATEGORIES_FILE="${PBRAIN_LAPTOP_CATEGORIES_FILE:-$TRACKER_DIR/categories.md}"
 
 # Suppresses the one-time /plan-my-day "set up laptop tracking?" nudge. Written
 # on an explicit `decline` or `disable` (the user clearly knows about it then),
@@ -88,14 +98,14 @@ db, day, outpath, topn, today_real = sys.argv[1], sys.argv[2], sys.argv[3], int(
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("PRAGMA busy_timeout=5000")
-    # raw_path may be absent on a DB written by an older daemon; COALESCE so the
-    # query works either way (it just yields NULL paths → no page-level rows).
-    has_path = any(r[1] == "raw_path" for r in
-                   con.execute("PRAGMA table_info(tracker_segments)").fetchall())
-    path_col = "raw_path" if has_path else "NULL"
+    # raw_path / kind may be absent on a DB written by an older daemon; substitute
+    # safe literals so the query works either way (no page rows / all foreground).
+    _cols = {r[1] for r in con.execute("PRAGMA table_info(tracker_segments)").fetchall()}
+    path_col = "raw_path" if "raw_path" in _cols else "NULL"
+    kind_col = "kind" if "kind" in _cols else "'foreground'"
     rows = con.execute(
-        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s "
-        "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % path_col, (day,)
+        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s, %s "
+        "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % (kind_col, path_col), (day,)
     ).fetchall()
     con.close()
 except Exception as e:
@@ -127,7 +137,11 @@ def norm_path(hostpath):
 
 def hm(sec):
     sec = int(sec); h = sec // 3600; m = (sec % 3600) // 60
-    return ("%dh %02dm" % (h, m)) if h else ("%dm" % m)
+    if h:
+        return "%dh %02dm" % (h, m)
+    if sec >= 60:
+        return "%dm" % m
+    return "<1m" if sec > 0 else "0m"
 
 def hhmm(ep):
     return datetime.datetime.fromtimestamp(ep).strftime("%H:%M")
@@ -145,12 +159,18 @@ ATTR_LABEL = {
 }
 
 active = 0
-app_secs, dom_secs, page_secs, attr_secs = {}, {}, {}, {}
+app_secs, dom_secs, page_secs, attr_secs, bg_secs = {}, {}, {}, {}, {}
 segs = []
-for s, e, bid, name, host, attr, path in rows:
+for s, e, bid, name, host, attr, kind, path in rows:
     dur = (e - s) if (e is not None and s is not None and e >= s) else 0
-    active += dur
     app = name or bid or "(unknown)"
+    # Background media is its own ledger — NOT foreground active time, NOT part of
+    # the active/away window. Aggregate it per app and skip the rest.
+    if kind == "bg_media":
+        if dur > 0:
+            bg_secs[app] = bg_secs.get(app, 0) + dur
+        continue
+    active += dur
     app_secs[app] = app_secs.get(app, 0) + dur
     d = norm(host)
     if d:
@@ -187,8 +207,10 @@ else:
 L = []
 L.append("# Laptop usage — %s" % day)
 L.append("")
-if not segs:
+if not segs and not bg_secs:
     L.append("_No active laptop time recorded for this day._")
+elif not segs:
+    L.append("_No foreground activity — background media only (see below)._")
 else:
     pct = (100 * active // window) if window else 0
     L.append("- **Active time:** %s" % hm(active))
@@ -228,7 +250,10 @@ else:
         for pg, secs in sorted(paged.items(), key=lambda x: -x[1])[:topn]:
             p = (100 * secs // ptot) if ptot else 0
             L.append("| %s | %s | %d%% |" % (pg, hm(secs), p))
-    if attr_secs:
+    # Only explain attribution gaps that are worth explaining — sub-minute slivers
+    # (a flash of a new-tab page, a momentary lookup) are noise, not a story.
+    attr_rows = [(a, s) for a, s in sorted(attr_secs.items(), key=lambda x: -x[1]) if s >= 60]
+    if attr_rows:
         L.append("")
         L.append("## Browser attribution")
         L.append("")
@@ -236,8 +261,21 @@ else:
         L.append("")
         L.append("| Reason | Active time |")
         L.append("|--------|------------|")
-        for attr, secs in sorted(attr_secs.items(), key=lambda x: -x[1]):
+        for attr, secs in attr_rows:
             L.append("| %s | %s |" % (ATTR_LABEL[attr], hm(secs)))
+# Background media — its own ledger (audio/video playing in another app, PiP, or
+# while the screen was locked). Shown whether or not there was foreground activity,
+# and never folded into Active time / away above.
+if bg_secs:
+    L.append("")
+    L.append("## Background media")
+    L.append("")
+    L.append("Audio/video playing in the background or PiP — tracked separately, not counted as active time:")
+    L.append("")
+    L.append("| App | Background time |")
+    L.append("|-----|----------------|")
+    for app, secs in sorted(bg_secs.items(), key=lambda x: -x[1])[:topn]:
+        L.append("| %s | %s |" % (app, hm(secs)))
 content = "\n".join(L) + "\n"
 
 # WRITE only after content is fully built (never empty). Atomic temp + rename.
@@ -426,8 +464,274 @@ PYEOF_PREV
     fi
     ;;
 
+  focus-breakdown)
+    # Deterministic: clip the day's foreground segments to the given work-block
+    # windows, aggregate active minutes per key (domain when resolved, else app),
+    # apply the category map, and emit machine-readable per-category totals + the
+    # unknowns (keys not in the map). AFK = window length − active-in-windows.
+    # No writes. Used by /end-of-day to score the "Deep work" habit.
+    shift || true
+    FB_DATE="$(date +%Y-%m-%d)"; FB_WINDOWS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --date)    FB_DATE="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --windows) FB_WINDOWS="${2:-}"; shift 2 2>/dev/null || shift ;;
+        *) shift ;;
+      esac
+    done
+    if ! [[ "$FB_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      echo "Bad date '$FB_DATE' — expected YYYY-MM-DD." >&2
+      exit 1
+    fi
+    python3 - "$PBRAIN_TRACKER_DB_FILE" "$FB_DATE" "$FB_WINDOWS" "$CATEGORIES_FILE" <<'PYEOF'
+import sqlite3, sys, json, re, datetime, time
+
+db, day, windows_arg, catfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+def norm(host):
+    if not host:
+        return None
+    h = host.strip().lower()
+    if h.startswith("www."):
+        h = h[4:]
+    return h or None
+
+# Parse "HH:MM-HH:MM,HH:MM-HH:MM" -> list of (start_epoch, end_epoch) on `day`.
+def _epoch(hh, mm):
+    d = datetime.datetime.strptime(day, "%Y-%m-%d").replace(hour=hh, minute=mm)
+    return int(time.mktime(d.timetuple()))
+windows = []
+for part in (windows_arg or "").split(","):
+    part = part.strip()
+    if not part:
+        continue
+    m = re.match(r"^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$", part)
+    if not m:
+        continue
+    a = _epoch(int(m.group(1)), int(m.group(2)))
+    b = _epoch(int(m.group(3)), int(m.group(4)))
+    if b > a:
+        windows.append((a, b))
+
+# Category map (living markdown + fenced json). Empty/missing -> everything unknown.
+cat_map = {"domains": {}, "apps": {}}
+try:
+    with open(catfile) as fh:
+        ctext = fh.read()
+    mm = re.search(r"```json\s*\n(.*?)```", ctext, re.DOTALL)
+    parsed = json.loads(mm.group(1) if mm else ctext)
+    if isinstance(parsed, dict):
+        cat_map["domains"] = {str(k).strip().lower(): str(v).strip()
+                              for k, v in (parsed.get("domains") or {}).items()}
+        cat_map["apps"] = {str(k): str(v).strip()
+                           for k, v in (parsed.get("apps") or {}).items()}
+except Exception:
+    pass
+
+# Read the day's foreground segments (tolerate an older DB missing kind).
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("PRAGMA busy_timeout=5000")
+    _cols = {r[1] for r in con.execute("PRAGMA table_info(tracker_segments)").fetchall()}
+    kind_col = "kind" if "kind" in _cols else "'foreground'"
+    rows = con.execute(
+        "SELECT started_at, ended_at, app_bundle_id, app_name, raw_host, attribution, %s "
+        "FROM tracker_segments WHERE occurred_on=? ORDER BY started_at" % kind_col, (day,)
+    ).fetchall()
+    con.close()
+except Exception as e:
+    sys.stderr.write("focus-breakdown: cannot read tracker.db (%s)\n" % e)
+    print(json.dumps({"work": 0, "social": 0, "entertainment": 0, "neutral": 0,
+                      "afk": 0, "total_active": 0, "unknown": []}))
+    sys.exit(0)
+
+# key -> [active_seconds, kind('domain'|'app')]
+key_secs = {}
+active_in_windows = 0
+for s, e, bid, name, host, attr, kind in rows:
+    if kind == "bg_media":
+        continue
+    if s is None or e is None or e <= s:
+        continue
+    # Clip this segment to every window and accumulate the overlap.
+    clipped = 0
+    for (wa, wb) in windows:
+        ov = min(e, wb) - max(s, wa)
+        if ov > 0:
+            clipped += ov
+    if clipped <= 0:
+        continue
+    active_in_windows += clipped
+    d = norm(host) if str(attr) == "ok" else None
+    if d:
+        key, kkind = d, "domain"
+    else:
+        key, kkind = (name or bid or "(unknown)"), "app"
+    cur = key_secs.get(key)
+    if cur:
+        cur[0] += clipped
+    else:
+        key_secs[key] = [clipped, kkind]
+
+# Map keys to categories; collect unknowns.
+cats = {}
+unknown = []
+for key, (secs, kkind) in key_secs.items():
+    if kkind == "domain":
+        cat = cat_map["domains"].get(key.lower())
+    else:
+        cat = cat_map["apps"].get(key)
+    if cat:
+        cats[cat] = cats.get(cat, 0) + secs
+    else:
+        unknown.append({"key": key, "kind": kkind, "minutes": int(round(secs / 60.0))})
+
+window_total = sum((b - a) for (a, b) in windows)
+afk_secs = max(0, window_total - active_in_windows)
+
+def mins(sec):
+    return int(round(sec / 60.0))
+
+out = {
+    "work":          mins(cats.get("work", 0)),
+    "social":        mins(cats.get("social", 0)),
+    "entertainment": mins(cats.get("entertainment", 0)),
+    "neutral":       mins(cats.get("neutral", 0)),
+    "afk":           mins(afk_secs),
+    "total_active":  mins(active_in_windows),
+    "unknown":       sorted(unknown, key=lambda u: -u["minutes"]),
+}
+# Machine-readable line first (the marker lets /end-of-day parse it unambiguously).
+print("FOCUS_BREAKDOWN " + json.dumps(out))
+# Human breakdown.
+print("")
+if not windows:
+    print("No valid work-block windows given — nothing to score.")
+else:
+    print("Work-block focus for %s (%d block(s), %dm total):" % (day, len(windows), mins(window_total)))
+    for k in ("work", "social", "entertainment", "neutral"):
+        if out[k]:
+            print("  %-13s %dm" % (k + ":", out[k]))
+    print("  %-13s %dm" % ("afk:", out["afk"]))
+    if out["unknown"]:
+        print("  uncategorized: " + ", ".join(
+            "%s (%s, %dm)" % (u["key"], u["kind"], u["minutes"]) for u in out["unknown"]))
+PYEOF
+    ;;
+
+  categorize)
+    # Read/write the reusable category map. `--list` prints it; `--set
+    # "key=cat,key=cat"` merges entries (keys with a dot route to domains, else
+    # apps; --domain/--app force routing for the whole set). Atomic temp+rename;
+    # never clobbers on a parse error.
+    shift || true
+    CAT_SET=""; CAT_LIST=0; CAT_FORCE=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --set)    CAT_SET="${2:-}"; shift 2 2>/dev/null || shift ;;
+        --list)   CAT_LIST=1; shift ;;
+        --domain) CAT_FORCE="domain"; shift ;;
+        --app)    CAT_FORCE="app"; shift ;;
+        *) shift ;;
+      esac
+    done
+    python3 - "$CATEGORIES_FILE" "$CAT_SET" "$CAT_LIST" "$CAT_FORCE" <<'PYEOF'
+import sys, os, json, re, tempfile
+
+catfile, set_arg, do_list, force = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+def load(path):
+    m = {"domains": {}, "apps": {}}
+    try:
+        with open(path) as fh:
+            text = fh.read()
+        mm = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+        parsed = json.loads(mm.group(1) if mm else text)
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("domains"), dict):
+                m["domains"] = dict(parsed["domains"])
+            if isinstance(parsed.get("apps"), dict):
+                m["apps"] = dict(parsed["apps"])
+    except Exception:
+        pass
+    return m
+
+VALID = {"work", "social", "entertainment", "neutral"}
+
+cat_map = load(catfile)
+
+if do_list == "1" and not set_arg.strip():
+    if not cat_map["domains"] and not cat_map["apps"]:
+        print("No categories set yet. Add some with: laptop-tracking categorize --set \"github.com=work,x.com=social\"")
+        sys.exit(0)
+    print("Domains:")
+    for k, v in sorted(cat_map["domains"].items()):
+        print("  %-28s %s" % (k, v))
+    print("Apps:")
+    for k, v in sorted(cat_map["apps"].items()):
+        print("  %-28s %s" % (k, v))
+    sys.exit(0)
+
+added, bad = [], []
+for pair in (set_arg or "").split(","):
+    pair = pair.strip()
+    if not pair or "=" not in pair:
+        continue
+    key, cat = pair.split("=", 1)
+    key, cat = key.strip(), cat.strip().lower()
+    if not key:
+        continue
+    if cat not in VALID:
+        bad.append("%s=%s" % (key, cat))
+        continue
+    if force == "domain":
+        bucket = "domains"
+    elif force == "app":
+        bucket = "apps"
+    else:
+        bucket = "domains" if "." in key else "apps"
+    if bucket == "domains":
+        key = key.lower()
+        if key.startswith("www."):
+            key = key[4:]
+    cat_map[bucket][key] = cat
+    added.append("%s → %s (%s)" % (key, cat, bucket[:-1]))
+
+if bad:
+    print("Ignored (category must be one of work/social/entertainment/neutral): " + ", ".join(bad))
+if not added:
+    if not bad:
+        print("Nothing to set. Use --set \"key=cat,...\" with cat in work/social/entertainment/neutral.")
+    sys.exit(0)
+
+# Rebuild the living markdown doc with the merged JSON, atomically.
+body = (
+    "# Laptop activity categories\n\n"
+    "Maps domains and apps to a productivity category for the **Deep work** habit\n"
+    "(scored at /end-of-day). Categories: `work`, `social`, `entertainment`,\n"
+    "`neutral`. Edit here in Obsidian or via `laptop-tracking categorize`.\n\n"
+    "```json\n" + json.dumps(cat_map, indent=2, sort_keys=True) + "\n```\n"
+)
+outdir = os.path.dirname(catfile) or "."
+os.makedirs(outdir, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=outdir, prefix=".cat-", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    os.replace(tmp, catfile)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+for a in added:
+    print("Set: " + a)
+PYEOF
+    ;;
+
   help|-h|--help)
-    sed -n '4,28p' "$SELF"
+    sed -n '4,37p' "$SELF"
     ;;
 
   *)
@@ -442,7 +746,7 @@ PYEOF_PREV
       echo
       echo "(\`enable\`/\`disable\` are aliases for start/stop.)"
     else
-      echo "Unknown subcommand '$SUB'. Try: start (enable) | stop (disable) | status | access | report | decline | help"
+      echo "Unknown subcommand '$SUB'. Try: start (enable) | stop (disable) | status | access | report | focus-breakdown | categorize | decline | help"
     fi
     ;;
 esac

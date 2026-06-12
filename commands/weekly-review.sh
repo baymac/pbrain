@@ -6,22 +6,23 @@ set -euo pipefail
 # fitness, and diet entries; emits a context block for Claude to
 # synthesize and walk a structured weekly review with the user.
 #
+# Step 4 builds a PER-COMMAND improvement list from the week's evidence and
+# walks it one item at a time (approve/reject). Approved improvements update
+# the VERSIONED PROFILES: each owning command's `profile new` mints a draft,
+# the approved edits land in it, `profile commit` freezes the new version.
+# Libraries (work/goals/food/fitness) are living documents — approved library
+# edits apply in place, no version mint.
+#
 # Default destination:  $VAULT_DIR/life/weekly-tracking/YYYY-Www.md (ISO week)
 # Overrides:
 #   PBRAIN_VAULT             — vault root
 #   PBRAIN_WEEKLY_DIR        — where the weekly review writes
 #   PBRAIN_JOURNAL_DIR       — daily journals
 #   PBRAIN_GRATITUDE_DIR     — gratitude entries
-#   PBRAIN_PLAN_DIR          — daily plans (end-of-day close is written into the plan file in place)
-#   PBRAIN_FITNESS_DIR       — fitness sessions
-#   PBRAIN_DIET_DIR          — diet logs
-#
-# Core plans read for the Step 4 enrichment pass (proposes updates at week's end).
-# All are user-owned vault files — proposed into the review, not auto-written:
-#   PBRAIN_PLAN_PROFILE_FILE — goals profile markdown (Goals Profile.md)
-#   PBRAIN_DIET_PLAN_FILE    — Diet Plan.md
-#   PBRAIN_FITNESS_PLANS_DIR — per-activity fitness plans
-#   PBRAIN_GYM_PLAN_FILE     — primary gym plan
+#   PBRAIN_PLAN_DIR          — daily plans (the plan profile store lives inside)
+#   PBRAIN_FITNESS_DIR       — fitness sessions (+ fitness profile store)
+#   PBRAIN_DIET_DIR          — diet logs (+ diet profile store)
+#   PBRAIN_PLAN_PROFILE_FILE — explicit plans-profile file (bypasses the store)
 
 _PB_SRC="${BASH_SOURCE[0]}"
 while [[ -L "$_PB_SRC" ]]; do
@@ -42,11 +43,10 @@ PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
-# Core plans for the Step 4 enrichment pass.
-PROFILE_FILE="${PBRAIN_PLAN_PROFILE_FILE:-$VAULT_DIR/life/Goals Profile.md}"
-DIET_PLAN_FILE="${PBRAIN_DIET_PLAN_FILE:-$VAULT_DIR/fitness/Diet Plan.md}"
-FITNESS_PLANS_DIR="${PBRAIN_FITNESS_PLANS_DIR:-$VAULT_DIR/fitness/plans}"
-GYM_PLAN_FILE="${PBRAIN_GYM_PLAN_FILE:-}"
+# The versioned profile stores Step 4 reads (and proposes new versions of).
+PLAN_STORE="$(pbrain_profile_store "$PLAN_DIR")"
+FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
+DIET_STORE="$(pbrain_profile_store "$DIET_DIR")"
 
 # Migration: weekly reviews used to live in life/weekly-reviews. If we're at the
 # default location, the new dir doesn't exist yet, and the legacy dir does,
@@ -64,6 +64,9 @@ TODAY="$(date +%Y-%m-%d)"
 
 # ISO week (e.g. 2026-W22). Use python to stay portable across BSD/GNU date.
 ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+MONTH_YEAR="$(date +%Y-%m)"
+NEXT_ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today()+datetime.timedelta(weeks=1); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+NEXT_MONTH_YEAR="$(python3 -c "import datetime; t=datetime.date.today(); import calendar; nxt=t.replace(day=1)+datetime.timedelta(days=calendar.monthrange(t.year, t.month)[1]); print(nxt.strftime('%Y-%m'))")"
 OUT_FILE="$WEEKLY_DIR/$ISO_WEEK.md"
 
 # Last 7 dates: today and 6 days back, oldest first.
@@ -97,10 +100,20 @@ cat_section() {
   fi
 }
 
+# Cat the latest committed version of a profile base with a labelled header.
+cat_profile() {
+  local label="$1" store="$2" base="$3" f
+  f="$(pbrain_profile_latest "$store" "$base")"
+  echo ""
+  echo "### $label [versioned: ${f:-no committed version yet}]"
+  [[ -n "$f" ]] && cat "$f" || echo "(none)"
+}
+
 echo "WEEKLY_REVIEW_SESSION"
 echo "iso_week: $ISO_WEEK"
 echo "output_file: $OUT_FILE"
 echo "date_range: $FIRST_DATE → $LAST_DATE"
+echo "commands_dir: $_SCRIPT_DIR"
 echo "dates_covered:"
 for d in $DATES; do echo "  - $d"; done
 echo ""
@@ -135,37 +148,128 @@ if [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]]; then
   echo "--- END HABITS ---"
 fi
 
-# Core plans, for the Step 4 enrichment pass. All are user-owned vault files:
-# enrichment proposes changes into the review and edits a plan file only on an
-# explicit per-change yes.
+# Core profiles, for the Step 4 improvements pass. All versioned (committed =
+# final; changes mint the next version through the owning command's `profile`
+# subcommand). The explicit plans-profile override is respected.
 echo ""
-echo "--- CORE PLANS (for Step 4 enrichment) ---"
-echo ""
-echo "### Goals profile [vault-owned: $PROFILE_FILE]"
-if [[ -f "$PROFILE_FILE" ]]; then cat "$PROFILE_FILE"; else echo "(no profile yet)"; fi
-echo ""
-echo "### Diet Plan [vault-owned: $DIET_PLAN_FILE]"
-if [[ -f "$DIET_PLAN_FILE" ]]; then cat "$DIET_PLAN_FILE"; else echo "(no diet plan)"; fi
-echo ""
-echo "### Fitness plans [vault-owned: $FITNESS_PLANS_DIR]"
-if [[ -n "$GYM_PLAN_FILE" && -f "$GYM_PLAN_FILE" ]]; then
-  echo "# $GYM_PLAN_FILE"
-  cat "$GYM_PLAN_FILE"
-fi
-if [[ -d "$FITNESS_PLANS_DIR" ]]; then
-  for pf in "$FITNESS_PLANS_DIR"/*.md; do
-    [[ -f "$pf" ]] || continue
-    echo "# $pf"
-    cat "$pf"
-    echo ""
-  done
+echo "--- CORE PROFILES (for Step 4 improvements) ---"
+if [[ -n "${PBRAIN_PLAN_PROFILE_FILE:-}" && -f "${PBRAIN_PLAN_PROFILE_FILE:-}" ]]; then
+  echo ""
+  echo "### Plans profile [override: $PBRAIN_PLAN_PROFILE_FILE]"
+  cat "$PBRAIN_PLAN_PROFILE_FILE"
 else
-  echo "(no fitness plans)"
+  cat_profile "Plans profile" "$PLAN_STORE" plans-profile
 fi
+cat_profile "Work library"    "$PLAN_STORE" work-library
+cat_profile "Goals library"   "$PLAN_STORE" goals-library
+cat_profile "Diet profile"    "$DIET_STORE" diet-profile
+cat_profile "Food library"    "$DIET_STORE" food-library
+cat_profile "Fitness profile" "$FIT_STORE"  fitness-profile
+cat_profile "Fitness library" "$FIT_STORE"  fitness-library
 echo ""
-echo "--- END CORE PLANS ---"
+echo "### Activity profiles [versioned: $FIT_STORE/activities]"
+python3 - "$FIT_STORE/activities" <<'PYEOF' 2>/dev/null || echo "(none)"
+import glob, os, re, sys
+act_store = sys.argv[1]
+# Highest COMMITTED version per slug — an open draft (higher version,
+# committed: false) must NOT shadow the committed version below it.
+best = {}
+for f in glob.glob(os.path.join(act_store, "*.v*.md")):
+    m = re.match(r"(.+)\.v(\d+)\.md$", os.path.basename(f))
+    if not m:
+        continue
+    slug, ver = m.group(1), int(m.group(2))
+    try:
+        with open(f) as fh:
+            text = fh.read()
+    except Exception:
+        continue
+    if re.search(r"^committed:\s*false\s*$", text[:400], re.MULTILINE):
+        continue
+    if slug not in best or ver > best[slug][0]:
+        best[slug] = (ver, f, text)
+if not best:
+    print("(none)")
+for slug, (_v, f, text) in sorted(best.items()):
+    print(f"# {f}")
+    print(text)
+    print()
+PYEOF
+echo ""
+echo "### Habits profile [$(pbrain_habits_profile_file)]"
+if [[ -f "$(pbrain_habits_profile_file)" ]]; then cat "$(pbrain_habits_profile_file)"; else echo "(no habits profile)"; fi
+echo ""
+echo "--- END CORE PROFILES ---"
+
+# Weekly and monthly goal files — resolved by period.
+WEEKLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$PLAN_STORE" weekly-goals "$ISO_WEEK" || true)"
+MONTHLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$PLAN_STORE" monthly-goals "$MONTH_YEAR" || true)"
+WEEKLY_GOALS_CONTENT=""
+MONTHLY_GOALS_CONTENT=""
+[[ -n "$WEEKLY_GOALS_FILE" ]] && WEEKLY_GOALS_CONTENT="$(cat "$WEEKLY_GOALS_FILE" 2>/dev/null || true)"
+[[ -n "$MONTHLY_GOALS_FILE" ]] && MONTHLY_GOALS_CONTENT="$(cat "$MONTHLY_GOALS_FILE" 2>/dev/null || true)"
+
+# Read this week's task logs from day-plan files to show goal progress.
+TASK_LOG_DATA="$(python3 - "$PLAN_DIR" "$FIRST_DATE" "$LAST_DATE" <<'PYEOF' 2>/dev/null || echo "(no task logs)"
+import glob, os, re, sys
+plan_dir, first_date, last_date = sys.argv[1], sys.argv[2], sys.argv[3]
+rows = []
+for f in sorted(glob.glob(os.path.join(plan_dir, "*.md"))):
+    date_str = os.path.basename(f)[:-3]
+    if not (first_date <= date_str <= last_date):
+        continue
+    try:
+        with open(f) as fh:
+            text = fh.read()
+    except Exception:
+        continue
+    m = re.search(r"## Task log\n+(.*?)(?=\n## |\Z)", text, re.DOTALL)
+    if not m:
+        continue
+    section = m.group(1).strip()
+    if section and "| Task |" in section:
+        rows.append(f"=== {date_str} ===")
+        rows.append(section)
+if rows:
+    print("\n".join(rows))
+else:
+    print("(no task logs this week)")
+PYEOF
+)"
+
+echo ""
+echo "--- WEEKLY GOALS ($ISO_WEEK) ---"
+if [[ -n "$WEEKLY_GOALS_CONTENT" ]]; then
+  echo "weekly_goals_file: $WEEKLY_GOALS_FILE"
+  echo "$WEEKLY_GOALS_CONTENT"
+else
+  echo "(none — not set up for this week)"
+fi
+echo "--- END WEEKLY GOALS ---"
+
+echo ""
+echo "--- MONTHLY GOALS ($MONTH_YEAR) ---"
+if [[ -n "$MONTHLY_GOALS_CONTENT" ]]; then
+  echo "monthly_goals_file: $MONTHLY_GOALS_FILE"
+  echo "$MONTHLY_GOALS_CONTENT"
+else
+  echo "(none — not set up for this month)"
+fi
+echo "--- END MONTHLY GOALS ---"
+
+echo ""
+echo "--- THIS WEEK'S TASK LOGS ---"
+echo "$TASK_LOG_DATA"
+echo "--- END TASK LOGS ---"
+
 echo ""
 cat <<PROMPT
+weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}
+monthly_goals_file: ${MONTHLY_GOALS_FILE:-(not set up)}
+iso_week: $ISO_WEEK
+next_iso_week: $NEXT_ISO_WEEK
+month_year: $MONTH_YEAR
+
 INSTRUCTIONS: Walk a weekly review. You have a lot of context above — use it. Specifics or silence.
 
 Step 1 — Read every day above. Look for: recurring themes (what kept coming up), real wins (what actually shipped or moved), friction (where the week stalled or repeated), shifts (how thinking changed), unfinished threads (open questions that didn't get resolved). If a HABITS rollup is present, weave its standouts into your synthesis — limit habits over cap, high-priority build habits that lagged, streaks worth naming. Don't dump the table; surface what matters.
@@ -202,36 +306,96 @@ Dates: $FIRST_DATE → $LAST_DATE
 ## Double down on
 {verbatim answer to Q3}
 
-## Proposed plan changes
-{filled in by Step 4 — the concrete plan enrichments you proposed and what the
-user decided. If you proposed nothing, write "None this week."}
+## Weekly goals — $ISO_WEEK
+{filled in by Step 4b below — the closing week's goals with their Done at/Status
+from the task logs (completed / partial / not started for each goal). If no
+weekly goals were set up, write "Weekly goals not configured."}
+
+## Improvements
+{filled in by Step 4 — every improvement you proposed, per command, with the
+user's decision (approved → which profile version it landed in; rejected;
+deferred). If you proposed nothing, write "None this week."}
 
 ## Habit review
-{filled in by Step 4b — a one-paragraph read of how habits went this week (from
+{filled in by Step 4d — a one-paragraph read of how habits went this week (from
 the HABITS rollup: what's sticking, what's lagging or over) plus any add/remove
 proposals and what the user decided. If habit tracking isn't set up, write
 "No habits tracked." If set up but nothing to change, give the read and write
 "No habit changes."}
 
-Step 4 — Plan enrichment. Using the CORE PLANS context above and the week's data,
-propose concrete updates to the user's plans. Be specific and evidence-based — tie
-each proposal to something that actually happened this week (e.g. "you skipped legs
-twice", "protein landed under target 5/7 days", "current_focus 'X' wasn't mentioned
-in any plan"). Propose nothing if the week gives no clear signal — do not invent
-changes.
+Step 4 — Improvements. Build a PER-COMMAND improvement list from the week's
+evidence, using the CORE PROFILES above as the baseline. One list per command:
 
-All three plans — the goals profile ($PROFILE_FILE), the diet plan ($DIET_PLAN_FILE),
-and the fitness plans ($FITNESS_PLANS_DIR) — are user-owned vault files. Treat them
-the same: do NOT edit any of them by default. Write each proposed change into the
-"## Proposed plan changes" section of THIS review file. Only edit an actual plan file
-if the user explicitly says yes to that specific change in this session (their yes is
-the explicit instruction that authorizes the write). When editing the goals profile,
-keep its fenced JSON block valid. Default is propose-in-review, not write-in-place.
+  - plan-my-day  → plans-profile / work-library / goals-library
+  - diet-journal → diet-profile (food-library for library rows)
+  - fitness-journal → fitness-profile / fitness-library / activity profiles
+  - habits → the habit set (handled in Step 4d below)
 
-Record in "## Proposed plan changes" what you proposed and what the user decided
-(written into the relevant plan / left as a proposal / declined).
+Each improvement is ONE line, tied to something that actually happened this
+week (e.g. "you skipped legs twice — drop gym to 3 fixed days", "protein
+landed under target 5/7 days — bump the lunch protein anchor", "the Lettuce
+goal wasn't touched in any plan — re-scope or re-prioritise it"). Propose
+NOTHING without a clear signal — do not invent changes.
 
-Step 4b — Habit review (only if a HABITS rollup is present above). Give a short
+Then walk the list ONE BY ONE: present an improvement, ask approve / reject,
+record the decision. No batch approvals.
+
+After the walk, apply the approved improvements:
+  - For each PROFILE with at least one approved improvement, mint a NEW
+    VERSION via the owning command (paths use commands_dir above):
+      bash "<commands_dir>/plan-my-day.sh"    profile new [plans-profile]
+      bash "<commands_dir>/diet-journal.sh"   profile new
+      bash "<commands_dir>/fitness-journal.sh" profile new [fitness-profile|fitness-library|activity <name>]
+      bash "<commands_dir>/habits.sh"          profile new
+    Edit the minted DRAFT file applying ONLY the approved changes (keep the
+    fenced JSON valid and the frontmatter version/committed lines intact),
+    then freeze it:
+      bash "<commands_dir>/<cmd>.sh" profile commit [base]
+  - LIBRARIES (work-library, goals-library, food-library, fitness-library)
+    are living documents — apply approved library edits IN PLACE on the
+    latest version; no version mint.
+Record in "## Improvements" what landed where (including the new version
+file path for each committed profile).
+
+Step 4b — Weekly Goals lifecycle. Walk this for every weekly review.
+  i) GOAL PROGRESS: Read THIS WEEK'S TASK LOGS above. For each goal in the
+     WEEKLY GOALS section, determine its status: completed (Done at filled,
+     Status=done), partial (some done), or not started. Show a brief summary
+     before committing.
+  ii) COMMIT the closing week: if weekly_goals_file is a real path (not "(not
+     set up)"), commit it:
+       bash "\$commands_dir/plan-my-day.sh" profile commit weekly-goals
+  iii) MINT next week's draft: mint a fresh weekly-goals draft for next_iso_week:
+       bash "\$commands_dir/plan-my-day.sh" profile new weekly-goals
+       This creates the file. Edit it to set:
+       - "period": "$NEXT_ISO_WEEK" in the JSON block
+       - Derive the goals:
+         * If monthly_goals_file is set and its period is the current month
+           ($MONTH_YEAR): derive from monthly goals (copy goal text/tie/priority,
+           ask user to confirm each + set difficulty: easy|normal|hard|nightmare).
+         * Else: derive from the plans-profile's current_focus list (use their
+           priority, ask difficulty).
+       Walk goals ONE BY ONE — each round ask: "Include '{goal}' next week?
+       If yes, what difficulty? (easy/normal/hard/nightmare)". Allow adding new
+       goals not in the profile.
+       The final JSON shape is:
+       {"created": "TODAY", "period": "NEXT_ISO_WEEK",
+        "derived_from": "monthly-goals MONTH_YEAR or plans-profile vN",
+        "goals": [{"id": "<slug>", "goal": "...", "tie": "<profile/monthly id>",
+                   "priority": 1, "difficulty": "normal",
+                   "success_looks_like": "...", "status": "active"}]}
+  iv) Commit the new next-week draft:
+       bash "\$commands_dir/plan-my-day.sh" profile commit weekly-goals
+  v) Record in "## Weekly goals — $ISO_WEEK" the closing week's goal progress.
+  Skip this whole step silently if weekly_goals_file is "(not set up)" AND the
+  user doesn't want to start using weekly goals.
+
+Step 4c — Monthly goal progress (only if monthly_goals_file is set):
+  Show a brief one-paragraph read: how many monthly goals were touched this
+  week (from task logs), which are on track, which lagged. Don't force action.
+  If the month is ending (last 3 days): suggest /monthly-review once.
+
+Step 4d — Habit review (only if a HABITS rollup is present above). Give a short
 read of how the week's habits went, then — if the week clearly warrants it —
 propose adding a habit the user has been doing but isn't tracking, or archiving
 one that's gone stale / no longer serves them. Evidence-based only; propose
@@ -251,5 +415,6 @@ Hard rules:
 PROMPT
 
 # Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
+# raised this session (silent unless there was genuine feedback). No plan args:
+# Step 4 above owns profile updates with its richer approve-per-item flow.
 pbrain_emit_self_improve "weekly-review" || true

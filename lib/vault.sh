@@ -81,6 +81,11 @@ _PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 [[ -f "$_PBRAIN_LIB_DIR/prefs.sh" ]] && source "$_PBRAIN_LIB_DIR/prefs.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/self-improve.sh" ]] && source "$_PBRAIN_LIB_DIR/self-improve.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/profile.sh" ]] && source "$_PBRAIN_LIB_DIR/profile.sh" || true
+# Versioned profile store (.profile dirs) + the vault migration runner. The
+# runner itself is CALLED at the bottom of this file, after every lib is in
+# scope, so migrations may use any helper.
+[[ -f "$_PBRAIN_LIB_DIR/profiles.sh" ]] && source "$_PBRAIN_LIB_DIR/profiles.sh" || true
+[[ -f "$_PBRAIN_LIB_DIR/migrations.sh" ]] && source "$_PBRAIN_LIB_DIR/migrations.sh" || true
 # Shared SQLite store + the habits / reminders helpers built on it. Order
 # matters: db.sh first (defines PBRAIN_DB_FILE), then habits.sh (needs
 # pbrain_profile_json from profile.sh and the DB) and reminders.sh. launchd.sh
@@ -91,6 +96,12 @@ _PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 [[ -f "$_PBRAIN_LIB_DIR/habits.sh" ]] && source "$_PBRAIN_LIB_DIR/habits.sh" || true
 [[ -f "$_PBRAIN_LIB_DIR/reminders.sh" ]] && source "$_PBRAIN_LIB_DIR/reminders.sh" || true
 unset _PBRAIN_LIB_DIR
+
+# Migration preflight: apply any unapplied AUTO migrations (file moves into
+# the new vault layout) and record them in the per-vault ledger; STAGED
+# migrations are left pending for their owning command. Ledger-gated, so the
+# steady-state cost is a glob over marker files. PBRAIN_MIGRATIONS=0 disables.
+declare -F pbrain_run_migrations >/dev/null && pbrain_run_migrations || true
 
 # Best-effort version check. Prints `UPGRADE_AVAILABLE <old> <new>` to stdout
 # when a newer pbrain is on GitHub; silent otherwise. Cached. Never fatal.

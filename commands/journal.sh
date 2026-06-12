@@ -31,12 +31,14 @@ DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 mkdir -p "$DAILY_DIR"
 
 TODAY="$(date +%Y-%m-%d)"
+TIME="$(date +%H:%M)"
 OUT_FILE="$DAILY_DIR/$TODAY.md"
 
 if [[ -f "$OUT_FILE" ]]; then
   cat <<EXISTING
 JOURNAL_SESSION_RESUME
 date: $TODAY
+time: $TIME
 output_file: $OUT_FILE
 
 Today's journal already exists. Current contents:
@@ -46,20 +48,31 @@ $(cat "$OUT_FILE")
 ---
 
 INSTRUCTIONS:
-Step 1 — Summarize the existing entry in one line (Focus + counts of notes / decisions / open questions), then say:
-  "Anything to add?"
-  (Don't ask anything else — wait for them to either share more or end the session.)
+Step 1 — Keep the opener minimal. One short line like "Go ahead." Wait for them
+  to share. Do not summarize or ask what's on their mind — they came here to log
+  something specific.
 
-Step 2 — If they share more, scan the new content for unresolved threads.
-  If you find any, generate 1–2 follow-up open questions in their own
-  words and ask them one at a time before saving. If there are no
-  unresolved threads, just save without asking anything.
+Step 2 — Once they've shared, decide if a follow-up is warranted:
+  - Reflective entry (a mistake, a decision, something emotionally loaded):
+    ask ONE follow-up question about the "why" or "what now" — pulled from their
+    actual words, not a generic prompt. Wait for their answer.
+  - Factual log (finished a task, did an activity, ate something, went somewhere):
+    skip straight to Step 3 with no question.
 
-Step 3 — Append the new content to the right sections in $OUT_FILE
-  (## Focus, ## Notes, ## Decisions, ## Open questions). Preserve
-  existing content verbatim. Never overwrite the whole file. New open
-  questions go under ## Open questions as bullets, with the user's answer
-  indented under each one (or "—" if they skipped).
+Step 3 — Append a timestamped entry to $OUT_FILE.
+  - If "## Log" already exists in the file, append the new entry under it.
+  - If "## Log" does not exist, add it after the last line of the file, then
+    append the entry under it.
+  - Format each entry as:
+
+### $TIME
+
+{Content in the user's voice — what happened, why (if they explained), any
+reflection they offered. Bullets if they listed things; prose otherwise.
+Keep it tight.}
+
+  Do NOT touch the existing ## Focus / ## Notes / ## Decisions / ## Open questions
+  sections. Do NOT rewrite, summarize, or consolidate anything already in the file.
 EXISTING
   pbrain_emit_habits_extract "journal" || true
   exit 0

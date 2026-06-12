@@ -1,5 +1,5 @@
 ---
-description: Daily adaptive fitness journal — first run builds an activity list and per-activity plans via targeted interview. Subsequent runs pick today's session based on recent history and the gym plan, generate it in the user's exact tracking format.
+description: Daily adaptive fitness journal — first run builds an overall fitness profile (sleep window, steps, health metrics), an activity library with fixed weekly days, and per-activity profiles via targeted interview. Subsequent runs pre-select today's session from your schedule, apply training-gap rules (no progression / deload), and generate it in your exact tracking format.
 ---
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 
@@ -7,13 +7,17 @@ Run this with the Bash tool first, then follow the INSTRUCTIONS block in its out
 bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/fitness-journal.sh"
 ```
 
-**Run bash immediately. Do not say anything to the user until you have the INSTRUCTIONS block.**
+**Run bash immediately. Do not say anything to the user until you have the INSTRUCTIONS block.** If the user passed arguments (e.g. `profile show`, `profile new fitness-library`, `profile commit activity gym`), append them to the command.
 
 The script emits one of several tokens — follow the INSTRUCTIONS for whichever fires. Key hard rules:
-- First-time setup: build one plan per activity. Process them one at a time; finish one before moving to the next.
-- Returning session: pick today's session based on recency and the plan. Ask readiness in one question; don't run a full intake survey.
-- Generate sessions in the user's exact tracking format (match the format already in the plan file, not a generic template).
-- Never schedule rest when the plan calls for training, or training when the user signals they need rest.
+- Migration (`FITNESS_JOURNAL_MIGRATION`): walk the old plans/config across part by part — confirm, update, or drop each piece with the user before writing the new profiles. Never import silently.
+- First-time setup: build the overall profile + library first, then one profile per activity. Process activities one at a time; finish one before moving to the next.
+- Returning session: today's activity is pre-selected from the fixed days — confirm it, don't re-run a full menu interrogation. Ask readiness in one batch.
+- Sleep is captured as bed time + wake time (+ quality); infer hours yourself and write the `sleep_*` frontmatter fields into the session file.
+- Respect the training-gap band: 7–13 idle days → repeat weights, no progression; 14+ → deload −20% (rounded to 2.5kg). Never apply progression on a gap session.
+- Generate sessions in the user's exact tracking format (match the format in the activity profile, not a generic template).
+- Never schedule rest when the schedule calls for training, or training when the user signals they need rest.
+- Committed profiles are final — changes go through `profile new` → edit draft → `profile commit`.
 
 ## Morning sequence check (do this first)
 

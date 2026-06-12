@@ -12,7 +12,7 @@ It writes nothing. Re-run it as often as you like — it's idempotent and safe.
 | Unanswered questions | `## Open questions` in recent journals (empty/`—` answer) + open-question bullets in `tbd/` brainstorms | — |
 | Open todos | unchecked `- [ ]` boxes in recent daily plans | — |
 | Recurring tomorrow-seeds | `### Tomorrow seed` bullets repeated across plans | deferred ≥ 2 days |
-| Focus drift | `current_focus` goals from the plan profile | quiet ≥ stale threshold |
+| Focus drift | `current_focus` items from the plans profile | quiet ≥ stale threshold |
 
 **Default destination:** none — `/loose-ends` is read-only.
 

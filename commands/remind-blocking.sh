@@ -360,7 +360,7 @@ PYEOF
         *) shift ;;
       esac
     done
-    pbrain_overlay_show "$T_TEXT" "$T_DURATION" "$T_HOLD" "$T_BG" "" "" "$T_MARK_DONE" || true
+    pbrain_overlay_show "$T_TEXT" "$T_DURATION" "$T_HOLD" "$T_BG" "" "" "$T_MARK_DONE" "0" || true
     BIN="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
     if [[ -x "$BIN" ]]; then
       if [[ "$T_MARK_DONE" == "1" ]]; then

@@ -10,11 +10,15 @@ The honesty is the point. A naive "frontmost app" logger lies twice: it counts a
 
 ```
 NSWorkspace app-switch  ─┐
-~10s poll timer         ─┴─►  active?  ──►  one row per (app, domain) ACTIVE span
+~10s poll timer         ─┴─►  active?  ──►  kind=foreground: one row per (app, domain) ACTIVE span
                               = unlocked & not screensaver & not asleep            │
-                              & (input idle < 5m OR a prevent-idle assertion held) ▼
+                              & (input idle < 5m OR a prevent-idle assertion held) │
+                                                                                   │
+                         background media? ──► kind=bg_media: audio/video in bg,  │
+                              = IOKit prevent-idle held without frontmost focus     │
+                                                                                   ▼
                                                           ~/.config/pbrain/tracker.db
-                                                          (active segments, forever)
+                                                          (active segments: foreground + bg_media)
                                                                       │ render (end of day / on demand)
                                                                       ▼
                                                   vault/life/laptop-tracking/<date>.md
@@ -36,10 +40,18 @@ The tracker is **off by default** — nothing runs until you enable it. `/plan-m
 | `/laptop-tracking access` | One-time, per-browser **Automation** grant. Open the browsers you want tracked, then approve each prompt. Without it, browser time still counts at the app level — just without a domain. |
 | `/laptop-tracking status` | Is the daemon running? today's quick numbers (active time, top app). |
 | `/laptop-tracking report [<date>]` | Render `life/laptop-tracking/<date>.md` from the DB (default today). This is the on-demand finalize. |
+| `/laptop-tracking focus-breakdown --date D --windows "HH:MM-HH:MM,…"` | Clip the day's activity to a set of work-block windows and report **active minutes per category** (work / social / entertainment / neutral) + AFK + any **uncategorized** domains/apps. Drives the *Deep work* habit score; usually called for you by `/end-of-day`, not by hand. |
+| `/laptop-tracking categorize --set "github.com=work,x.com=social"` / `--list` | Manage the reusable **category map** (see below). Keys with a dot route to domains, others to apps; `--domain`/`--app` force routing. |
 | `/laptop-tracking stop` | **Disable.** Stop and uninstall the daemon. Alias: `disable`. |
 | `/laptop-tracking decline` | Opt out of the `/plan-my-day` setup nudge without starting anything (it won't ask again). |
 
 `/end-of-day` also renders today's report automatically (no-op if the tracker isn't set up) and weaves one grounded line into the close, so the daily report shows up as part of your close.
+
+## Focus scoring & the category map
+
+If you also run `/plan-my-day` and `/habits`, the tracker feeds a scored habit, **Deep work** — *how focused were your scheduled work blocks?* At `/end-of-day`, pbrain takes the work-block time windows from today's plan, runs `focus-breakdown` over them, and scores `100 · work / (work + distraction)` of your *active* laptop time during those blocks. AFK time is reported but never counted against you; *neutral* time (ambiguous or comms) is excluded from the ratio entirely. This is distinct from **Work the plan** (did the planned tasks get done) — Deep work measures where the work-block time actually went.
+
+What counts as work vs. social vs. entertainment comes from a **category map** — a living, editable doc at `life/laptop-tracking/categories.md` (a fenced ```json block of `{"domains": {…}, "apps": {…}}`, browsable in Obsidian and synced like the food library). It starts empty: the first time a domain or app shows up in a work block, `/end-of-day` proposes a category, you confirm or correct it in one reply, and it's remembered for next time. You can also edit the file directly or use `categorize`. Categories: `work`, `social`, `entertainment`, `neutral`.
 
 ## The daily report
 
@@ -70,6 +82,14 @@ Browser time with no recorded domain, by reason:
 | Reason | Active time |
 |--------|------------|
 | permission not granted | 12m |   ← only shown when some browser time wasn't cleanly attributed
+
+## Background media
+
+Audio/video playing in the background (excluded from active/away accounting):
+
+| App | Background time |
+|-----|----------------|
+| Spotify | 1h 20m |
 ```
 
 Three report features worth knowing:
@@ -77,6 +97,7 @@ Three report features worth knowing:
 - **Full-day window for past days.** Away time is the gap from day-start to next midnight, so "time offline" (laptop closed before midnight) is included. Today's report uses the last recorded activity as the endpoint instead, labeled "so far".
 - **Per-video YouTube tracking.** Watch time on `youtube.com/watch`, `m.youtube.com`, and `music.youtube.com` now breaks out per video ID (`?v=`) in the Top pages table, so each video gets its own row. All other query parameters are still dropped (tokens, search terms, etc.).
 - **Browser attribution table.** When Chrome or Safari time has no recorded domain, a `## Browser attribution` table explains why — permission not granted, tab lookup timed out, or non-web window. Unaccounted browser time is visible, not silently dropped.
+- **Background media section.** Audio or video playing in the background (music, PiP video) is tracked separately as `kind = bg_media` — it is **never counted toward your foreground active time or focus blocks**. It appears in its own `## Background media` section at the bottom of the report, so you can see background listening without it polluting your focus stats.
 
 ## Requirements & permissions
 
@@ -110,6 +131,7 @@ The bash + Python read/render path is covered by `tests/tracker.bats` (schema, g
 | `PBRAIN_TRACKER_POLL` | Daemon poll interval, seconds (default `10`) |
 | `PBRAIN_TRACKER_IDLE` | Idle-away threshold, seconds (default `300`) |
 | `PBRAIN_TRACKER_TOPN` | Rows in the top apps/domains tables (default `12`) |
+| `PBRAIN_LAPTOP_CATEGORIES_FILE` | Domain/app → category map (default `$VAULT_DIR/life/laptop-tracking/categories.md`) |
 
 ## What it deliberately doesn't do
 

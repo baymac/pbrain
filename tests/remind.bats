@@ -20,6 +20,8 @@
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
+  export PBRAIN_MIGRATIONS=0   # keep the vault migration runner out of unit tests
+  export PBRAIN_UPDATE_CHECK=0  # never hit the network / nag in unit tests
   export PBRAIN_DB_FILE="$TMP/pbrain.db"
   export PBRAIN_VAULT="$TMP/vault"; mkdir -p "$PBRAIN_VAULT"
   export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"

@@ -8,10 +8,14 @@
 # It reads the user's standing preferences from two markdown files and, for
 # each that exists and is non-empty, prints a clearly labelled block to stdout
 # so the calling Claude session applies those preferences while it does the
-# command's work:
+# command's work. Preferences live IN THE VAULT (so they sync across devices
+# with everything else), under the hidden .pbrain control dir:
 #
-#   ~/.config/pbrain/prefs/_global.md        — apply to EVERY command
-#   ~/.config/pbrain/prefs/<command-name>.md — apply to this command only
+#   $VAULT_DIR/.pbrain/_global/prefs.md        — apply to EVERY command
+#   $VAULT_DIR/.pbrain/<command-name>/prefs.md — apply to this command only
+#
+# (They moved here from ~/.config/pbrain/prefs/ — migration 0001 copies any
+# existing files across automatically.)
 #
 # The global file is where cross-command standing preferences live — most
 # importantly, "stop nudging / suggesting X" rules. A nudge like the
@@ -28,8 +32,9 @@
 # captures new preferences into these files (consolidate-on-write).
 #
 # Env knobs:
-#   PBRAIN_PREFS_DIR   override the prefs directory (default ~/.config/pbrain/prefs)
-#                      (holds both _global.md and the per-command <cmd>.md files)
+#   PBRAIN_PREFS_DIR   override the prefs ROOT (default $VAULT_DIR/.pbrain).
+#                      Layout inside is always <root>/_global/prefs.md and
+#                      <root>/<cmd>/prefs.md.
 #
 # This function NEVER exits non-zero and NEVER prints to stderr on the happy
 # path: it is sourced into every command, which runs under `set -euo pipefail`,
@@ -37,18 +42,21 @@
 # `|| true` as a belt-and-suspenders guard.
 
 pbrain_emit_prefs() {
-  local cmd prefs_dir global_file prefs_file global_contents contents
+  local cmd prefs_root global_file prefs_file global_contents contents
   cmd="${1:-}"
   [[ -n "$cmd" ]] || return 0
 
-  prefs_dir="${PBRAIN_PREFS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/prefs}"
+  # No override and no vault → nothing to read (unit tests source this file
+  # standalone; commands always have VAULT_DIR by the time they call this).
+  [[ -n "${PBRAIN_PREFS_DIR:-}" || -n "${VAULT_DIR:-}" ]] || return 0
+  prefs_root="${PBRAIN_PREFS_DIR:-${VAULT_DIR:-}/.pbrain}"
 
   # Global standing preferences — apply to EVERY command. Emitted first so a
   # per-command pref below can still refine them. This is the home for
   # cross-command "stop suggesting / don't nudge me about X" rules, including
   # silencing the morning-sequence journal/gratitude check, which fires from
   # many commands and so can't be silenced by a single command's pref file.
-  global_file="$prefs_dir/_global.md"
+  global_file="$prefs_root/_global/prefs.md"
   if [[ -f "$global_file" ]]; then
     # Read the file; bail silently on any read error. Whitespace-only == empty.
     global_contents="$(cat "$global_file" 2>/dev/null || true)"
@@ -66,7 +74,7 @@ pbrain_emit_prefs() {
     fi
   fi
 
-  prefs_file="$prefs_dir/$cmd.md"
+  prefs_file="$prefs_root/$cmd/prefs.md"
 
   [[ -f "$prefs_file" ]] || return 0
 

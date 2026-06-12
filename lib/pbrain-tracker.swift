@@ -97,6 +97,27 @@ let chromeFamily: Set<String> = [
 func isKnownBrowser(_ bundleId: String) -> Bool {
     return bundleId == safariBundle || chromeFamily.contains(bundleId)
 }
+
+// Apps whose BACKGROUND / PiP playback is tracked as "background media" — a
+// separate ledger from foreground active time. Browsers cover PiP + background
+// tabs (bg/PiP tab URLs aren't reachable, so bg media is app-level only); the
+// rest are dedicated players. Used to (a) decide what counts as bg media and
+// (b) recognise when the FRONTMOST app is itself a media app you're watching.
+let mediaBaseIds: Set<String> = chromeFamily
+    .union([safariBundle, "org.mozilla.firefox"])
+    .union([
+        "com.spotify.client", "com.apple.Music", "com.apple.TV",
+        "org.videolan.vlc", "com.apple.QuickTimePlayerX", "com.colliderli.iina",
+        "com.apple.podcasts", "tv.plex.desktop", "com.apple.WebKit.GPU",
+    ])
+
+// Map a bundle id (possibly a "<base>.helper…"/renderer child that actually holds
+// the audio assertion) back to its media base id, else nil.
+func mediaBase(of bundleId: String?) -> String? {
+    guard let b = bundleId else { return nil }
+    for base in mediaBaseIds where b == base || b.hasPrefix(base + ".") { return base }
+    return nil
+}
 func urlScript(for bundleId: String) -> String {
     if bundleId == safariBundle {
         return "tell application id \"\(bundleId)\" to return URL of current tab of front window"
@@ -144,13 +165,15 @@ final class TrackerDB {
             app_name      TEXT,
             raw_host      TEXT,
             raw_path      TEXT,
-            attribution   TEXT NOT NULL DEFAULT 'ok'
+            attribution   TEXT NOT NULL DEFAULT 'ok',
+            kind          TEXT NOT NULL DEFAULT 'foreground'
         );
         """)
-        // Migration for DBs created before raw_path existed. ALTER is a no-op-safe
+        // Migrations for DBs created before a column existed. ALTER is a no-op-safe
         // failure if the column is already present (older sqlite has no IF NOT
         // EXISTS for ADD COLUMN), so we just swallow the error.
         exec("ALTER TABLE tracker_segments ADD COLUMN raw_path TEXT;")
+        exec("ALTER TABLE tracker_segments ADD COLUMN kind TEXT NOT NULL DEFAULT 'foreground';")
         exec("CREATE INDEX IF NOT EXISTS idx_tracker_seg_day ON tracker_segments(occurred_on);")
         exec("CREATE INDEX IF NOT EXISTS idx_tracker_seg_open ON tracker_segments(ended_at);")
         // Startup sweep: clamp any stray open row (ended_at NULL, e.g. a crash
@@ -176,11 +199,11 @@ final class TrackerDB {
     // seeded to started_at so even an instant crash credits ~0s, never "now".
     func insertSegment(start: Int64, occurredOn: String, bundleId: String?,
                        appName: String?, host: String?, path: String?,
-                       attribution: String) -> Int64 {
+                       attribution: String, kind: String = "foreground") -> Int64 {
         let sql = """
         INSERT INTO tracker_segments
-          (started_at, ended_at, occurred_on, app_bundle_id, app_name, raw_host, raw_path, attribution)
-        VALUES (?,?,?,?,?,?,?,?)
+          (started_at, ended_at, occurred_on, app_bundle_id, app_name, raw_host, raw_path, attribution, kind)
+        VALUES (?,?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
@@ -193,6 +216,7 @@ final class TrackerDB {
         bindText(stmt, 6, host)
         bindText(stmt, 7, path)
         bindText(stmt, 8, attribution)
+        bindText(stmt, 9, kind)
         guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
         return sqlite3_last_insert_rowid(db)
     }
@@ -307,10 +331,16 @@ final class Tracker {
     private let pollInterval: TimeInterval
     private let idleThreshold: TimeInterval
 
-    // live segment
+    // live foreground segment
     private var liveRow: Int64 = 0
     private var liveKey: String? = nil       // "\(bundleId)\u{1f}\(path ?? host ?? "")\u{1f}\(attr)"
     private var liveDay: String = ""
+
+    // live BACKGROUND-media segments, one per asserting media app (base bundle id
+    // → row id). Tracked in parallel with the foreground span and independent of
+    // lock/idle state: audio can play while you work in another app OR while the
+    // screen is locked. Never counted as foreground active time.
+    private var liveBg: [String: Int64] = [:]
 
     // away latches
     private var asleep = false
@@ -335,7 +365,9 @@ final class Tracker {
         let wsnc = NSWorkspace.shared.notificationCenter
         observers.append(wsnc.addObserver(forName: NSWorkspace.willSleepNotification,
                                           object: nil, queue: .main) { [weak self] _ in
-            self?.asleep = true; self?.closeLive(at: Date())
+            // System sleep stops audio → close foreground AND bg media. (Screen
+            // LOCK does not close bg media — audio keeps playing while locked.)
+            self?.asleep = true; self?.closeLive(at: Date()); self?.closeAllBg()
         })
         observers.append(wsnc.addObserver(forName: NSWorkspace.didWakeNotification,
                                           object: nil, queue: .main) { [weak self] _ in
@@ -378,18 +410,109 @@ final class Tracker {
                                                        eventType: CGEventType(rawValue: ~0)!)
     }
 
-    // Any "prevent idle sleep" power assertion held => media/active even with no
-    // input (a video or music keeps the display/system awake).
-    private func mediaAssertionHeld() -> Bool {
-        var assertions: Unmanaged<CFDictionary>?
-        guard IOPMCopyAssertionsStatus(&assertions) == kIOReturnSuccess,
-              let dict = assertions?.takeRetainedValue() as? [String: Any] else {
-            return false
+    // Bundle ids of every process currently holding a "prevent user idle" power
+    // assertion (display OR system) — i.e. something is playing/presenting/calling
+    // that keeps the Mac awake without input. Per-PROCESS (not the global count)
+    // so we can tell WHICH app is asserting: the frontmost one (you're watching it)
+    // vs a background one (bg media). Helper/renderer child PIDs resolve to their
+    // own bundle id (e.g. com.google.Chrome.helper); mediaBase() folds them back.
+    // Scan IOKit power assertions ONCE per tick and return two bundle-id sets:
+    //   all   — every app RESPONSIBLE for a PreventUserIdle* assertion (call /
+    //           presentation / download / media). Keeps the FOREGROUND active past
+    //           the idle threshold when the frontmost app is in it.
+    //   media — apps actively playing MEDIA, by two reliable signals:
+    //     (1) AUDIO: coreaudiod holds the assertion ON BEHALF OF an app
+    //         (AssertionOnBehalfOfPID). coreaudiod only asserts during real audio
+    //         playback, for ANY app — no allowlist needed (catches rekordbox,
+    //         Spotify, browser PiP/bg audio, VLC, …). Detected via Process Name
+    //         "coreaudiod" / AssertName "com.apple.audio…" / ResourcesUsed audio-out.
+    //     (2) VIDEO: an allowlisted media app (browser/player) holding the assertion
+    //         directly — video keeping the Mac awake, possibly muted. Allowlisted
+    //         to avoid false positives from non-media holders.
+    // Parent PID via libproc, for walking a helper child up to its main app.
+    private func parentPid(_ pid: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let sz = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let r = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sz)
+        guard r == sz else { return nil }
+        return pid_t(info.pbi_ppid)
+    }
+
+    // Resolve a PID to its owning app's bundle id. A browser plays audio/video in
+    // a HELPER child process which is NOT an NSRunningApplication (returns nil), so
+    // walk up the parent chain until we hit the real app (the main browser).
+    private func appBundle(forPid pid: pid_t) -> String? {
+        var cur: pid_t? = pid
+        var hops = 0
+        while let p = cur, p > 1, hops < 6 {
+            if let app = NSRunningApplication(processIdentifier: p), let b = app.bundleIdentifier {
+                return b
+            }
+            cur = parentPid(p); hops += 1
         }
-        func count(_ k: String) -> Int { (dict[k] as? Int) ?? 0 }
-        return count("PreventUserIdleDisplaySleep") > 0
-            || count("PreventUserIdleSystemSleep") > 0
-            || count("PreventUserIdleDisplaySleep ") > 0   // tolerate trailing-space variants
+        return nil
+    }
+
+    private func scanAssertions() -> (all: Set<String>, media: Set<String>) {
+        var byProc: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&byProc) == kIOReturnSuccess,
+              let dict = byProc?.takeRetainedValue() as? [AnyHashable: Any] else {
+            return ([], [])
+        }
+        var all: Set<String> = []
+        var media: Set<String> = []
+        for (pidKey, val) in dict {
+            guard let assertions = val as? [[String: Any]] else { continue }
+            let ownerPid = (pidKey as? NSNumber)?.int32Value ?? -1
+            for a in assertions {
+                let type = (a["AssertType"] as? String) ?? ""
+                guard type == "PreventUserIdleDisplaySleep" || type == "PreventUserIdleSystemSleep"
+                else { continue }
+                let onBehalf = (a["AssertionOnBehalfOfPID"] as? NSNumber)?.int32Value ?? -1
+                // Responsible app = the on-behalf-of app if present, else the owner
+                // (helper PIDs are walked up to the main app).
+                let respPid = onBehalf > 0 ? onBehalf : ownerPid
+                let respBundle = respPid > 0 ? appBundle(forPid: respPid) : nil
+                if let rb = respBundle { all.insert(rb) }
+                guard let rb = respBundle, mediaBase(of: rb) != nil else { continue }
+                // Only KNOWN media apps count as background media (rekordbox, DAWs,
+                // calls, etc. are excluded). Audio playback is signalled by
+                // coreaudiod asserting on behalf of the app; EXCLUDE assertions that
+                // also capture audio-in (recording / monitoring / a call — not
+                // passive media). Video (display-sleep) by a media app also counts.
+                let proc = (a["Process Name"] as? String) ?? ""
+                let aname = (a["AssertName"] as? String) ?? ""
+                let resources = ((a["ResourcesUsed"] as? [Any])?.map { "\($0)" } ?? []).joined(separator: ",")
+                let isAudio = proc == "coreaudiod" || aname.contains("com.apple.audio") || resources.contains("audio-out")
+                let capturesInput = resources.contains("audio-in")
+                if isAudio {
+                    if !capturesInput { media.insert(rb) }
+                } else {
+                    media.insert(rb)   // video / display-sleep by a media app
+                }
+            }
+        }
+        return (all, media)
+    }
+
+    // Does the FRONTMOST app (or a helper child / same media base) hold an
+    // assertion? Keeps the foreground active past the idle threshold — you're
+    // watching / on a call / presenting IN FRONT. A purely background assertion
+    // does NOT qualify (that's handled as bg media instead).
+    private func matchesFrontmost(_ frontBundle: String?, _ set: Set<String>) -> Bool {
+        guard let fb = frontBundle else { return false }
+        if set.contains(fb) { return true }
+        if set.contains(where: { $0.hasPrefix(fb + ".") }) { return true }   // helper child
+        let fbBase = mediaBase(of: fb)
+        return fbBase != nil && set.contains { mediaBase(of: $0) == fbBase }
+    }
+
+    // active = unlocked AND not screensaver AND not asleep AND
+    //          (input idle < threshold OR the FRONTMOST app holds an assertion)
+    private func foregroundActive(frontBundle: String?, asserting: Set<String>) -> Bool {
+        if asleep || screensaverOn || isLocked() { return false }
+        if idleTime() < idleThreshold { return true }
+        return matchesFrontmost(frontBundle, asserting)
     }
 
     // Live query for screen-lock via the private CGSSessionScreenIsLocked symbol,
@@ -407,13 +530,44 @@ final class Tracker {
         return screenLocked
     }
 
-    // active = unlocked AND not screensaver AND not asleep AND
-    //          (input idle < threshold OR a prevent-idle assertion is held)
-    private func isActive() -> Bool {
-        if asleep || screensaverOn || isLocked() { return false }
-        if idleTime() < idleThreshold { return true }
-        return mediaAssertionHeld()
+    // Update the BACKGROUND-media ledger for this tick. `media` = apps playing
+    // media right now (audio via coreaudiod, or allowlisted video), MINUS the one
+    // (if any) you're watching in FRONT (that's foreground active time, tracked
+    // with its URL elsewhere). Open a row per new bg app, heartbeat existing ones,
+    // close any that stopped. App-level only — a background/PiP tab's URL (and, on
+    // macOS 15.4+, the Now Playing title) isn't reachable. Independent of lock/idle:
+    // runs every tick regardless of foreground state.
+    private func updateBackgroundMedia(now: Int64, today: String,
+                                       media: Set<String>, frontWatching: String?) {
+        var bgBundles = media
+        if let f = frontWatching {
+            let fBase = mediaBase(of: f)
+            bgBundles = bgBundles.filter { b in
+                b != f && !b.hasPrefix(f + ".") && !(fBase != nil && mediaBase(of: b) == fBase)
+            }
+        }
+        for b in bgBundles where liveBg[b] == nil {
+            let name = NSWorkspace.shared.runningApplications
+                .first { $0.bundleIdentifier == b }?.localizedName ?? b
+            let row = db.insertSegment(start: now, occurredOn: today, bundleId: b,
+                                       appName: name, host: nil, path: nil,
+                                       attribution: "ok", kind: "bg_media")
+            if row != 0 { liveBg[b] = row }
+        }
+        var toRemove: [String] = []
+        for (b, row) in liveBg {
+            if bgBundles.contains(b) {
+                db.touchEnded(rowId: row, end: now)   // still playing → heartbeat
+            } else {
+                toRemove.append(b)                      // stopped → ended_at stays at last heartbeat
+            }
+        }
+        for b in toRemove { liveBg.removeValue(forKey: b) }
     }
+
+    // Drop all live bg rows without extending them (sleep / day-rollover): the
+    // ended_at already sits at the last heartbeat, so we never credit silence.
+    private func closeAllBg() { liveBg.removeAll() }
 
     // Close the live span (leave ended_at at the last heartbeat / `at`, never
     // extend it for time we now know was away).
@@ -471,17 +625,34 @@ final class Tracker {
         let nowEpoch = epoch(now)
 
         // Midnight rollover: if a span is live and the local day changed, split it
-        // exactly at local midnight so each day's seconds bucket correctly.
+        // exactly at local midnight so each day's seconds bucket correctly. Applies
+        // to the foreground span AND every live bg-media span.
         let today = localDay(now)
-        if liveRow != 0 && today != liveDay {
+        if today != liveDay {
             let midnight = epoch(startOfLocalDay(now))
-            db.touchEnded(rowId: liveRow, end: midnight)
-            liveRow = 0
-            liveKey = nil
+            if liveRow != 0 {
+                db.touchEnded(rowId: liveRow, end: midnight)
+                liveRow = 0
+                liveKey = nil
+            }
+            for (_, row) in liveBg { db.touchEnded(rowId: row, end: midnight) }
+            closeAllBg()
         }
         liveDay = today
 
-        guard isActive() else {
+        // Shared per-tick signals, computed once. `all` = every app holding a
+        // prevent-idle assertion (foreground grace); `media` = apps actually
+        // playing media (bg ledger). Nothing plays while the system is asleep.
+        let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let scan = asleep ? (all: Set<String>(), media: Set<String>()) : scanAssertions()
+        let fgActive = foregroundActive(frontBundle: frontBundle, asserting: scan.all)
+        // If the frontmost app is itself the media you're consuming, that's
+        // foreground — exclude it from the bg ledger so it's never double-counted.
+        let frontWatching = (fgActive && matchesFrontmost(frontBundle, scan.media)) ? frontBundle : nil
+        updateBackgroundMedia(now: nowEpoch, today: today, media: scan.media,
+                              frontWatching: frontWatching)
+
+        guard fgActive else {
             closeLive(at: now)
             return
         }

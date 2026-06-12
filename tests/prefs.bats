@@ -1,16 +1,21 @@
 #!/usr/bin/env bats
 # Tests for lib/prefs.sh — pbrain_emit_prefs.
 #
+# Prefs live in the vault under .pbrain/ (one subdir per command):
+#   $VAULT_DIR/.pbrain/_global/prefs.md
+#   $VAULT_DIR/.pbrain/<cmd>/prefs.md
+# PBRAIN_PREFS_DIR overrides the ROOT (layout inside is identical).
+#
 # Run with:  bats tests/
 # Install bats:  brew install bats-core   (macOS)
 
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
-  export XDG_CONFIG_HOME="$TMP/config"
-  mkdir -p "$XDG_CONFIG_HOME/pbrain/prefs"
-  PREFS="$XDG_CONFIG_HOME/pbrain/prefs/journal.md"
-  GLOBAL="$XDG_CONFIG_HOME/pbrain/prefs/_global.md"
+  export VAULT_DIR="$TMP/vault"
+  mkdir -p "$VAULT_DIR/.pbrain/journal" "$VAULT_DIR/.pbrain/_global"
+  PREFS="$VAULT_DIR/.pbrain/journal/prefs.md"
+  GLOBAL="$VAULT_DIR/.pbrain/_global/prefs.md"
   source "$REPO_ROOT/lib/prefs.sh"
 }
 
@@ -52,10 +57,18 @@ teardown() {
   [ -z "$output" ]
 }
 
-@test "PBRAIN_PREFS_DIR override is honoured" {
+@test "no vault and no override emits nothing and returns 0" {
+  unset VAULT_DIR
+  unset PBRAIN_PREFS_DIR
+  run pbrain_emit_prefs journal
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "PBRAIN_PREFS_DIR override is honoured (root with per-cmd subdirs)" {
   local alt="$TMP/alt"
-  mkdir -p "$alt"
-  echo "- alt pref" > "$alt/journal.md"
+  mkdir -p "$alt/journal"
+  echo "- alt pref" > "$alt/journal/prefs.md"
   PBRAIN_PREFS_DIR="$alt" run pbrain_emit_prefs journal
   [[ "$output" == *"alt pref"* ]]
 }

@@ -9,9 +9,17 @@ Sources studied:
 
 ---
 
+## Bugs / regressions
+
+- [ ] **`/plan-my-day` set-building: blocks should be separated by seconds, not merged into one 60–75 min block** — previously each set in the day plan was clearly separated with individual time slots (e.g. 10:00–10:45, 10:45–11:30). Now sets are collapsed into a single block. Restore per-set time separation. *(reported 2026-06-12)*
+
+- [ ] **`/end-of-day` not nudging to close `/diet-journal`** — end-of-day should prompt the user to wrap up their diet log if it hasn't been closed for the day, but the nudge is missing. *(reported 2026-06-12)*
+
+---
+
 ## High priority (small effort, real lift)
 
-- [ ] **`/monthly-review`** — natural extension above `/weekly-review`. Pull all 4-5 weekly reviews in the calendar month, plus monthly aggregates of fitness/diet/plans. Synthesize themes that only show up at a month's resolution. Writes to `life/monthly-reviews/YYYY-MM.md`. *(inspired by ballred — they have `/monthly` with quarterly milestone tracking.)*
+- [x] **`/monthly-review`** — natural extension above `/weekly-review`. Pull all 4-5 weekly reviews in the calendar month, plus monthly aggregates of fitness/diet/plans. Synthesize themes that only show up at a month's resolution. Writes to `life/monthly-tracking/YYYY-MM.md`. *(inspired by ballred — they have `/monthly` with quarterly milestone tracking.)* **Completed: v0.21.0 (2026-06-12)** — also drives monthly-goals versioning + optional goals-profile hygiene pass.
 
 - [ ] **`/review` smart router** — date-aware dispatch. Sunday → `/weekly-review`. End of month (last 3 days or first 3 days of next) → `/monthly-review`. Otherwise → `/end-of-day`. Saves the user from picking the right cadence command. *(ballred has this exact pattern.)*
 
@@ -37,7 +45,7 @@ Sources studied:
 
 - [ ] **Contradiction detection in `/weekly-review`** — when synthesizing the week, surface inconsistencies: "Mon you wrote 'cut sugar'; Wed dinner log has dessert. Worth noting?" Render as `[!contradiction]` callouts in the review file so the user can decide whether they reflect honest drift, evolved thinking, or a real conflict. *(AgriciDaniel pattern.)*
 
-- [ ] **Goal cascade in `/plan-my-day` profile** — current profile is flat (horizon goals, current focus, anti-patterns, anchors). Add explicit hierarchy: 3-year vision → yearly goals → active projects → this month → this week → today. Daily plan would then surface the relevant rung downward ("this week's ONE Big Thing"). Profile-file schema change → migration needed for existing users. *(ballred's goal-cascade is the cleanest version of this; pbrain's profile is opinionated but flatter.)*
+- [x] **Goal cascade in `/plan-my-day` profile** — current profile is flat (horizon goals, current focus, anti-patterns, anchors). Add explicit hierarchy: 3-year vision → yearly goals → active projects → this month → this week → today. Daily plan would then surface the relevant rung downward ("this week's ONE Big Thing"). Profile-file schema change → migration needed for existing users. *(ballred's goal-cascade is the cleanest version of this; pbrain's profile is opinionated but flatter.)* **Completed: v0.21.0 (2026-06-12)** — shipped as the 4-tier altitude (goals profile → monthly → weekly → daily), with weekly/monthly goals resolved by period tag.
 
 - [ ] **`/adopt` mode for `/init-obsidian`** — detect existing vault organization (PARA, Zettelkasten, LYT, flat). If found, map pbrain's `agent-work/` and `life/` subpaths into the user's existing convention instead of forcing pbrain's structure. Print the chosen mapping for confirmation before writing. *(ballred has `/adopt` specifically for this.)*
 
@@ -58,6 +66,19 @@ Deferred from the `/habits` criteria-model redesign (eng review 2026-06-03).
 - [ ] **Habits dimension table (star schema)** — when a real analysis dashboard exists, mirror habit definitions from `life/Habits Profile.md`'s JSON into a synced SQLite `habits` table (upserted each run, keyed by `habit_id`) so the dashboard runs pure SQL (`habits ⨝ habit_events`) without parsing markdown. **Why deferred:** the markdown-only model is already dashboard-capable by parsing one JSON block; a second source of truth isn't justified until a dashboard consumer actually exists and query volume demands it. **Depends on:** a real dashboard being built. *(scope option B, declined in favor of stable-ids-in-markdown during the redesign.)*
 
 - [x] **First-class quantity tracking** — habits can carry an optional measure (`unit` + `measure_target`, e.g. `L`/4 for "drink 4L water", `km`/20 for "run 20 km/week"). `mark`/`log` take `--amount`; the amount lands in the Count cell of the tracking md and a new `amount REAL` column on `habit_events`. Fulfillment sums the amount over the schedule period and checks it against the target (`2.5/4 L`, `12/20 km this week`) instead of done/not-done; `target_count` is ignored for measured habits. Rollup/status/dashboard render amount-based progress with the unit. Shipped in v0.4.0 (`add`/`edit --unit/--measure-target`, `--measure-target ""` clears it). Tests in `tests/habits.bats` + the `amount` column migration in `tests/db.bats` coverage.
+
+---
+
+## Code-quality follow-ups (from the v0.21.0 ship review, 2026-06-12)
+
+Deferred INFORMATIONAL findings from the pre-landing review army + adversarial pass. None block correctness; all are DRY / efficiency cleanups of working, tested code.
+
+- [ ] **Extract the `profile new`/`commit`/draft-open emission into a shared helper.** The draft-open guard + "a new DRAFT version was minted… finalize with `profile commit`" INSTRUCTIONS block is duplicated near-verbatim across `plan-my-day.sh`, `diet-journal.sh`, `fitness-journal.sh`, and `habits.sh` (bodies differ only by the label prefix + script name). Move into `lib/profiles.sh` (e.g. `pbrain_profile_emit_new`/`_emit_commit` parameterized on prefix + script path). **Priority: P3.** *(maintainability specialist.)*
+- [ ] **Share the migration "move-into-store-with-frontmatter-stamp" heredoc.** Migrations 0005 and 0006 carry a byte-identical 19-line Python heredoc (strip + re-stamp `version`/`committed`, atomic tempfile→rename). Extract a `_pbrain_mig_move_to_store <src> <dest> <type-default>` helper so future store-move migrations stay consistent. **Priority: P3.** *(maintainability specialist.)*
+- [ ] **Share the "core profiles dump" between `/weekly-review` and `/monthly-review`.** The `cat_profile()` helper + the fixed list of profile invocations + the activity-profile glob block are duplicated verbatim across `weekly-review.sh` and the new `monthly-review.sh`. Extract into `lib/profiles.sh` so adding a new profile base doesn't require editing both. **Priority: P3.** *(maintainability specialist.)*
+- [ ] **`pbrain_profile_version` has no production caller.** It's exercised only by `tests/profiles.bats` — either wire it where a version label is derived (the `profile show` headers re-derive this inline) or accept it as intentional public API. **Priority: P4.** *(maintainability specialist.)*
+- [ ] **Batch the end-of-day `reminders-sync` Apple-Reminder calls.** PULL/PUSH/SWEEP each spawn one Swift-app cold launch (`open -W -n` + `sleep 0.3` poll) per pending habit reminder, so `/end-of-day` issues O(N) sequential ~0.5–2s launches. Tolerable (small N, ~once/day) but if it gets noticeable, add a batch op to the Swift helper (`status --ids a,b,c` / `complete --ids …`) so one launch resolves all ids, and fold the per-row `_hr_set_status` python spawns into a single UPDATE. **Priority: P3.** *(performance specialist.)*
+- [ ] **`reminders-ensure` create-then-record ordering can double-spawn on a DB-write failure.** The Apple Reminder is created (`pbrain_reminders_run add`) before the `habit_reminders` DB row is inserted, and the insert is swallowed by `|| true`; if `add` succeeds but the INSERT fails, the next run's dedup set won't know about it and creates a duplicate. Matches the established best-effort pattern, so acceptable — but make `add` re-findable by title+due so a retry reconciles instead of duplicating, or comment the trade-off. **Priority: P3.** *(maintainability specialist.)*
 
 ---
 

@@ -108,9 +108,11 @@ pbrain_overlay_build() {
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
 # interpolated into an interpreted string — so arbitrary message text is inert.
-#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<mark_done>]
+#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<mark_done>] [<warning_seconds>]
 # <seconds> 0 = no countdown (stays until a gesture resolves it).
 # <mark_done> 1 = enable Option-hold-to-done mode (no countdown needed).
+# <warning_seconds> seconds for the pre-overlay warning panel (default "" = use overlay default of 10s;
+#   pass "0" to skip the warning entirely, e.g. for the test command).
 # Launched with `open -n` so it runs in a proper Launch Services / GUI context
 # (works from the launchd poller's gui session); falls back to a notification if
 # the app can't be built (no swiftc).
@@ -119,7 +121,7 @@ pbrain_overlay_build() {
 # Every occurrence is its own row, so resolving one never touches the recurring series.
 pbrain_overlay_show() {
   local msg="${1:-Take a break}" secs="${2:-0}" hold="${3:-3}" bg="${4:-${PBRAIN_OVERLAY_BG:-}}"
-  local rid="${5:-}" db="${6:-}" mark_done="${7:-0}"
+  local rid="${5:-}" db="${6:-}" mark_done="${7:-0}" warning="${8:-}"
   pbrain_overlay_build
   local bin="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
   if [[ -x "$bin" ]]; then
@@ -128,6 +130,7 @@ pbrain_overlay_show() {
     [[ -n "$rid" ]]           && args+=(--id "$rid")
     [[ -n "$db" ]]            && args+=(--db "$db")
     [[ "$mark_done" == "1" ]] && args+=(--mark-done)
+    [[ -n "$warning" ]]       && args+=(--warning-seconds "$warning")
     if command -v open >/dev/null 2>&1; then
       open -n "$PBRAIN_OVERLAY_APP" --args "${args[@]}" >/dev/null 2>&1 && return 0
     fi

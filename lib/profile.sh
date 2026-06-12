@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# pbrain goals-profile helper — sourced by lib/vault.sh.
+# pbrain plans-profile helper — sourced by lib/vault.sh.
 #
-# The goals profile is a vault markdown file (so it lives in Obsidian alongside
+# The plans profile is a vault markdown file (so it lives in Obsidian alongside
 # the diet and fitness plans) whose structured data is carried in a fenced
 # ```json code block. This keeps the file human-readable in Obsidian while
 # preserving cheap, validated structured access for the commands that read it
