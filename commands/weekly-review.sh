@@ -237,6 +237,109 @@ else:
 PYEOF
 )"
 
+# ── Clippings (collect if any exist — processed in Step 6) ─────────────────
+CLIPPINGS_DIR="${PBRAIN_CLIPPINGS_DIR:-$VAULT_DIR/Clippings}"
+CLIPPINGS_PRESET="${PBRAIN_CLIPPINGS_TARGETS:-}"
+CLIPPINGS_AVAILABLE=""
+CLIPPINGS_PAYLOAD_WR=""
+ALL_CANDIDATES_WR=""
+DESTINATIONS_TREE_WR=""
+if [[ -d "$CLIPPINGS_DIR" ]]; then
+  _wr_clip_count="$(find "$CLIPPINGS_DIR" -maxdepth 1 -type f -name "*.md" | wc -l | tr -d ' ')"
+  if [[ "$_wr_clip_count" -gt 0 ]]; then
+    CLIPPINGS_AVAILABLE="yes"
+
+    _wr_py1="$(mktemp)"
+    _wr_py2=""
+    trap 'rm -f "${_wr_py1:-}" "${_wr_py2:-}"' EXIT
+    cat > "$_wr_py1" <<'PYEOF'
+import os, glob, re, sys
+clippings_dir = sys.argv[1]
+files = sorted(glob.glob(os.path.join(clippings_dir, "*.md")))
+chunks = []
+for f in files:
+    name = os.path.basename(f)
+    try:
+        with open(f, encoding="utf-8") as fh:
+            content = fh.read()
+    except Exception as e:
+        chunks.append("=== " + name + " ===\n(error reading: " + str(e) + ")\n")
+        continue
+    fm = ""
+    body = content
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", content, re.DOTALL)
+    if m:
+        fm = m.group(1).strip()
+        body = m.group(2).strip()
+    body_clean = re.sub(r"!\[.*?\]\(.*?\)", "", body)
+    body_clean = re.sub(r"\n{3,}", "\n\n", body_clean).strip()
+    preview = body_clean[:800]
+    if len(body_clean) > 800:
+        preview += "\n...(truncated)"
+    chunk = "=== " + name + " ===\n"
+    if fm:
+        chunk += "frontmatter:\n" + fm + "\n\n"
+    chunk += "body_preview:\n" + preview + "\n"
+    chunks.append(chunk)
+print("\n".join(chunks))
+PYEOF
+    CLIPPINGS_PAYLOAD_WR="$(python3 "$_wr_py1" "$CLIPPINGS_DIR")"
+    rm -f "$_wr_py1"
+
+    _wr_py2="$(mktemp)"
+    cat > "$_wr_py2" <<'PYEOF'
+import os, sys
+vault = sys.argv[1]
+clippings_basename = sys.argv[2]
+EXCLUDE = {"agent-work", clippings_basename}
+def is_hidden(name):
+    return name.startswith(".") or name.startswith("_")
+def list_dirs(path):
+    try:
+        return sorted(n for n in os.listdir(path)
+                      if os.path.isdir(os.path.join(path, n)) and not is_hidden(n))
+    except Exception:
+        return []
+def list_md_files(path):
+    try:
+        return sorted(n for n in os.listdir(path)
+                      if n.endswith(".md") and not is_hidden(n))
+    except Exception:
+        return []
+top_dirs = [d for d in list_dirs(vault) if d not in EXCLUDE]
+lines = []
+for d in top_dirs:
+    full = os.path.join(vault, d)
+    files = list_md_files(full)
+    subdirs = list_dirs(full)
+    lines.append("- " + d + "/")
+    if files:
+        sample = files[:6]
+        more = "" if len(files) <= 6 else " ...(" + str(len(files) - 6) + " more)"
+        lines.append("    files: " + ", ".join(sample) + more)
+    for sd in subdirs:
+        sd_full = os.path.join(full, sd)
+        sd_files = list_md_files(sd_full)
+        sd_subdirs = list_dirs(sd_full)
+        descriptor = "    " + d + "/" + sd + "/"
+        if sd_files:
+            sample = sd_files[:5]
+            more = "" if len(sd_files) <= 5 else " ...(" + str(len(sd_files) - 5) + " more)"
+            descriptor += "  files: " + ", ".join(sample) + more
+        if sd_subdirs:
+            descriptor += "  subdirs: " + ", ".join(sd_subdirs)
+        lines.append(descriptor)
+print("ALL_CANDIDATES: " + ",".join(top_dirs))
+print("")
+print("\n".join(lines))
+PYEOF
+    _wr_dest_raw="$(python3 "$_wr_py2" "$VAULT_DIR" "$(basename "$CLIPPINGS_DIR")")"
+    rm -f "$_wr_py2"
+    ALL_CANDIDATES_WR="$(printf '%s\n' "$_wr_dest_raw" | head -1)"
+    DESTINATIONS_TREE_WR="$(printf '%s\n' "$_wr_dest_raw" | tail -n +3)"
+  fi
+fi
+
 echo ""
 echo "--- WEEKLY GOALS ($ISO_WEEK) ---"
 if [[ -n "$WEEKLY_GOALS_CONTENT" ]]; then
@@ -262,6 +365,21 @@ echo "--- THIS WEEK'S TASK LOGS ---"
 echo "$TASK_LOG_DATA"
 echo "--- END TASK LOGS ---"
 
+if [[ -n "$CLIPPINGS_AVAILABLE" ]]; then
+  echo ""
+  echo "--- CLIPPINGS TO ORGANIZE ---"
+  echo "clippings_dir: $CLIPPINGS_DIR"
+  echo "preset_targets: ${CLIPPINGS_PRESET:-(none — ask the user)}"
+  echo "$ALL_CANDIDATES_WR"
+  echo ""
+  echo "=== CLIPPINGS ==="
+  echo "$CLIPPINGS_PAYLOAD_WR"
+  echo ""
+  echo "=== DESTINATION DIRS (top-level, with subdir tree) ==="
+  echo "$DESTINATIONS_TREE_WR"
+  echo "--- END CLIPPINGS ---"
+fi
+
 echo ""
 cat <<PROMPT
 weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}
@@ -269,6 +387,8 @@ monthly_goals_file: ${MONTHLY_GOALS_FILE:-(not set up)}
 iso_week: $ISO_WEEK
 next_iso_week: $NEXT_ISO_WEEK
 month_year: $MONTH_YEAR
+clippings_available: ${CLIPPINGS_AVAILABLE:-no}
+clippings_dir: $CLIPPINGS_DIR
 
 INSTRUCTIONS: Walk a weekly review. You have a lot of context above — use it. Specifics or silence.
 
@@ -406,6 +526,66 @@ by default. Only run a command if the user explicitly says yes this session:
 Write the read + proposals + what the user decided into "## Habit review".
 
 Step 5 — Print the file path. One closing line, no fanfare.
+
+Step 6 — Clippings (only if clippings_available is "yes" above):
+  After writing the review file, process the clippings in
+  "--- CLIPPINGS TO ORGANIZE ---" as the final act of the weekly session.
+
+  Step 6.0 — Destination selection (once, before any moves):
+    - Look at preset_targets and ALL_CANDIDATES in the clippings context.
+    - If preset_targets is "all", use every dir in ALL_CANDIDATES.
+    - If preset_targets is a non-empty list, use those (skip any not in
+      ALL_CANDIDATES, warn once).
+    - Otherwise ask: "Which top-level dirs should I file these clippings into?
+        Available: <ALL_CANDIDATES>
+        Reply with a comma-separated subset, or 'all'."
+    Wait for their answer. Lock result as ALLOWED_TOP_DIRS.
+
+  For each clipping (in order from === CLIPPINGS ===):
+
+  Step 6.1 — Read filename, frontmatter, and body preview. Form an opinion on
+    topic and best destination.
+
+  Step 6.2 — Pick destination: top-level dir MUST be one of ALLOWED_TOP_DIRS;
+    subpath is open-ended (reuse existing subdirs when they fit, propose new ones
+    only when the content is clearly a distinct sub-topic). NEVER target
+    agent-work/ or Clippings/.
+
+  Step 6.3 — Decide filename: keep if already clean (3-6 words). Otherwise
+    propose: 3-6 words, Title Case, content-derived, .md. If renaming, also plan
+    to rewrite the frontmatter title: field.
+
+  Step 6.4 — Confidence check:
+    - >= ~70% sure: announce in one line ("→ moving OLD to DEST/NEW") and ask "ok?"
+    - Close call: present 2-3 options, let user pick.
+    Always get a confirmation token before mv.
+
+  Step 6.5 — Execute move (path-safe):
+    BEFORE running mkdir/mv, validate dest_dir is inside VAULT_DIR:
+      python3 -c "
+import os, sys
+dest = os.path.realpath('{dest_dir}')
+vault = os.path.realpath('$VAULT_DIR')
+if not dest.startswith(vault + os.sep) and dest != vault:
+    print('BLOCKED: dest_dir outside vault: ' + dest, file=sys.stderr); sys.exit(1)
+"
+    If the check fails, skip this clipping and say "skipped (unsafe path)".
+    Otherwise:
+      mkdir -p "{dest_dir}"
+      mv "$CLIPPINGS_DIR/{old_name}" "{dest_dir}/{new_name}"
+    If renamed, rewrite the frontmatter title: field using exactly this fixed
+    snippet (do NOT write your own variation):
+      python3 - "{dest_dir}/{new_name}" "{new_title}" <<'REWRITE_EOF'
+import re, sys
+path, new_title = sys.argv[1], sys.argv[2]
+text = open(path).read()
+text = re.sub(r"(^---\n.*?^title:\s*).*?$", lambda m: m.group(1) + new_title,
+              text, count=1, flags=re.MULTILINE | re.DOTALL)
+open(path, "w").write(text)
+REWRITE_EOF
+    Announce: "✓ moved → {relative_path_from_vault}"
+
+  When all clippings are processed, print: N moved, grouped by top-level dir.
 
 Hard rules:
 - Quote the user back to themselves in the synthesis. Their language, not yours.
