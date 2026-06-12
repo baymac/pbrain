@@ -64,6 +64,19 @@ committed: true
  "daily_anchors": {"wake_time": "07:30", "workout_time": "17:00",
    "lunch_time": "13:00", "dinner_time": "20:30", "walk_time": null,
    "bed_target": "23:30"},
+ "typical_day": {"padded": true, "rest_days": ["sat", "sun"],
+   "workday": [
+     {"slot": "wake", "start": "07:30", "end": "08:00", "duration_min": 30, "category": "wake", "flex": "fixed"},
+     {"slot": "work_am", "start": "09:00", "end": "13:00", "duration_min": 240, "category": "work", "flex": "flex"},
+     {"slot": "lunch", "start": "13:00", "end": "13:45", "duration_min": 45, "category": "meal", "flex": "fixed"},
+     {"slot": "bed", "start": "23:30", "end": "23:30", "duration_min": 0, "category": "bed", "flex": "fixed"}],
+   "rest_day": [
+     {"slot": "wake", "start": "08:30", "end": "09:00", "duration_min": 30, "category": "wake", "flex": "fixed"}]},
+ "variation_rules": {"priority_order": ["events_and_nonnegotiables", "meals_and_fitness", "work"],
+   "work_is_flex": true, "keep_meal_count": true, "min_wake_to_work_gap_min": 30,
+   "non_gym_fitness": {"ask_duration_including_buffer": true, "shift_meals_to_fit": true},
+   "late_wake": {"shift_timeline": true},
+   "skip_fitness_when": "Suggest skipping only when meals run late AND recently active."},
  "anti_patterns": ["doomscrolling"],
  "personal_anchors": {"relationships": ["Mom"], "creative_pursuits": ["DJing"],
    "health_habits": ["gym 4x/week"]},
@@ -183,6 +196,79 @@ EOF
   # the GOALS-section rename landed
   [[ "$output" == *"## Today's focus"* ]]
   [[ "$output" != *"## Anchoring on"* ]]
+}
+
+@test "fresh setup block carries the typical_day + variation_rules template" {
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SETUP_PROFILE"* ]]
+  [[ "$output" == *"\"typical_day\""* ]]
+  [[ "$output" == *"\"variation_rules\""* ]]
+  [[ "$output" == *"\"workday\""* ]]
+  [[ "$output" == *"\"rest_day\""* ]]
+  [[ "$output" == *"min_wake_to_work_gap_min"* ]]
+  [[ "$output" == *"Typical day breakup"* ]]
+}
+
+@test "rebuild block carries the typical_day + variation_rules template" {
+  mkdir -p "$PBRAIN_VAULT/life"
+  echo "old goals profile" > "$PBRAIN_VAULT/life/Goals Profile.md"
+  PBRAIN_MIGRATIONS=1 run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_REBUILD"* ]]
+  [[ "$output" == *"\"typical_day\""* ]]
+  [[ "$output" == *"\"variation_rules\""* ]]
+  [[ "$output" == *"flesh your flat anchors"* ]]
+}
+
+@test "a plans profile with typical_day still parses as valid JSON" {
+  write_plans_profile
+  # The fenced JSON block must round-trip through json.loads.
+  run python3 - "$STORE/plans-profile.v1.md" <<'PYEOF'
+import json, re, sys
+with open(sys.argv[1]) as fh:
+    m = re.search(r"```json\s*\n(.*?)```", fh.read(), re.DOTALL)
+p = json.loads(m.group(1))
+assert "typical_day" in p and "workday" in p["typical_day"], "missing typical_day"
+assert "variation_rules" in p, "missing variation_rules"
+print("OK")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+}
+
+@test "daily session reports typical_day_present yes and injects recent fitness activity" {
+  write_plans_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"typical_day_present: yes"* ]]
+  [[ "$output" == *"RECENT FITNESS ACTIVITY"* ]]
+  [[ "$output" == *"2b.5"* ]]
+  [[ "$output" == *"NON-NEGOTIABLES"* ]]
+}
+
+@test "daily session falls back gracefully when the profile lacks typical_day" {
+  # A committed profile WITHOUT typical_day (pre-existing vaults) still plans.
+  local legacy="$TMP/legacy-profile.md"
+  cat > "$legacy" <<EOF
+---
+type: plans-profile
+version: 1
+committed: true
+---
+# Plans profile
+\`\`\`json
+{"created": "$TODAY", "working_style": {"session_length_min": 90,
+  "break_min": 30, "last_block_end": "20:00"}, "current_focus": [],
+  "daily_anchors": {"wake_time": "07:30"}}
+\`\`\`
+EOF
+  write_libraries
+  PBRAIN_PLAN_PROFILE_FILE="$legacy" run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  [[ "$output" == *"typical_day_present: no"* ]]
 }
 
 @test "daily session injects work + goals libraries" {

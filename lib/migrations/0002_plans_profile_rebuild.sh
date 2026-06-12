@@ -5,7 +5,8 @@
 #
 #   old: $VAULT_DIR/life/Goals Profile.md  (or legacy ~/.config/pbrain/plan-profile.json)
 #   new: <plan-dir>/.profile/plans-profile.v1.md   (current_focus list;
-#        working_style + planning_guidelines + daily_anchors etc.)
+#        working_style + planning_guidelines + daily_anchors +
+#        typical_day (padded workday/rest_day timelines) + variation_rules etc.)
 #        <plan-dir>/.profile/work-library.v1.md    (stable project cards)
 #        <plan-dir>/.profile/goals-library.v1.md   (stable goal cards)
 #

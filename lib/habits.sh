@@ -580,7 +580,7 @@ def _to_float(s):
 
 def score_from_spec(spec, good=None, bad=None, slips=None,
                     actual_time=None, actual_hours=None,
-                    items=None, session=None):
+                    items=None, session=None, focus=None):
     """Generic, deterministic habit-score evaluator. The habit's profile owns
     the rule (spec); the caller supplies only raw inputs. Returns a float
     score, or None when the spec is unusable / no inputs were given (callers
@@ -670,6 +670,29 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
         if possible <= 0.0:
             return None
         return float(int(100.0 * earned / possible + 0.5))
+
+    if stype == "focus_ratio":
+        # "Deep work": inputs = a dict of per-category active minutes during the
+        # day's work blocks, e.g. {"work":120,"social":30,"entertainment":15,
+        # "neutral":10}. score = 100 * work / (work + distraction); neutral and
+        # afk are excluded from the formula. Which categories count as work vs
+        # distraction is the spec's call, not the code's.
+        if not isinstance(focus, dict):
+            return None
+        work_cats = spec.get("work_categories") or ["work"]
+        distr_cats = spec.get("distraction_categories") or ["social", "entertainment"]
+        def _sum_cats(cats):
+            t = 0.0
+            for c in cats:
+                v = _to_float(focus.get(c))
+                if v and v > 0:
+                    t += v
+            return t
+        w = _sum_cats(work_cats)
+        d = _sum_cats(distr_cats)
+        if (w + d) <= 0.0:
+            return None  # no active work-or-distraction time -> caller leaves it unmarked
+        return float(int(100.0 * w / (w + d) + 0.5))
 
     if stype == "session_volume":
         if not isinstance(session, dict):
@@ -896,6 +919,7 @@ elif op == "mark":
     a_hours = sys.argv[15] if len(sys.argv) > 15 else ""   # deviation: actual hours
     items_json   = sys.argv[16] if len(sys.argv) > 16 else ""  # weighted_completion
     session_json = sys.argv[17] if len(sys.argv) > 17 else ""  # session_volume
+    focus_json   = sys.argv[18] if len(sys.argv) > 18 else ""  # focus_ratio
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -908,6 +932,7 @@ elif op == "mark":
     g, b, sl = _to_int(good), _to_int(bad), _to_int(slips)
     items_parsed = None
     session_parsed = None
+    focus_parsed = None
     if items_json.strip():
         try:
             items_parsed = json.loads(items_json)
@@ -918,13 +943,20 @@ elif op == "mark":
             session_parsed = json.loads(session_json)
         except Exception:
             pass
+    if focus_json.strip():
+        try:
+            focus_parsed = json.loads(focus_json)
+        except Exception:
+            pass
     if h.get("scoring") and (g is not None or b is not None or sl is not None
                              or a_time.strip() or a_hours.strip()
-                             or items_parsed is not None or session_parsed is not None):
+                             or items_parsed is not None or session_parsed is not None
+                             or focus_parsed is not None):
         val = score_from_spec(h["scoring"], good=g, bad=b, slips=sl,
                               actual_time=a_time.strip() or None,
                               actual_hours=a_hours.strip() or None,
-                              items=items_parsed, session=session_parsed)
+                              items=items_parsed, session=session_parsed,
+                              focus=focus_parsed)
         if val is not None:
             amount = fmtnum(val)  # feed the measured-amount path below
     con = sqlite3.connect(db) if os.path.exists(db) else None
@@ -986,12 +1018,14 @@ elif op == "score":
     a_hours = sys.argv[8] if len(sys.argv) > 8 else ""
     items_json   = sys.argv[9]  if len(sys.argv) > 9  else ""
     session_json = sys.argv[10] if len(sys.argv) > 10 else ""
+    focus_json   = sys.argv[11] if len(sys.argv) > 11 else ""
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
     h = active.get(name.strip().lower()) or byid.get(name.strip().lower())
     items_parsed = None
     session_parsed = None
+    focus_parsed = None
     if items_json.strip():
         try:
             items_parsed = json.loads(items_json)
@@ -1002,11 +1036,17 @@ elif op == "score":
             session_parsed = json.loads(session_json)
         except Exception:
             pass
+    if focus_json.strip():
+        try:
+            focus_parsed = json.loads(focus_json)
+        except Exception:
+            pass
     val = score_from_spec(h.get("scoring"), good=_to_int(good), bad=_to_int(bad),
                           slips=_to_int(slips),
                           actual_time=a_time.strip() or None,
                           actual_hours=a_hours.strip() or None,
-                          items=items_parsed, session=session_parsed) if h else None
+                          items=items_parsed, session=session_parsed,
+                          focus=focus_parsed) if h else None
     print(fmtnum(val) if val is not None else "")
 
 elif op == "sync":
@@ -1087,7 +1127,7 @@ pbrain_habit_track_init() {
 # habit (one with a unit + target) the amount is what's recorded. Scored habits
 # take classification inputs instead: good/bad/slips (slip_ladder, meal_ratio)
 # or actual_time/actual_hours (deviation) — the score lands in amount.
-pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json]
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json]
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
@@ -1095,15 +1135,15 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [sli
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
     "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')" \
-    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}"
+    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}" "${13:-}"
 }
 
 # Compute (without writing) a scored habit's score from its profile rule + raw
 # inputs. Echoes the numeric score, or "" if not a scored habit.
-pbrain_habit_score() {  # <name> [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json]
+pbrain_habit_score() {  # <name> [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json]
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   _pbrain_habit_track_py score "$(pbrain_habits_profile_file)" \
-    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by

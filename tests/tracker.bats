@@ -301,3 +301,128 @@ PY
   [ "$status" -eq 0 ]
   [[ "$output" == *"not installed"* ]] || [[ "$output" == *"Stopped"* ]]
 }
+
+# --- focus-breakdown + categorize (the "Deep work" focus score) -------------
+
+# Seed a day with a known mix INSIDE two work windows (09:00-10:00, 11:00-12:00)
+# plus a 15m gap inside window 1 and activity OUTSIDE the windows (must be ignored).
+seed_focus_day() {
+  local day="$1"
+  source "$REPO_ROOT/lib/db.sh"
+  pbrain_tracker_db_init
+  python3 - "$PBRAIN_TRACKER_DB_FILE" "$day" <<'PY'
+import sqlite3, sys, time, datetime
+db, day = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+def ep(h, m):
+    d = datetime.datetime.strptime(day, "%Y-%m-%d").replace(hour=h, minute=m)
+    return int(time.mktime(d.timetuple()))
+rows = [
+    # window 1 (09:00-10:00): Cursor 09:00-09:45 (45m, app/non-browser); 15m gap → AFK
+    (ep(9,0),  ep(9,45),  "com.cursor","Cursor",        None,         None, "not_browser","foreground"),
+    # window 2 (11:00-12:00): github 30m, x.com 20m, youtube 10m (fills it)
+    (ep(11,0), ep(11,30), "com.google.Chrome","Chrome", "github.com", "github.com",  "ok","foreground"),
+    (ep(11,30),ep(11,50), "com.google.Chrome","Chrome", "www.x.com",  "x.com",       "ok","foreground"),
+    (ep(11,50),ep(12,0),  "com.google.Chrome","Chrome", "youtube.com","youtube.com", "ok","foreground"),
+    # OUTSIDE any window — must NOT count
+    (ep(13,0), ep(13,30), "com.cursor","Cursor",        None,         None, "not_browser","foreground"),
+    # background media inside window 2 — must NOT count
+    (ep(11,0), ep(11,40), "com.spotify","Spotify",      None,         None, "not_browser","bg_media"),
+]
+for s,e,bid,name,host,path,attr,kind in rows:
+    c.execute("INSERT INTO tracker_segments(started_at,ended_at,occurred_on,app_bundle_id,app_name,raw_host,raw_path,attribution,kind) "
+              "VALUES(?,?,?,?,?,?,?,?,?)",(s,e,day,bid,name,host,path,attr,kind))
+c.commit(); c.close()
+PY
+}
+
+# Pull the FOCUS_BREAKDOWN JSON object out of the subcommand output.
+fb_json() { echo "$1" | grep '^FOCUS_BREAKDOWN ' | sed 's/^FOCUS_BREAKDOWN //'; }
+
+@test "focus-breakdown clips to windows, keys by domain-vs-app, derives AFK, collects unknowns" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  seed_focus_day "2026-06-09"
+  run bash "$SH" focus-breakdown --date 2026-06-09 --windows "09:00-10:00,11:00-12:00"
+  [ "$status" -eq 0 ]
+  j="$(fb_json "$output")"
+  # No category map yet → everything is unknown; total_active = 45+60 = 105; AFK = 120-105 = 15
+  run python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['total_active']==105,d; assert d['afk']==15,d; assert d['work']==0 and d['social']==0,d; ks={u['key']:(u['kind'],u['minutes']) for u in d['unknown']}; assert ks['Cursor']==('app',45),ks; assert ks['github.com']==('domain',30),ks; assert ks['x.com']==('domain',20),ks; assert ks['youtube.com']==('domain',10),ks" "$j"
+  [ "$status" -eq 0 ]
+}
+
+@test "focus-breakdown applies the category map and computes per-category minutes" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  seed_focus_day "2026-06-09"
+  bash "$SH" categorize --set "github.com=work,x.com=social,youtube.com=entertainment,Cursor=work"
+  run bash "$SH" focus-breakdown --date 2026-06-09 --windows "09:00-10:00,11:00-12:00"
+  [ "$status" -eq 0 ]
+  j="$(fb_json "$output")"
+  # work = Cursor 45 + github 30 = 75; social = 20; entertainment = 10; unknown empty
+  run python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['work']==75,d; assert d['social']==20,d; assert d['entertainment']==10,d; assert d['neutral']==0,d; assert d['unknown']==[],d" "$j"
+  [ "$status" -eq 0 ]
+}
+
+@test "focus-breakdown with no valid windows scores nothing" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  seed_focus_day "2026-06-09"
+  run bash "$SH" focus-breakdown --date 2026-06-09 --windows ""
+  [ "$status" -eq 0 ]
+  j="$(fb_json "$output")"
+  run python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['total_active']==0 and d['afk']==0,d" "$j"
+  [ "$status" -eq 0 ]
+}
+
+@test "categorize routes dot→domains, non-dot→apps, strips www., rejects bad categories" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  run bash "$SH" categorize --set "www.GitHub.com=work,Spotify=entertainment,foo=banana"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Ignored"*"foo=banana"* ]]
+  run python3 -c "
+import json,re,sys
+t=open(sys.argv[1]).read()
+d=json.loads(re.search(r'\`\`\`json\s*\n(.*?)\`\`\`', t, re.DOTALL).group(1))
+assert d['domains'].get('github.com')=='work', d
+assert 'www.github.com' not in d['domains'], d
+assert d['apps'].get('Spotify')=='entertainment', d
+assert 'foo' not in d['domains'] and 'foo' not in d['apps'], d
+" "$PBRAIN_LAPTOP_CATEGORIES_FILE"
+  [ "$status" -eq 0 ]
+}
+
+@test "categorize --app / --domain force routing; merges are idempotent and additive" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  bash "$SH" categorize --set "github.com=work"
+  # force a dot-less key into domains, and a dotted key into apps
+  bash "$SH" categorize --domain --set "localhost=work"
+  bash "$SH" categorize --app --set "my.editor=work"
+  run python3 -c "
+import json,re,sys
+t=open(sys.argv[1]).read()
+d=json.loads(re.search(r'\`\`\`json\s*\n(.*?)\`\`\`', t, re.DOTALL).group(1))
+assert d['domains'].get('localhost')=='work', d
+assert d['apps'].get('my.editor')=='work', d
+assert d['domains'].get('github.com')=='work', d
+" "$PBRAIN_LAPTOP_CATEGORIES_FILE"
+  [ "$status" -eq 0 ]
+  # re-setting an existing key updates in place (no duplicate)
+  bash "$SH" categorize --set "github.com=social"
+  run bash "$SH" categorize --list
+  [[ "$output" == *"github.com"*"social"* ]]
+}
+
+@test "categorize --list on an empty map is graceful" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  run bash "$SH" categorize --list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No categories set yet"* ]]
+}
+
+@test "the category map round-trips through pbrain_profile_json" {
+  export PBRAIN_LAPTOP_CATEGORIES_FILE="$TMP/categories.md"
+  bash "$SH" categorize --set "github.com=work,x.com=social"
+  source "$REPO_ROOT/lib/profile.sh"
+  run pbrain_profile_json "$PBRAIN_LAPTOP_CATEGORIES_FILE"
+  [ "$status" -eq 0 ]
+  run python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['domains']['github.com']=='work' and d['domains']['x.com']=='social', d" "$output"
+  [ "$status" -eq 0 ]
+}

@@ -9,9 +9,10 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 **Behaviour:**
 
 - Leads with a one-line **recap** of what's already known (resolved tasks, logged meals, the fitness session, habit marks, laptop usage), then asks only the gaps — one domain per message: (1) still-open plan tasks/blocks, (2) the fitness session + on-track-to-sleep (today only), (3) unlogged meals, (4) which due habits got done, (5) any unresolved journal open questions. A domain with no gaps is skipped.
+- **Deep work focus** (when laptop tracking is set up): extracts the work-block time windows from the plan, scores how much of that active time went to work vs. distraction (via `/laptop-tracking focus-breakdown`), asks you to categorize any new sites once, and folds the focus % into the laptop line of the close.
 - Fills **both** plan tables in place: `## Task log` (Done at / Status) and `## Today at a glance` (a `✓` prefix on blocks that happened).
 - Writes a lean `## How it went`: **Executive summary** (small wins across work / diet / fitness / relationships + anything logged in your journal & thoughts), **Goal progress** (vs `focus_today`), **Sleep**, and an auto-derived **Carry-forward** (your not-done tasks, which next day's `/plan-my-day` offers back to you). No energy curve, no tomorrow-seed prompt.
-- **Marks all four scored-habit defaults** from the day's data as a backstop — Work the plan, Train, Eat clean, Sleep well — so weekly/monthly scores aren't full of holes (idempotent if a command already marked one).
+- **Marks all five scored-habit defaults** from the day's data as a backstop — Work the plan, Train, Eat clean, Sleep well, Deep work — so weekly/monthly scores aren't full of holes (idempotent if a command already marked one).
 - On the last day of the ISO week / month, adds a once pointer to `/weekly-review` / `/monthly-review` (non-blocking).
 - If today's plan file doesn't exist → creates a free-form close at that path instead of anchoring to a plan.
 - If `## How it went` already has user-filled content → asks whether to overwrite, append, or skip before touching it (idempotency guardrail).

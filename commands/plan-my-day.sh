@@ -187,6 +187,9 @@ for f in sorted(glob.glob(os.path.join(d, "*.md")))[-10:]:
     except Exception:
         pass
 PYEOF
+  # NOTE: the typical_day + variation_rules JSON below must stay identical with
+  # the other build block (PLAN_MY_DAY_SETUP_PROFILE) — exactly two copies, by
+  # the self-contained-heredoc convention.
   cat <<REBUILD
 
 ---
@@ -230,7 +233,26 @@ Part A — Overall plans profile. Walk PART BY PART (not all at once):
      Old "current_focus" this-week-move entries are NOT carried (now weekly
      focus, Part C).
 
-  3. daily_anchors: carry over (wake/workout/lunch/dinner/walk/bed); confirm.
+  3. Typical day. "Let's flesh your flat anchors into full padded workday +
+     rest-day timelines." Walk the user through an average WORKDAY wake→bed,
+     every activity with its time (wake/prep, workout, each meal, work blocks,
+     walk, wind-down, bed), being GENEROUS with each block so real days leave
+     slack to do EXTRA, never a deficit. Capture each segment as
+     {slot, start, end, duration_min, category, flex} where category ∈
+     wake|fitness|meal|work|movement|rest|bed and flex ∈ fixed (meals/wake/bed)
+     | flex (work, walk, wind-down) | skippable (fitness). These are CEILINGS
+     the planner may compress, never expand. Read it back; then repeat for a
+     typical REST/weekend day. Ask which weekdays are rest days →
+     typical_day.rest_days. Set typical_day.padded: true. DERIVE daily_anchors
+     from the workday segments (wake←wake.start, workout←fitness.start,
+     lunch/dinner←meal slots, walk←movement.start, bed_target←bed.start) — no
+     separate anchors question. Then capture variation_rules once: non-gym
+     fitness days → ask duration INCLUDING buffer + shift meals to fit; late
+     wake-ups → shift the whole timeline but keep ≥30 min wake→first work block;
+     and the invariants — keep meal COUNT, protect meals + fitness, WORK is the
+     flex variable, and only *suggest* skipping fitness when meals run late AND
+     recent days were already active (priority_order events_and_nonnegotiables >
+     meals_and_fitness > work).
   4. anti_patterns + personal_anchors: confirm, prune anything stale.
 
 Part B — Monthly focus. Mint this month's monthly goals:
@@ -274,6 +296,32 @@ Write THREE profile files into $STORE (mkdir -p first), all committed v1:
    "daily_anchors": {"wake_time": "HH:MM", "workout_time": "HH:MM",
      "lunch_time": "HH:MM", "dinner_time": "HH:MM",
      "walk_time": "HH:MM or null", "bed_target": "HH:MM"},
+   "typical_day": {
+     "padded": true,
+     "note": "Generous baseline — each block padded so real days leave slack, never a deficit. The planner may COMPRESS these segments but should never need to expand them.",
+     "rest_days": ["sat", "sun"],
+     "workday": [
+       {"slot": "wake",      "start": "07:00", "end": "07:30", "duration_min": 30,  "category": "wake",     "flex": "fixed"},
+       {"slot": "workout",   "start": "08:00", "end": "09:15", "duration_min": 75,  "category": "fitness",  "flex": "skippable"},
+       {"slot": "breakfast", "start": "09:15", "end": "09:45", "duration_min": 30,  "category": "meal",     "flex": "fixed"},
+       {"slot": "work_am",   "start": "10:00", "end": "13:00", "duration_min": 180, "category": "work",     "flex": "flex"},
+       {"slot": "lunch",     "start": "13:00", "end": "13:45", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+       {"slot": "work_pm",   "start": "14:00", "end": "18:00", "duration_min": 240, "category": "work",     "flex": "flex"},
+       {"slot": "walk",      "start": "18:30", "end": "19:00", "duration_min": 30,  "category": "movement", "flex": "flex"},
+       {"slot": "dinner",    "start": "19:30", "end": "20:15", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+       {"slot": "wind_down", "start": "22:30", "end": "23:00", "duration_min": 30,  "category": "rest",     "flex": "flex"},
+       {"slot": "bed",       "start": "23:00", "end": "23:00", "duration_min": 0,   "category": "bed",      "flex": "fixed"}],
+     "rest_day": [
+       {"slot": "wake",   "start": "08:30", "end": "09:00", "duration_min": 30, "category": "wake", "flex": "fixed"},
+       {"slot": "...rest of the user's weekend rhythm, same segment shape...", "start": "", "end": "", "duration_min": 0, "category": "rest", "flex": "flex"}]},
+   "variation_rules": {
+     "priority_order": ["events_and_nonnegotiables", "meals_and_fitness", "work"],
+     "work_is_flex": true,
+     "keep_meal_count": true,
+     "min_wake_to_work_gap_min": 30,
+     "non_gym_fitness": {"ask_duration_including_buffer": true, "shift_meals_to_fit": true},
+     "late_wake": {"shift_timeline": true},
+     "skip_fitness_when": "Suggest (never silently drop) skipping today's fitness only when meals are running late AND the last few days have already been active — judge both in context."},
    "anti_patterns": ["..."],
    "personal_anchors": {"relationships": ["..."],
      "creative_pursuits": ["..."], "health_habits": ["..."]},
@@ -340,6 +388,9 @@ if [[ -z "$PROFILE_FILE" ]]; then
     echo "Daily planning starts once the profile is committed."
     exit 0
   fi
+  # NOTE: the typical_day + variation_rules JSON below must stay identical with
+  # the other build block (PLAN_MY_DAY_REBUILD Part A, ~the rebuild heredoc) —
+  # there are exactly two copies, by the self-contained-heredoc convention.
   cat <<SETUP
 PLAN_MY_DAY_SETUP_PROFILE
 store: $STORE
@@ -386,8 +437,37 @@ Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
     goals-library card — id, name, shortcut, category (health|creative|
       relationships|financial|personal), one-line summary
 
-  Daily time anchors — usual wake time, workout time, lunch time, dinner time,
-    walk (if any), bed target.
+  Typical day breakup (×2 — workday + rest day). This is the heart of the
+  schedule. Ask: "Walk me through an average WORKDAY from wake to bed — every
+  activity with its time: wake/prep, workout, each meal, your work blocks, the
+  walk, wind-down, bed. I'll be GENEROUS with each block so real days leave
+  slack to do EXTRA, never a deficit." Capture each segment as
+  {slot, start, end, duration_min, category, flex}:
+    - category ∈ wake|fitness|meal|work|movement|rest|bed
+    - flex ∈ fixed (meals/wake/bed) | flex (work, walk, wind-down) | skippable
+      (fitness) — this encodes what the planner may shrink vs protect.
+  PAD each duration generously — the template is a set of CEILINGS the planner
+  may compress, never expand. Read the padded timeline back and confirm.
+  Then repeat for a typical REST / weekend day (same segment shape, their
+  weekend rhythm). Ask which weekdays are rest days → typical_day.rest_days
+  (e.g. ["sat","sun"]). Set typical_day.padded: true.
+  DERIVE daily_anchors from the workday segments (no separate question):
+  wake_time←wake.start, workout_time←fitness.start, lunch_time/dinner_time←
+  the meal slots, walk_time←movement.start, bed_target←bed.start.
+
+  Variation preferences (ask once, plainly):
+    - Non-gym fitness days (football, Apple Fitness, a class): "On those days
+      give me the activity's duration INCLUDING travel/buffer so I can shift
+      meals around it." → variation_rules.non_gym_fitness.
+    - Late wake-ups: "If you wake up late I'll shift the whole timeline later,
+      but always keep ≥30 min between waking and your first work block." →
+      variation_rules.late_wake + min_wake_to_work_gap_min.
+    - State the invariants: "Across any variation I keep your meal COUNT the
+      same and protect meals + fitness; WORK is what I shrink first. The one
+      exception: I may *suggest* skipping fitness if meals run late AND you've
+      already been very active the last few days." → keep_meal_count,
+      work_is_flex, skip_fitness_when, priority_order
+      (events_and_nonnegotiables > meals_and_fitness > work).
 
   Anti-patterns — behaviours that sabotage you (doomscrolling, late nights…).
 
@@ -412,6 +492,32 @@ committed: true), a heading, and a fenced json block:
       "context": "...", "status": "active"}],
    "daily_anchors": {"wake_time": "", "workout_time": "", "lunch_time": "",
      "dinner_time": "", "walk_time": null, "bed_target": ""},
+   "typical_day": {
+     "padded": true,
+     "note": "Generous baseline — each block padded so real days leave slack, never a deficit. The planner may COMPRESS these segments but should never need to expand them.",
+     "rest_days": ["sat", "sun"],
+     "workday": [
+       {"slot": "wake",      "start": "07:00", "end": "07:30", "duration_min": 30,  "category": "wake",     "flex": "fixed"},
+       {"slot": "workout",   "start": "08:00", "end": "09:15", "duration_min": 75,  "category": "fitness",  "flex": "skippable"},
+       {"slot": "breakfast", "start": "09:15", "end": "09:45", "duration_min": 30,  "category": "meal",     "flex": "fixed"},
+       {"slot": "work_am",   "start": "10:00", "end": "13:00", "duration_min": 180, "category": "work",     "flex": "flex"},
+       {"slot": "lunch",     "start": "13:00", "end": "13:45", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+       {"slot": "work_pm",   "start": "14:00", "end": "18:00", "duration_min": 240, "category": "work",     "flex": "flex"},
+       {"slot": "walk",      "start": "18:30", "end": "19:00", "duration_min": 30,  "category": "movement", "flex": "flex"},
+       {"slot": "dinner",    "start": "19:30", "end": "20:15", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+       {"slot": "wind_down", "start": "22:30", "end": "23:00", "duration_min": 30,  "category": "rest",     "flex": "flex"},
+       {"slot": "bed",       "start": "23:00", "end": "23:00", "duration_min": 0,   "category": "bed",      "flex": "fixed"}],
+     "rest_day": [
+       {"slot": "wake",   "start": "08:30", "end": "09:00", "duration_min": 30, "category": "wake", "flex": "fixed"},
+       {"slot": "...rest of the user's weekend rhythm, same segment shape...", "start": "", "end": "", "duration_min": 0, "category": "rest", "flex": "flex"}]},
+   "variation_rules": {
+     "priority_order": ["events_and_nonnegotiables", "meals_and_fitness", "work"],
+     "work_is_flex": true,
+     "keep_meal_count": true,
+     "min_wake_to_work_gap_min": 30,
+     "non_gym_fitness": {"ask_duration_including_buffer": true, "shift_meals_to_fit": true},
+     "late_wake": {"shift_timeline": true},
+     "skip_fitness_when": "Suggest (never silently drop) skipping today's fitness only when meals are running late AND the last few days have already been active — judge both in context."},
    "anti_patterns": ["..."],
    "personal_anchors": {"relationships": ["..."], "creative_pursuits": ["..."],
      "health_habits": ["..."]},
@@ -903,6 +1009,62 @@ PYEOF
 )"
 [[ -n "${TODAY_FITNESS_SCHEDULE//[[:space:]]/}" ]] || TODAY_FITNESS_SCHEDULE="(nothing scheduled today)"
 
+# Recent fitness ACTIVITY (last ~4 days) — context for the skip-fitness judgment
+# in Step 2b.5 ("have the last few days already been active?"). A compact
+# session count + activity names from the dated fitness files. Run via a temp
+# file (heredoc OUTSIDE $()) on purpose — this script sits past macOS bash 3.2's
+# stacked-command-substitution-heredoc threshold (see the CARRY_FORWARD note
+# below), so a new `"$(python3 - <<'EOF' … )"` block here would break bash -n.
+_RF_PY="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/pbrain-recentfit.$$.py")"
+cat > "$_RF_PY" <<'PYEOF'
+import os, glob, re, sys, datetime
+fit_dir, today = sys.argv[1], sys.argv[2]
+try:
+    t = datetime.date.fromisoformat(today)
+except ValueError:
+    print("(unknown)"); sys.exit(0)
+lines = []
+for f in sorted(glob.glob(os.path.join(fit_dir, "*.md"))):
+    base = os.path.basename(f)[:-3]
+    try:
+        d = datetime.date.fromisoformat(base)
+    except ValueError:
+        continue
+    gap = (t - d).days
+    if gap < 1 or gap > 4:   # last ~4 days, excluding today
+        continue
+    try:
+        with open(f) as fh:
+            text = fh.read()
+    except Exception:
+        continue
+    # Activity name: the first H1, else the `activity:`/`type:` frontmatter.
+    name = None
+    hm = re.search(r"^#\s+(.+?)\s*$", text, re.MULTILINE)
+    if hm:
+        name = hm.group(1).strip()
+    if not name:
+        fm = re.search(r"^(?:activity|type):\s*(.+?)\s*$", text, re.MULTILINE)
+        name = fm.group(1).strip() if fm else "session"
+    lines.append(f"- {base} ({gap}d ago): {name}")
+if not lines:
+    print("(no fitness logged in the last 4 days)"); sys.exit(0)
+print(f"{len(lines)} session(s) in the last 4 days:")
+print("\n".join(lines))
+PYEOF
+RECENT_FITNESS_ACTIVITY="$(python3 "$_RF_PY" "$FITNESS_DIR" "$TODAY" 2>/dev/null || true)"
+rm -f "$_RF_PY"
+[[ -n "${RECENT_FITNESS_ACTIVITY//[[:space:]]/}" ]] || RECENT_FITNESS_ACTIVITY="(no fitness logged in the last 4 days)"
+
+# Whether the committed plans profile carries a typical_day template — drives
+# Step 2b.5's graceful degradation (fall back to from-scratch planning + a soft
+# one-time nudge when absent). Grep-based to add no extra heredoc.
+if printf '%s' "$PROFILE_JSON" | grep -q '"workday"'; then
+  TYPICAL_DAY_PRESENT=yes
+else
+  TYPICAL_DAY_PRESENT=no
+fi
+
 RECENT_PLANS="$(python3 - "$PLAN_DIR" <<'PYEOF'
 import os, glob, sys
 d = sys.argv[1]
@@ -1178,6 +1340,7 @@ fitness_sleep: $FITNESS_SLEEP
 diet_meal_times: $DIET_MEAL_TIMES
 diet_today_exists: $DIET_TODAY_EXISTS
 fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
+typical_day_present: $TYPICAL_DAY_PRESENT
 
 === PLANS PROFILE ===
 $PROFILE_JSON
@@ -1196,6 +1359,9 @@ $MONTHLY_GOALS_CONTENT
 
 === TODAY'S FITNESS JOURNAL ===
 $FITNESS_TODAY
+
+=== RECENT FITNESS ACTIVITY (last ~4 days — context for the skip-fitness judgment) ===
+$RECENT_FITNESS_ACTIVITY
 
 === TODAY'S DAILY JOURNAL ===
 $DAILY_TODAY
@@ -1263,6 +1429,12 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
     message as fixed points. Note ALLDAY items as context; mention FREQUENT
     pings once, briefly. If "(none)", say nothing. They feed Step 3 as
     non-negotiable rows — do NOT ask the user to restate them.
+  - NON-NEGOTIABLES — right after surfacing the calendar, ask ONCE: "Anything
+    ELSE today that's non-negotiable — a fixed commitment, hard deadline, or
+    something that can't move?" Today's calendar items + this answer together
+    are the day's FIXED points: they come FIRST and drive preponing/postponing
+    the routine (workout, work, meals shift around them). Feed both into Step
+    2b.5 and Step 3 rule (a). If the user names nothing, move on — don't press.
   - HABITS — read the HABITS block + \`habits_setup_needed\` above:
       - If \`habits_setup_needed\` == yes: mention ONCE, don't block — "You
         haven't set up habit tracking yet — /habits lets you pick a few habits
@@ -1316,17 +1488,57 @@ Step 2 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     NOT interrogate them range by range — you place things, they correct.
     Fold a light energy read into this turn ("and how's the energy — rough
     number out of 10?").
+  2b.5 — TODAY'S SHAPE (skeleton + variation detection). Read
+    \`typical_day_present\` above.
+    • If \`no\`: there is NO typical-day template yet — SKIP this step's
+      skeleton work and plan today from scratch as before (Step 2c onward).
+      ONCE, non-blocking, you may add: "Want to add a typical-day template?
+      It makes daily planning sharper — run /plan-my-day profile new
+      plans-profile." Do not block; do not repeat.
+    • If \`yes\`: the plans profile carries typical_day (padded workday +
+      rest_day segment arrays) + variation_rules. Build today's skeleton:
+      1. Pick \`workday\` vs \`rest_day\`: compare today (\`day_of_week\`)
+         against typical_day.rest_days. Confirm in one line ("Treating today as
+         a workday — yes?"), overridable for a one-off day off. Lay that
+         template as today's baseline, wake→bed. These segments are PADDED
+         CEILINGS you may COMPRESS, never expand.
+      2. ANCHOR today's non-negotiables FIRST (calendar events + the Step 0
+         ask). Prepone/postpone the \`flex\`/\`skippable\` segments around them;
+         keep \`fixed\` (meal/wake/bed) segments within their normal diet/
+         profile variance (15–30 min).
+      3. DETECT + APPLY variations:
+         - Non-gym fitness day (\`fitness_today_schedule\` is non-gym — e.g.
+           football, Apple Fitness, a class): ask its duration INCLUDING
+           travel/buffer, then shift the nearby meal slots to fit — meal COUNT
+           unchanged (variation_rules.non_gym_fitness).
+         - Late wake-up (today's wake from 2a is later than the template's wake
+           slot): shift the timeline later, ENFORCING ≥30 min between wake and
+           the first work block (variation_rules.min_wake_to_work_gap_min).
+         - Invariants every day: keep the meal COUNT (keep_meal_count); absorb
+           time pressure by SHRINKING work blocks (work_is_flex); protect meals
+           + fitness slots.
+         - SKIP-FITNESS (conditional, a judgment call — never silent): ONLY if
+           meals are running late AND the RECENT FITNESS ACTIVITY block shows
+           the last few days were already active, *suggest* skipping today's
+           fitness as a question ("Meals are running late and you've trained
+           hard the last few days — want to skip today's workout?"). Never drop
+           it without the user's yes.
+      4. THEN propose your reshaped day vs the usual baseline for the user to
+         accept or change: "Here's how I'd reshape today vs your usual — workout
+         moved to X for the 3pm call, lunch nudged to Y. Good, or change it?"
+      Carry this skeleton into 2c (it defines the fixed/flex gaps work fills).
   2c — FOCUS HOURS. Ask: "How many focused hours are you planning from now?"
     Then COMPUTE the block layout and SHOW it before going further:
       - blocks of working_style.session_length_min, separated by
         working_style.break_min breaks (rotate break_activities; never the
         same one back-to-back; respect anti_patterns),
-      - laid around today's FIXED anchors: calendar events (zero variance),
-        the fitness session (\`fitness_today_schedule\` or the user's stated
-        time), meal times (\`diet_meal_times\`, shifted around the workout per
-        the diet profile), habit reminder times (🔔 in the rollup),
-        working_style.focus_hours preferred, nothing past
-        working_style.last_block_end,
+      - laid around today's FIXED anchors: today's typical_day skeleton from
+        2b.5 (when present — its fixed/flex segments are where work fits),
+        calendar events (zero variance), the fitness session
+        (\`fitness_today_schedule\` or the user's stated time), meal times
+        (\`diet_meal_times\`, shifted around the workout per the diet profile),
+        habit reminder times (🔔 in the rollup), working_style.focus_hours
+        preferred, nothing past working_style.last_block_end,
       - capped by the user's stated focus hours AND
         working_style.work_hours_per_day.
     Present: "That gives you N blocks: {compact list with times}. Want to add
@@ -1393,14 +1605,21 @@ Step 3 — Generate the full day plan draft in memory (do NOT write to disk yet)
   leave. Build the life-anchor skeleton first, then place work blocks around it.
   a. CALENDAR EVENTS + explicit user-stated times are absolute — never shift
      them. Calendar items sit at their exact window. Two overlapping calendar
-     items → keep both, flag the conflict. (Locked-in WORK commitments are also
-     fixed in time, but they are work in the gaps, not life anchors.)
+     items → keep both, flag the conflict. Today's explicit NON-NEGOTIABLES
+     from Step 0 are equally absolute — the routine prepones/postpones the rest
+     of the day around them. (Locked-in WORK commitments are also fixed in
+     time, but they are work in the gaps, not life anchors.)
   b. The day's LIFE ANCHORS — fitness session, meal slots (at the diet-profile
      times, workout-shifted), walk, wind-down, bed, habit reminder times — are
      the skeleton, scheduled around (a). Work blocks are placed AROUND these,
      never among them. Maximum 15–30 min variance from a profile/diet anchor
      time; prefer the TIMING SIGNAL average when a needed anchor has no profile
      time.
+     SKELETON & FLEX (from 2b.5, when a typical_day template exists): the
+     skeleton is typical_day as reshaped in 2b.5 — keep the meal COUNT, protect
+     meal + fitness slots, and absorb time pressure by SHRINKING work blocks
+     (work is the flex variable), never by dropping a meal. Fitness may be
+     dropped ONLY via the explicit 2b.5 skip suggestion the user accepted.
   c. The table ALWAYS starts at the user's actual wake time today (from 2a) —
      NEVER at current_time. Everything from 2b is backfilled as ✓ rows at its
      real time. The plan spans wake → bed.

@@ -39,6 +39,8 @@ set -euo pipefail
 #   habits.sh mark --name "X" [--date YYYY-MM-DD] [--count N] [--amount N] [--note "..."]
 #                  [--good N] [--bad N] [--slips N]              (slip_ladder / meal_ratio)
 #                  [--actual-time HH:MM] [--actual-hours N.N]    (deviation: sleep-well)
+#                  [--items JSON] [--session JSON]               (weighted_completion / session_volume)
+#                  [--focus JSON]                                (focus_ratio: deep-work)
 #                  (scored habits: pass raw inputs, the score is computed from the
 #                  habit's profile rule — see `score`)
 #   habits.sh score --name "X" (--good N --bad N | --slips N | --actual-time HH:MM --actual-hours N)
@@ -124,10 +126,15 @@ _habits_seed_defaults() {
   fitlibp="$(pbrain_profile_latest "$fit_store" fitness-library)"
   goalsp="$(pbrain_profile_latest "$plan_store" plans-profile)"
   act_store="$fit_store/activities"
+  # "Deep work" (focus_ratio) needs the laptop tracker's DB (work-block activity)
+  # AND a committed plans profile (the source of the work-block windows).
+  local tracker_db tracker_present
+  tracker_db="${PBRAIN_TRACKER_DB_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pbrain/tracker.db}"
+  [[ -f "$tracker_db" ]] && tracker_present=1 || tracker_present=0
   [[ -n "$dietp$fitp$goalsp$fitlibp" ]] || return 0
-  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$dietp" "$fitp" "$TODAY" "$goalsp" "$fitlibp" "$act_store" <<'PYEOF' 2>/dev/null || true
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$dietp" "$fitp" "$TODAY" "$goalsp" "$fitlibp" "$act_store" "$tracker_present" <<'PYEOF' 2>/dev/null || true
 import json, re, sys
-libdir, path, dietp, fitp, today, goalsp, fitlibp, act_store = sys.argv[1:9]
+libdir, path, dietp, fitp, today, goalsp, fitlibp, act_store, tracker_present = sys.argv[1:10]
 sys.path.insert(0, libdir)
 from profile_lock import ProfileLock
 
@@ -273,6 +280,46 @@ with ProfileLock(path) as lock:
                         "volume_cap": 1.0},
         })
         added.append("Train (scored from your fitness sessions)")
+
+    if tracker_present == "1" and goalsp and "deep-work" not in ids:
+        # Schedule over the plan's WORKDAYS (all weekdays minus rest_days from the
+        # plans profile's typical_day) so weekends/rest days aren't counted as
+        # missed — there are no work blocks to score then. Falls back to Mon–Fri.
+        try:
+            from habit_schedule import norm_days as _norm_days
+        except Exception:
+            _norm_days = None
+        ALL = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        gp = read_json_block(goalsp) or {}
+        td = gp.get("typical_day") or {}
+        rest = td.get("rest_days") or []
+        rest_norm = _norm_days(rest) if _norm_days else sorted(
+            {str(d).strip().lower()[:3] for d in rest if str(d).strip()})
+        work_days = [d for d in ALL if d not in set(rest_norm)]
+        if not work_days or len(work_days) == 7:
+            # no rest days recorded (or all 7 are rest) -> default to Mon–Fri
+            work_days = ["mon", "tue", "wed", "thu", "fri"] if not rest_norm else work_days
+        if len(work_days) == 7:
+            schedule = {"type": "daily"}
+            schedule_type = "daily"
+        else:
+            schedule = {"type": "weekdays", "days": work_days}
+            schedule_type = "weekly"
+        habits.append({
+            "id": "deep-work", "name": "Deep work", "direction": "at_least",
+            "schedule": schedule, "schedule_type": schedule_type,
+            "target_count": None, "priority": "high",
+            "unit": "", "measure_target": 75, "archived": False,
+            "notes": ("Default scored habit (from laptop tracking + the plans "
+                      "profile). Auto-scored at /end-of-day: maps the day's laptop "
+                      "activity onto the plan's work blocks; score = work / (work + "
+                      "distraction) of active time (AFK is neutral, not penalized). "
+                      "Marked with --focus JSON of per-category minutes; target 75+."),
+            "scoring": {"type": "focus_ratio",
+                        "work_categories": ["work"],
+                        "distraction_categories": ["social", "entertainment"]},
+        })
+        added.append("Deep work (scored from laptop activity in your work blocks)")
 
     if added:
         new_json = json.dumps(data, indent=2)
@@ -903,7 +950,7 @@ if [[ "$SUB" == "mark" ]]; then
   shift || true
   M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
   M_GOOD=""; M_BAD=""; M_SLIPS=""; M_ATIME=""; M_AHOURS=""
-  M_ITEMS=""; M_SESSION=""
+  M_ITEMS=""; M_SESSION=""; M_FOCUS=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -917,6 +964,7 @@ if [[ "$SUB" == "mark" ]]; then
       --actual-hours) M_AHOURS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --items)   M_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --session) M_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --focus)   M_FOCUS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
@@ -930,7 +978,7 @@ if [[ "$SUB" == "mark" ]]; then
     exit 0
   fi
   pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT" \
-    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION"
+    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION" "$M_FOCUS"
   exit 0
 fi
 
@@ -943,7 +991,7 @@ fi
 if [[ "$SUB" == "score" ]]; then
   shift || true
   SC_NAME=""; SC_GOOD=""; SC_BAD=""; SC_SLIPS=""; SC_ATIME=""; SC_AHOURS=""
-  SC_ITEMS=""; SC_SESSION=""
+  SC_ITEMS=""; SC_SESSION=""; SC_FOCUS=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) SC_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -954,6 +1002,7 @@ if [[ "$SUB" == "score" ]]; then
       --actual-hours) SC_AHOURS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --items)   SC_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --session) SC_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --focus)   SC_FOCUS="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -965,7 +1014,7 @@ if [[ "$SUB" == "score" ]]; then
     echo "no habits profile" >&2
     exit 1
   fi
-  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS" "$SC_ATIME" "$SC_AHOURS" "$SC_ITEMS" "$SC_SESSION"
+  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS" "$SC_ATIME" "$SC_AHOURS" "$SC_ITEMS" "$SC_SESSION" "$SC_FOCUS"
   exit 0
 fi
 

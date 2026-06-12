@@ -8,7 +8,7 @@ All base config lives in the **versioned profile store** under your planning dir
 
 ```
 $VAULT_DIR/life/daily-planning/.profile/
-├── plans-profile.vN.md   # THE lens: current_focus list + working_style + planning_guidelines + anchors
+├── plans-profile.vN.md   # THE lens: current_focus list + working_style + planning_guidelines + anchors + typical_day + variation_rules
 ├── work-library.vN.md    # short reference cards for every work project (living doc)
 └── goals-library.vN.md   # short reference cards for non-work goals (living doc)
 ```
@@ -19,6 +19,8 @@ The **plans profile is the live, detailed home** — `current_focus` lists every
 
 `planning_guidelines` is a prose contract — a short paragraph in your own words describing how you want your day shaped. Written once, refined over time.
 
+`typical_day` is a **generously-padded baseline** of what your normal day looks like, captured as two wake→bed timelines — a `workday` and a `rest_day` — plus the `rest_days` weekdays that pick between them. Each segment carries a `category` (wake/fitness/meal/work/movement/rest/bed) and a `flex` level (`fixed` for meals/wake/bed, `flex` for work, `skippable` for fitness). Padding it generously means real days leave **slack to do extra, never a deficit** — the planner treats the segments as ceilings it may compress, never expand, and derives the flat `daily_anchors` from the workday. `variation_rules` then says how to adapt when a day deviates: non-negotiables come first, the meal **count** stays the same, **work is the flex variable** (meals + fitness protected), late wake-ups shift the timeline while keeping ≥30 min before the first work block, non-gym fitness days ask the activity's duration including buffer and shift meals to fit, and the planner only *suggests* skipping fitness when meals run late AND you've already been active recently.
+
 Each library card has a **shortcut** (2–3 letter alias): you can reference a project as "pbd" instead of the full name when chatting mid-session.
 
 ## First-run setup
@@ -28,14 +30,15 @@ A one-sitting interview. You're asked about:
 - **Current focus** — what are you actually working on or building right now? Each item gets: track (professional/personal), horizon (short/long), priority, deadline, and "success looks like" + brief context.
 - **Working style** — focus hours, total work hours/day, session length, break preference + rotation, last block end, energy peak, day-wreckers.
 - **Planning guidelines** — how should I shape your day? (a prose contract you write, e.g. "front-load hard work, keep afternoons light, protect 90-minute deep work sessions")
-- **Daily anchors** — wake/workout/lunch/dinner/walk/bed.
+- **Typical day template** — walk through an average workday and an average rest/weekend day, wake → bed, every block generously padded so real days leave slack to do *extra*, never a deficit. The flat **daily anchors** (wake/workout/lunch/dinner/walk/bed) are derived from the workday timeline, so there's no separate anchors question.
+- **Variation rules** — captured once: how the planner adapts when a day deviates (non-negotiables first, work is the flex variable, meals + fitness protected, late-wake 30-min gap, non-gym fitness duration + buffer → meal shift, the in-context skip-fitness judgment).
 - **Anti-patterns** and **personal anchors**.
 
 After setup, library cards are registered for each focus item — suggested at creation, accepted or skipped by you.
 
 ## Migrating from older pbrain
 
-If you had the old `Goals Profile.md` (or `plan-profile.json`), the first run after upgrading walks a **one-sitting rebuild**: each old goal confirmed/updated/dropped, classified by track + horizon, the new working-style questions asked, planning guidelines written, libraries seeded. Old files are parked in `$VAULT_DIR/.pbrain/backup/`. One-time; recorded in the migration ledger.
+If you had the old `Goals Profile.md` (or `plan-profile.json`), the first run after upgrading walks a **one-sitting rebuild**: each old goal confirmed/updated/dropped, classified by track + horizon, the new working-style questions asked, planning guidelines written, the **typical-day template + variation rules** captured (fleshing your flat anchors into full padded workday + rest-day timelines), libraries seeded. Old files are parked in `$VAULT_DIR/.pbrain/backup/`. One-time; recorded in the migration ledger.
 
 ## Daily flow
 
@@ -45,9 +48,10 @@ After setup, every run:
 2. Surfaces your `current_focus` as the anchor for today.
 3. **Wake time** — confirmed from the fitness entry if recorded; otherwise "what time did you wake up?"
 4. **Backfill** — "what have you done since waking?" slotted gap-free, no overlaps.
-5. **Focus hours → block layout** — "how many focused hours from now?" The planner computes work blocks around your **life anchors** (calendar events, the fitness session, meal slots, the walk/wind-down/bed, habit reminder times) and shows the layout before proposing what goes in the blocks. Anchors are life structure only — work is never an anchor; it fills the gaps the anchors leave.
-6. **Brainstorm → proposed slate** — assuming you may not know what to do today, the planner *proposes* a candidate task set sized to your blocks (biggest-rock first) drawn from this week's weekly goals (ordered priority → difficulty) + carry-forward, falling back to monthly goals → the `current_focus` list. You react — keep all, swap, drop, or add your own — rather than starting from a blank "what do you want to work on?".
-7. Confirm the gap-free **Today at a glance** table, then it writes the plan.
+5. **Today's shape** — when a `typical_day` template exists, the planner picks `workday` vs `rest_day` (from your `rest_days`), lays it as today's padded baseline, anchors today's non-negotiables (calendar + an explicit "anything that can't move?" ask) **first**, then applies `variation_rules` — preponing/postponing around the fixed points, detecting a non-gym fitness day or a late wake-up, keeping the meal count, and proposing its own reshaped day for you to accept or tweak. (No template yet → it plans from scratch and offers to add one.)
+6. **Focus hours → block layout** — "how many focused hours from now?" The planner computes work blocks around your **life anchors** (calendar events, the fitness session, meal slots, the walk/wind-down/bed, habit reminder times) and shows the layout before proposing what goes in the blocks. Anchors are life structure only — work is never an anchor; it fills the gaps the anchors leave.
+7. **Brainstorm → proposed slate** — assuming you may not know what to do today, the planner *proposes* a candidate task set sized to your blocks (biggest-rock first) drawn from this week's weekly goals (ordered priority → difficulty) + carry-forward, falling back to monthly goals → the `current_focus` list. You react — keep all, swap, drop, or add your own — rather than starting from a blank "what do you want to work on?".
+8. Confirm the gap-free **Today at a glance** table, then it writes the plan.
 
 **AUTO-LIBRARY**: if you mention a project or goal not already in a library card, the planner offers to register a shortcut card (name + shortcut + context) so future sessions can reference it by name or shortcut.
 

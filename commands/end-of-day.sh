@@ -142,6 +142,7 @@ fitness_file: $FITNESS_FILE (exists: $(exists "$FITNESS_FILE"))
 diet_file: $DIET_FILE (exists: $(exists "$DIET_FILE"))
 habits_setup_needed: $HABITS_SETUP_NEEDED
 laptop_report_file: ${LAPTOP_REPORT_FILE:-(none)}
+laptop_cmd: $LAPTOP_CMD (tracker_db: $([[ -n "${PBRAIN_TRACKER_DB_FILE:-}" && -f "${PBRAIN_TRACKER_DB_FILE:-}" ]] && echo present || echo absent))
 
 --- PLAN ---
 $(read_or_missing "$PLAN_FILE")
@@ -338,6 +339,27 @@ without re-asking. Use the Edit tool on each file.
         night's sleep, mark it with --actual-time <sleep_bed> --actual-hours
         <sleep_hours> (this scores LAST night — the same data /fitness-journal
         uses, distinct from Q2's tonight-intention). No sleep data → skip.
+      • "Deep work" (focus_ratio) — scores how focused the day's WORK BLOCKS
+        actually were (work time vs distraction time on the laptop), NOT whether
+        the tasks got done (that's "Work the plan"). Run this ONLY IF \`laptop_cmd\`
+        reports tracker_db: present AND "Deep work" is a tracked scored habit:
+        1. From "## Today at a glance", collect the time ranges of the day's WORK
+           blocks ONLY — skip every LIFE anchor (meals, fitness, walk, wind-down,
+           calendar events). If there are no work blocks, skip the rest.
+        2. Run: bash "$LAPTOP_CMD" focus-breakdown --date $TODAY --windows "HH:MM-HH:MM,HH:MM-HH:MM"
+           (comma-joined work windows). Read the \`FOCUS_BREAKDOWN {…}\` JSON line.
+        3. If its "unknown" list is non-empty, propose a category for each key in
+           ONE compact message (e.g. "github.com→work, x.com→social,
+           youtube.com→entertainment, Notion→work" — categories are work / social
+           / entertainment / neutral). Ask the user to confirm or correct in one
+           reply, then persist with:
+             bash "$LAPTOP_CMD" categorize --set "key=cat,key=cat,…"
+           and RE-RUN focus-breakdown so every key is now classified.
+        4. Mark with the per-category minutes from the (final) breakdown:
+             bash "$HABITS_CMD" mark --name "Deep work" --date $TODAY \\
+               --focus '{"work":N,"social":N,"entertainment":N,"neutral":N}'
+           The evaluator computes work / (work + distraction); AFK is neutral.
+           If work+distraction is 0 (no classifiable active time), skip the mark.
       THEN consolidate:
         bash "$HABITS_CMD" consolidate --date $TODAY
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
@@ -383,7 +405,10 @@ without re-asking. Use the Edit tool on each file.
     laptop-usage report was already rendered to that file. Read it and weave ONE
     grounded line into the close (e.g. "5h 12m active, mostly Chrome — 2h on
     github.com"). Don't paste the whole table. If it's "(none)", say nothing
-    about laptop usage (the tracker isn't set up).
+    about laptop usage (the tracker isn't set up). If you computed a "Deep work"
+    focus score in 4e, fold it into this same line with the breakdown, e.g.
+    "Focus 78% across 3h of work blocks — 2h10 work, 35m social (x.com), 15m
+    entertainment; 20m AFK." (one line, not a second laptop section).
 
 4i) BOUNDARY REVIEW NUDGE — a once-per-boundary pointer, non-blocking:
     - If \`week_end\` == yes: add ONE line — "That closes the week. /weekly-review

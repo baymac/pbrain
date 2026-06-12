@@ -20,6 +20,7 @@ The script acts directly and prints the result for every subcommand — relay it
 - `report [<date>]` — renders `life/laptop-tracking/<date>.md` (default today) from the DB and prints the path. This is the on-demand finalize; `/end-of-day` also does it automatically.
 - `stop` (or `disable`) — stops and uninstalls the daemon.
 - `decline` — used by the `/plan-my-day` nudge: run it when the user says they don't want laptop tracking, so the nudge never fires again.
+- `focus-breakdown --date D --windows "HH:MM-HH:MM,…"` / `categorize --set "key=cat,…" | --list` — internal plumbing for the **Deep work** focus score (normally called by `/end-of-day`, not by hand). `focus-breakdown` reports active minutes per category over the given work-block windows + AFK + any uncategorized keys; `categorize` edits the reusable domain/app → `work|social|entertainment|neutral` map at `life/laptop-tracking/categories.md`.
 
 If the output contains `UPGRADE_AVAILABLE <local> <remote>`, mention a newer pbrain is out (suggest `/plugin update pbrain`, link `https://github.com/baymac/pbrain/blob/main/CHANGELOG.md`), then continue. Apply any `USER PREFERENCES` block; act on the `SELF-IMPROVE CHECK` only per its own rules.
 

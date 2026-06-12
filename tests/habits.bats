@@ -1780,3 +1780,190 @@ assert train.get('schedule', {}).get('type') == 'daily', repr(train.get('schedul
   [ "$(grep -c '"id": "work-the-plan"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
   [ "$(grep -c '"id": "train"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
 }
+
+# ── focus_ratio (the "Deep work" scored habit) ───────────────────────────────
+
+_write_deepwork_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+date: 2026-06-03
+tags: []
+---
+
+# Habits profile
+
+```json
+{
+  "created": "2026-06-03",
+  "habits": [
+    { "id": "deep-work", "name": "Deep work", "schedule_type": "daily",
+      "direction": "at_least", "target_count": null, "priority": "high",
+      "archived": false, "unit": "", "measure_target": 75,
+      "scoring": { "type": "focus_ratio",
+        "work_categories": ["work"],
+        "distraction_categories": ["social","entertainment"] } }
+  ]
+}
+```
+PEOF
+}
+
+@test "score focus_ratio: work-only -> 100" {
+  _write_deepwork_profile
+  run HABITS score --name "Deep work" --focus '{"work":120}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score focus_ratio: all-distraction -> 0" {
+  _write_deepwork_profile
+  run HABITS score --name "Deep work" --focus '{"social":30,"entertainment":10}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "score focus_ratio: mixed 90 work / 30 distraction -> 75 (neutral+afk excluded)" {
+  _write_deepwork_profile
+  run HABITS score --name "Deep work" --focus '{"work":90,"social":20,"entertainment":10,"neutral":40,"afk":15}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "75" ]
+}
+
+@test "score focus_ratio: only neutral/afk (no work or distraction) -> blank (unmarked)" {
+  _write_deepwork_profile
+  run HABITS score --name "Deep work" --focus '{"neutral":50,"afk":30}'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "score focus_ratio: category membership is configurable in the spec" {
+  # Re-point the spec so 'entertainment' counts as WORK and 'social' is the only distraction.
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+---
+```json
+{ "habits": [
+  { "id": "deep-work", "name": "Deep work", "schedule_type": "daily",
+    "direction": "at_least", "target_count": null, "priority": "high",
+    "archived": false, "unit": "", "measure_target": 75,
+    "scoring": { "type": "focus_ratio",
+      "work_categories": ["work","entertainment"],
+      "distraction_categories": ["social"] } } ] }
+```
+PEOF
+  # work = 60 + 30 = 90; distraction = social 30 -> 90/120 = 75
+  run HABITS score --name "Deep work" --focus '{"work":60,"entertainment":30,"social":30}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "75" ]
+}
+
+@test "mark focus_ratio: the computed score lands in habit_events.amount" {
+  _write_deepwork_profile
+  run HABITS mark --name "Deep work" --date 2026-06-03 --focus '{"work":90,"social":20,"entertainment":10}'
+  [ "$status" -eq 0 ]
+  amt="$(python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+row = con.execute(\"SELECT amount FROM habit_events WHERE habit_id='deep-work' AND occurred_on='2026-06-03'\").fetchone()
+print(row[0] if row else 'none')
+" "$PBRAIN_DB_FILE")"
+  [ "$amt" = "75.0" ]
+}
+
+# ── default-habit seeding: deep-work (needs tracker.db AND a plans profile) ───
+
+_plant_goals_profile_rest() {  # $1 = JSON array of rest-day tokens, e.g. '["Sat","Sun"]'
+  mkdir -p "$PBRAIN_VAULT/life/daily-planning/.profile"
+  cat > "$PBRAIN_VAULT/life/daily-planning/.profile/plans-profile.v1.md" <<EOF
+---
+type: plans-profile
+version: 1
+committed: true
+---
+# Plans profile
+\`\`\`json
+{"created": "2026-06-03",
+ "typical_day": {"rest_days": $1},
+ "current_focus": []}
+\`\`\`
+EOF
+}
+
+@test "dashboard seeds deep-work when tracker.db AND plans profile exist" {
+  _write_profile
+  _plant_goals_profile
+  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"   # presence is all the seed checks
+  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Added default habit: Deep work"* ]]
+  grep -q '"id": "deep-work"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"type": "focus_ratio"' "$PBRAIN_HABITS_PROFILE_FILE"
+}
+
+@test "deep-work is NOT seeded without a tracker.db" {
+  _write_profile
+  _plant_goals_profile
+  export PBRAIN_TRACKER_DB_FILE="$TMP/nope-tracker.db"   # does not exist
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Added default habit: Deep work"* ]]
+  ! grep -q '"id": "deep-work"' "$PBRAIN_HABITS_PROFILE_FILE"
+}
+
+@test "deep-work is NOT seeded without a committed plans profile" {
+  _write_profile
+  _plant_fitness_library   # a profile exists so seeding runs, but no plans profile
+  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
+  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
+  run HABITS
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Added default habit: Deep work"* ]]
+}
+
+@test "deep-work schedule is the plan's workdays (all days minus rest_days)" {
+  _write_profile
+  _plant_goals_profile_rest '["Sat","Sun"]'
+  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
+  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
+  run HABITS
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json, re
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+dw = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'deep-work')
+sched = dw['schedule']
+assert sched.get('type') == 'weekdays', repr(sched)
+assert sched.get('days') == ['mon','tue','wed','thu','fri'], repr(sched)
+"
+}
+
+@test "deep-work defaults to Mon-Fri when the plan records no rest_days" {
+  _write_profile
+  _plant_goals_profile   # no typical_day / rest_days
+  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
+  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
+  run HABITS
+  [ "$status" -eq 0 ]
+  python3 -c "
+import json, re
+with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
+m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
+dw = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'deep-work')
+assert dw['schedule'].get('days') == ['mon','tue','wed','thu','fri'], repr(dw['schedule'])
+"
+}
+
+@test "deep-work seeding is idempotent" {
+  _write_profile
+  _plant_goals_profile
+  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
+  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
+  HABITS >/dev/null
+  run HABITS
+  [[ "$output" != *"Added default habit: Deep work"* ]]
+  [ "$(grep -c '"id": "deep-work"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
+}

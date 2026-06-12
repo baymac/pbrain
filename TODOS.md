@@ -11,6 +11,8 @@ Sources studied:
 
 ## Bugs / regressions
 
+- [ ] **`/plan-my-day` set-building: blocks should be separated by seconds, not merged into one 60–75 min block** — previously each set in the day plan was clearly separated with individual time slots (e.g. 10:00–10:45, 10:45–11:30). Now sets are collapsed into a single block. Restore per-set time separation. *(reported 2026-06-12)*
+
 - [ ] **`/end-of-day` not nudging to close `/diet-journal`** — end-of-day should prompt the user to wrap up their diet log if it hasn't been closed for the day, but the nudge is missing. *(reported 2026-06-12)*
 
 ---
