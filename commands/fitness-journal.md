@@ -18,6 +18,7 @@ The script emits one of several tokens — follow the INSTRUCTIONS for whichever
 - Generate sessions in the user's exact tracking format (match the format in the activity profile, not a generic template).
 - Never schedule rest when the schedule calls for training, or training when the user signals they need rest.
 - Committed profiles are final — changes go through `profile new` → edit draft → `profile commit`.
+- **Never auto-commit a draft.** After applying any change to a draft, show the user what changed and ask: "Want to lock this in?" (or similar). Only run `profile commit` when the user explicitly says yes / "lock" / "commit" / "save it". If they ask for more edits, keep modifying the same open draft — do NOT mint a new version. If a draft is already open at the start of a session, keep editing it rather than minting a new one.
 
 ## Morning sequence check (do this first)
 

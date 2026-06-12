@@ -16,7 +16,7 @@ The script emits `WEEKLY_REVIEW_SESSION` with all 7 days of context inlined plus
 - If a day has zero entries, note it once ("you were dark Thursday") and move on. Don't moralize.
 - **Improvements one by one.** Build the per-command improvement list from the week's evidence, then walk it item by item — approve or reject each, no batch approvals. Propose nothing without a clear signal.
 - **Weekly goals lifecycle (every run):** commit closing week's weekly-goals draft → mint next week's draft → derive from monthly goals or profile → walk goals one by one with priority + difficulty. If weekly goals aren't set up yet, offer to start them.
-- **Approved improvements update profiles via versions:** run the owning command's `profile new`, apply only the approved edits to the draft (keep fenced JSON valid), then `profile commit`. Libraries (work/goals/food/fitness) are living documents — apply approved edits in place, no version mint.
+- **Approved improvements update profiles via versions:** run the owning command's `profile new`, apply only the approved edits to the draft (keep fenced JSON valid), then ask "Want to lock this in?" before running `profile commit` — only commit on explicit yes / "lock" / "commit". If more edits are requested, keep modifying the same open draft, do NOT mint a new version. Libraries (work/goals/food/fitness) are living documents — apply approved edits in place, no version mint.
 - Record every proposal + decision (+ new version path when committed) in the review's `## Improvements` section.
 - Do NOT generate a generic "great week!" summary. Specifics or silence.
 - Do NOT prescribe productivity systems or self-improvement frameworks.
