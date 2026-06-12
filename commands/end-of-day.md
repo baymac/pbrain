@@ -18,7 +18,7 @@ The script emits `END_OF_DAY_SESSION` with the target day's plan, journal, thoug
 - Propagate diet + fitness actuals silently from the answers; recompute diet totals.
 - **Mark all four scored-habit defaults** from the day's data as the backstop — Work the plan, Train, Eat clean, Sleep well — then consolidate. Idempotent if a command already marked one.
 - Auto-derive a **`### Carry-forward`** from not-done tasks (no question) — `/plan-my-day` reads it next day.
-- Write a lean **`### Executive summary`** (small wins across work/diet/fitness/relationships + logged thoughts), `### Goal progress`, `### Sleep`. No energy curve, no tomorrow-seed prompt.
+- Write a lean `## How it went`: **`### Executive summary`** (small wins across work/diet/fitness/relationships + logged thoughts), **`### Scoreboard`** (engine-computed scored-habit scores read back verbatim via `habits.sh scores`, plus diet macros, fitness volume, and work focus %), `### Goal progress`, `### Sleep`. No energy curve, no tomorrow-seed prompt.
 - On a week/month boundary, add a once pointer to `/weekly-review` or `/monthly-review` — non-blocking, don't run it.
 - Reminders sync runs silently after consolidate; surface one line only if something moved.
 - One closing line. No paragraphs of reflection. Do NOT call the day a "win" or a "loss" — neutral language only. No action items, accountability frameworks, or pep talks.
