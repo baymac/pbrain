@@ -107,6 +107,8 @@ Libraries are living documents — cards are appended and enriched in place; the
 /plan-my-day profile commit [base]         # finalize the open draft
 ```
 
+**Draft commit safety:** after any change to an open profile draft, the planner shows what changed and asks "Want to lock this in?" before committing. Auto-commit is never allowed — you must explicitly confirm (yes / "lock" / "commit" / "save it"). If you ask for more edits, it keeps modifying the same open draft — no new version is minted until you say so.
+
 ## Defaults and overrides
 
 **Default destination:** `$VAULT_DIR/life/daily-planning/YYYY-MM-DD.md`

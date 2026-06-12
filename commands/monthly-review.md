@@ -16,6 +16,7 @@ The script emits `MONTHLY_REVIEW_SESSION` with all the month's weekly reviews in
 - **Monthly goals one by one.** Derive each goal from the plans profile `current_focus`, confirm inclusion + milestone, no batch approvals.
 - **Plans-profile hygiene.** Offer the pass once — archive completed `current_focus` items, update stale context. Never force it.
 - **Improvements one by one.** Month-level patterns only — no noise. Same approve/reject flow as /weekly-review.
+- **Never auto-commit a draft.** After applying any change to a draft profile, show what changed and ask: "Want to lock this in?" Only run `profile commit` on explicit yes / "lock" / "commit" / "save it". More edits → keep modifying the same open draft, do NOT mint a new version. If a draft is already open at session start, continue editing it.
 - Do NOT generate a generic "great month!" summary. Specifics or silence.
 
 ## Morning sequence check (do this first)
