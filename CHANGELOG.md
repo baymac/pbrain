@@ -2,9 +2,9 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.21.1] — 2026-06-13
 
-### Changed — plans profile + shortcut aliases
+### Changed — plans profile + shortcut aliases, draft commit safety
 
 - **`goals-profile` renamed `plans-profile`** across the whole repo. The versioned store file is now `plans-profile.vN.md`; the `PBRAIN_PLAN_PROFILE_FILE` env override still works. All command scripts, tests, docs, and CLAUDE.md updated.
 - **`current_focus` is the heart of the plans profile.** The old `work_goals`/`life_goals` arrays are replaced by a single `current_focus` list — each item carries `id`, `lib` (work|goals), `name`, `track`, `horizon`, `priority`, `deadline`, `success_looks_like`, `context`, and `status`. The libraries become stable **reference cards** (one card per project/goal) rather than the primary home of plan data.
@@ -14,6 +14,7 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 - **AUTO-LIBRARY in `/plan-my-day`.** When the user mentions a project or goal not already in a library card during a session, the planner offers to register a shortcut card (name + shortcut + context) inline.
 - **New `/plan-my-day focus` subcommand** — `focus list|add|archive|restore` manages the `current_focus` list directly, emitting a `PLAN_MY_DAY_FOCUS` context block.
 - **New `/plan-my-day library` subcommand** — `library work|goals show|edit` shows and edits the reference cards, emitting a `PLAN_MY_DAY_LIBRARY` context block.
+- **Draft commit safety in `/plan-my-day`.** After any change to an open profile draft, the planner shows what changed and confirms before running `profile commit`. Auto-commit is never allowed — the user must explicitly say yes, "lock", "commit", or "save it".
 
 ## [0.21.0] — 2026-06-12
 
