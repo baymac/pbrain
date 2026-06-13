@@ -1,5 +1,5 @@
 ---
-description: Weekly synthesis — tight 3–5 bullet read of the last 7 days, 3 reflection questions, writes to life/weekly-tracking/YYYY-Www.md. Commits the closing week's goals, mints next week's weekly-goals draft (deriving from monthly goals or profile, assigning priority+difficulty). Builds a per-command improvement list and walks it one item at a time; approved improvements mint a new committed profile version.
+description: Weekly synthesis — tight 3–5 bullet read of the last 7 days, 3 reflection questions, writes to life/weekly-tracking/YYYY-Www.md. Commits the closing week's goals, mints next week's weekly-goals draft (deriving from monthly goals or profile, assigning priority+difficulty). Builds a per-command improvement list and walks it one item at a time; approved improvements mint a new committed profile version. Step 6 — if Clippings/ has .md files, ends with a guided filing walk (each clipping shown with preview, moved to a chosen vault dir, optionally renamed).
 ---
 Run this with the Bash tool first, then follow the INSTRUCTIONS block in its output:
 

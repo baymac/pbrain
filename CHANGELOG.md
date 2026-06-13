@@ -2,6 +2,18 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.22.0] — 2026-06-13
+
+### Added — habit scores read-back, clippings in weekly review, end-of-day Scoreboard
+
+- **`habits.sh scores [--date YYYY-MM-DD]`** — new subcommand that reads back engine-computed 0–100 scores for all scored habits on a given date. Emits human-readable lines (`- Name · N/100 · type · priority`) and a machine-readable `HABIT_SCORES [...]` JSON trailer for downstream consumption by `/end-of-day`.
+- **`/weekly-review` Step 6 — Clippings integration.** When `$VAULT_DIR/Clippings/` contains `.md` files, the weekly session now ends with a guided filing walk: each clipping is shown with its frontmatter and body preview, you pick or confirm a destination, and the file is moved and renamed inside the vault. Path containment enforced — moves outside `VAULT_DIR` are blocked. Override the destination dirs with `PBRAIN_CLIPPINGS_TARGETS`.
+- **`/end-of-day` Scoreboard.** After marking + consolidate, the close now runs `habits.sh scores` and writes a `### Scoreboard` section into `## How it went`: a table of scored habits with score, priority, and basis (e.g. "4 clean / 1 unclean", "bed 23:40 vs 23:30 · 7.2h"), plus Diet / Fitness / Work summary rows when data exists.
+
+### Fixed
+
+- **`mark` write ordering.** Markdown is now written before the SQLite commit in `pbrain_habit_mark`, maintaining the "markdown is source of truth" contract. Previously a failed file write (disk full, iCloud conflict) would leave the score in the DB but blank in the markdown; the next `consolidate` run would then nullify it.
+
 ## [0.21.1] — 2026-06-13
 
 ### Changed — plans profile + shortcut aliases, draft commit safety

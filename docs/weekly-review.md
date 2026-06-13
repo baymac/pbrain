@@ -43,4 +43,8 @@ You then walk the list **one item at a time** — approve or reject each, no bat
 /weekly-review
 ```
 
+**Clippings walk (Step 6):**
+
+If `$VAULT_DIR/Clippings/` contains `.md` files, the session ends with a guided filing walk — shown as Step 6. For each clipping you see a frontmatter + body preview, pick (or confirm) a destination folder inside the vault, and the file is moved and optionally renamed. Path containment is enforced — moves outside `VAULT_DIR` are blocked. To skip the selection prompt, set `PBRAIN_CLIPPINGS_TARGETS` to a comma-separated list of top-level vault dirs (or `all`).
+
 Pairs well with `/recall` — once a pattern surfaces in a weekly review, run `/recall <theme>` to see how far back it actually goes.

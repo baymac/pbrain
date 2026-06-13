@@ -1967,3 +1967,99 @@ assert dw['schedule'].get('days') == ['mon','tue','wed','thu','fri'], repr(dw['s
   [[ "$output" != *"Added default habit: Deep work"* ]]
   [ "$(grep -c '"id": "deep-work"' "$PBRAIN_HABITS_PROFILE_FILE")" -eq 1 ]
 }
+
+# ── scores subcommand ────────────────────────────────────────────────────────
+
+_write_scores_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+version: 1
+committed: true
+---
+
+# Habits profile
+
+```json
+{
+  "habits": [
+    { "id": "eat-clean", "name": "Eat clean", "schedule_type": "daily",
+      "direction": "at_least", "priority": "high", "archived": false,
+      "unit": "", "measure_target": 80,
+      "scoring": { "type": "meal_ratio" } },
+    { "id": "sleep-well", "name": "Sleep well", "schedule_type": "daily",
+      "direction": "at_least", "priority": "high", "archived": false,
+      "unit": "", "measure_target": 80,
+      "scoring": { "type": "deviation", "normal_time": "23:00",
+                   "normal_hours": 8.0, "unit_minutes": 30,
+                   "unit_hours": 0.5, "ladder": [100, 90, 75, 50, 25, 0] } },
+    { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily",
+      "direction": "at_least", "target_count": 1, "priority": "medium",
+      "archived": false }
+  ]
+}
+```
+EOF
+}
+
+@test "scores: marked scored habit prints N/100 and appears in HABIT_SCORES JSON" {
+  _write_scores_profile
+  HABITS mark --name "Eat clean" --date "2026-06-13" --good 4 --bad 1 >/dev/null
+  run HABITS scores --date "2026-06-13"
+  [ "$status" -eq 0 ]
+  # human line: 4 clean / 1 unclean = 80/100
+  [[ "$output" == *"Eat clean · 80/100 · meal_ratio · high"* ]]
+  # machine line present with correct score
+  python3 -c "
+import json, sys
+lines = '''$output'''.splitlines()
+trailer = next((l for l in lines if l.startswith('HABIT_SCORES ')), None)
+assert trailer, 'no HABIT_SCORES line'
+data = json.loads(trailer[len('HABIT_SCORES '):])
+ec = next(h for h in data if h['id'] == 'eat-clean')
+assert ec['score'] == 80.0, repr(ec)
+assert ec['scoring_type'] == 'meal_ratio', repr(ec)
+assert ec['priority'] == 'high', repr(ec)
+"
+}
+
+@test "scores: unmarked scored habit prints not-marked and score null in JSON" {
+  _write_scores_profile
+  # mark eat-clean but leave sleep-well unmarked
+  HABITS mark --name "Eat clean" --date "2026-06-13" --good 4 --bad 1 >/dev/null
+  run HABITS scores --date "2026-06-13"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sleep well · not marked · deviation · high"* ]]
+  python3 -c "
+import json, sys
+lines = '''$output'''.splitlines()
+trailer = next((l for l in lines if l.startswith('HABIT_SCORES ')), None)
+assert trailer, 'no HABIT_SCORES line'
+data = json.loads(trailer[len('HABIT_SCORES '):])
+sw = next(h for h in data if h['id'] == 'sleep-well')
+assert sw['score'] is None, repr(sw)
+"
+}
+
+@test "scores: non-scored habit is excluded from output and HABIT_SCORES JSON" {
+  _write_scores_profile
+  run HABITS scores --date "2026-06-13"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"brush-at-night"* ]]
+  [[ "$output" != *"Brush at night"* ]]
+  python3 -c "
+import json
+lines = '''$output'''.splitlines()
+trailer = next((l for l in lines if l.startswith('HABIT_SCORES ')), None)
+assert trailer, 'no HABIT_SCORES line'
+data = json.loads(trailer[len('HABIT_SCORES '):])
+ids = [h['id'] for h in data]
+assert 'brush-at-night' not in ids, repr(ids)
+"
+}
+
+@test "scores: no profile yields HABIT_SCORES []" {
+  run HABITS scores --date "2026-06-13"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HABIT_SCORES []"* ]]
+}

@@ -45,6 +45,9 @@ set -euo pipefail
 #                  habit's profile rule — see `score`)
 #   habits.sh score --name "X" (--good N --bad N | --slips N | --actual-time HH:MM --actual-hours N)
 #                  compute (no write) a scored habit's score from its profile rule
+#   habits.sh scores [--date YYYY-MM-DD]
+#                  read back engine-computed scores for all scored habits on a date;
+#                  emits human lines + "HABIT_SCORES [...]" JSON trailer
 #   habits.sh profile show|new|commit    manage the VERSIONED habits profile
 #                  (lib/profiles.sh store; add/edit/archive stay living-document
 #                  ops on the latest version — `new` is for structural redesigns)
@@ -908,6 +911,25 @@ if [[ "$SUB" == "status" ]]; then
     esac
   done
   pbrain_habits_status "$S_DATE"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# scores — read back engine-computed scores for all scored habits on a date.
+# Scored habits carry a `scoring` block in the profile JSON; their 0–100 score
+# is stored in habit_events.amount at mark time. Emits human-readable lines
+# plus a HABIT_SCORES [...] JSON trailer for machine consumption.
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "scores" ]]; then
+  shift || true
+  SCRD_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) SCRD_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  pbrain_habits_scores "$SCRD_DATE"
   exit 0
 fi
 

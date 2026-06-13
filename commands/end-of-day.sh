@@ -234,6 +234,26 @@ reflection — in this exact shape:
      synthesized from the filled tables + journal + thoughts + Q5 answers.
      Omit any category with nothing logged. Concrete, in the user's voice.}
 
+  ### Scoreboard
+  *(omit any domain with nothing logged — never invent a number)*
+
+  **Habits (scored)**
+  | Habit | Score | Priority | Basis |
+  |-------|-------|----------|-------|
+  | {name — from HABIT_SCORES read-back (Step 4e)} | {N/100 verbatim from HABIT_SCORES; — if null} | {priority} | {terse basis, e.g. "4 clean / 1 unclean", "bed 23:40 vs 23:30 · 7.2h", "2h10 work / 35m social", "8/12 tasks"} |
+
+  **Habits (other due today)**
+  - {one line each: ✅/⏳/⚠️ name — used/target, from the rollup; omit if none due}
+
+  **Diet**
+  - {Cals X / target Y (net ±Z) · P x/t · C x/t · F x/t · Fiber x/t — from the closed diet log}
+
+  **Fitness**
+  - {{activity} — actual/planned volume (Train N/100) · {status}}
+
+  **Work**
+  - {Focus N% — work Xm / social Ym / entertainment Zm · AFK Wm over Vh blocks}
+
   ### Goal progress (vs the focus_today goals above)
   - {one bullet per focus_today goal — net positive / flat / negative with a
      sentence of why, drawing from the filled tables + cross-ref files}
@@ -365,6 +385,26 @@ without re-asking. Use the Edit tool on each file.
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
       analysis DB and prunes the habits you didn't do from the day's entry, so
       weekly/monthly reviews have accurate data. Run it once, after marking.
+      THEN run the scores read-back (AFTER marking + consolidate so the DB is
+      current):
+        bash "$HABITS_CMD" scores --date $TODAY
+      Parse the line beginning with "HABIT_SCORES " and parse its JSON array.
+      Use this to fill the "### Scoreboard" Habits (scored) table verbatim:
+        - Score column: "{N}/100" from the "score" field; "—" when score is null.
+        - Priority column: the "priority" field verbatim.
+        - Basis column: derive a terse note from what you already know:
+            meal_ratio    → "X clean / Y unclean" meals
+            deviation     → "bed HH:MM vs HH:MM · N.Nh" (from fitness frontmatter)
+            weighted_completion → "N/M tasks" or "X/Y pts" (from the task log)
+            session_volume      → "Nkg / Mkg planned" or "completed / skipped"
+            focus_ratio         → "Xm work / Ym social" (from focus-breakdown)
+          For any habit with score: null → write "— (not marked)" in Basis.
+      The non-scored habits under "Habits (other due today)" come from the
+      HABITS_ROLLUP already in context (the rollup lines that are NOT scored
+      habits). Omit "Habits (other due today)" if there are none due today.
+      The Diet, Fitness, and Work rows come from what 4a/4b/4e computed above —
+      fill those rows only when the relevant data exists; omit the entire
+      subsection otherwise. Never invent a number.
 
 4f) REMINDERS — a daily build habit can be LINKED to a per-day Apple Reminder
     that pbrain keeps in TWO-WAY sync (the reminder is just a notification +

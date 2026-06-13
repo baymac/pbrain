@@ -11,7 +11,7 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 - Leads with a one-line **recap** of what's already known (resolved tasks, logged meals, the fitness session, habit marks, laptop usage), then asks only the gaps — one domain per message: (1) still-open plan tasks/blocks, (2) the fitness session + on-track-to-sleep (today only), (3) unlogged meals, (4) which due habits got done, (5) any unresolved journal open questions. A domain with no gaps is skipped.
 - **Deep work focus** (when laptop tracking is set up): extracts the work-block time windows from the plan, scores how much of that active time went to work vs. distraction (via `/laptop-tracking focus-breakdown`), asks you to categorize any new sites once, and folds the focus % into the laptop line of the close.
 - Fills **both** plan tables in place: `## Task log` (Done at / Status) and `## Today at a glance` (a `✓` prefix on blocks that happened).
-- Writes a lean `## How it went`: **Executive summary** (small wins across work / diet / fitness / relationships + anything logged in your journal & thoughts), **Goal progress** (vs `focus_today`), **Sleep**, and an auto-derived **Carry-forward** (your not-done tasks, which next day's `/plan-my-day` offers back to you). No energy curve, no tomorrow-seed prompt.
+- Writes a lean `## How it went`: **Executive summary** (small wins across work / diet / fitness / relationships + anything logged in your journal & thoughts), **Scoreboard** (see below), **Goal progress** (vs `focus_today`), **Sleep**, and an auto-derived **Carry-forward** (your not-done tasks, which next day's `/plan-my-day` offers back to you). No energy curve, no tomorrow-seed prompt.
 - **Marks all five scored-habit defaults** from the day's data as a backstop — Work the plan, Train, Eat clean, Sleep well, Deep work — so weekly/monthly scores aren't full of holes (idempotent if a command already marked one).
 - On the last day of the ISO week / month, adds a once pointer to `/weekly-review` / `/monthly-review` (non-blocking).
 - If today's plan file doesn't exist → creates a free-form close at that path instead of anchoring to a plan.
@@ -23,6 +23,15 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
   - **Habits:** logs any tracked habits you evidenced today and notes standouts (a limit habit over cap, a high-priority build habit that lagged). Silent if you haven't set up `/habits` (nudges once).
   - **Reminders:** once your habits are consolidated, a **two-way sync with sweep** runs (`habits reminders-sync --sweep`) for any habit linked to an Apple Reminder (`/remind`): a reminder you ticked off in the Reminders app marks the habit done here, and a habit you closed today completes its per-day reminder. The `--sweep` pass (end-of-day only) then cancels any still-pending one-shot reminders for habits you didn't complete, so they don't linger as overdue notifications overnight. Surfaced as a one-line summary only if something moved (e.g. "Synced 2 habit reminders, cleared 1 undone."), never asked. No proactive "want to link these?" nag — linking is opt-in, per habit, only when you ask (or at `/habits` add/setup). Reminders only — a Calendar event has no "done" state. Silent when nothing's linked or the Reminders helper isn't built / lacks access.
   - Bookkeeping only — the close never invents new analysis or new prescriptions.
+
+**`### Scoreboard`** — a numeric snapshot written into `## How it went`, immediately after `### Executive summary`:
+
+- **Habits (scored):** a table with one row per scored habit — Score (`N/100`, read back verbatim from `habits.sh scores --date <date>` after the marks are written), Priority, and Basis (a terse derivation: `4 clean / 1 unclean`, `bed 23:40 vs 23:30 · 7.2h`, `2h10 work / 35m social`). Score values come straight from the engine (stored in `habit_events.amount` at mark time) — never re-derived by the model.
+- **Habits (other due today):** one line per non-scored habit that was due, from the rollup.
+- **Diet:** `Cals X / target Y (net ±Z) · P x/t · C x/t · F x/t · Fiber x/t`, from the closed diet log.
+- **Fitness:** `{activity} — actual/planned volume (Train N/100) · {status}`.
+- **Work:** `Focus N% — work Xm / social Ym / entertainment Zm · AFK Wm over Vh blocks`.
+- Any domain with nothing logged is omitted. Numbers are never invented.
 
 **Tone rules baked into the prompt:**
 

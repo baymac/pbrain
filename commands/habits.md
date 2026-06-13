@@ -1,6 +1,6 @@
 ---
 description: Habit tracking. First run interviews you one question at a time to build a versioned habits profile — each habit with its own criteria (daily / N-per-week / N-per-month, build or limit) and a priority. Day-to-day tracking lives in dated markdown files (life/habit-tracking/<date>.md) you tick like a checklist; a SQLite store is synced from them for analysis. Afterward it shows your progress vs each criteria (✅ met / ⏳ not yet / ⚠️ over), top 20 by priority. Habits are auto-marked from your journaling + planning sessions. Once your diet + fitness profiles exist, the scored defaults "Eat clean" (clean-meal ratio) and "Sleep well" (deviation vs your normal sleep window) are seeded automatically.
-argument-hint: (none) | track | list | history --name "X" | profile show|new|commit
+argument-hint: (none) | track | list | history --name "X" | scores [--date YYYY-MM-DD] | profile show|new|commit
 ---
 Run this with the Bash tool first (substituting any argument for `$ARGUMENTS`), then follow the INSTRUCTIONS block in its output:
 

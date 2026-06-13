@@ -462,6 +462,104 @@ print("\n".join(lines))
 PYEOF
 }
 
+# pbrain_habits_scores [today] — read back engine-computed scores for every
+# scored habit (habits whose JSON carries a "scoring" block) for a given date.
+# Scores are stored in habit_events.amount at mark time (score_from_spec writes
+# the 0–100 float through the `amount` channel). Habits not yet marked that day
+# show as "not marked" / null.
+#
+# Output:
+#   - <name> · <N>/100 · <scoring_type> · <priority>   (one line per scored habit)
+#   ...
+#   HABIT_SCORES [{"name":..,"id":..,"scoring_type":..,"priority":..,"score":..},…]
+#
+# Never exits non-zero.
+pbrain_habits_scores() {
+  command -v python3 >/dev/null 2>&1 || { printf 'HABIT_SCORES []\n'; return 0; }
+  local today profile db
+  today="${1:-$(date +%Y-%m-%d)}"
+  profile="$(pbrain_habits_profile_file)"
+  db="$PBRAIN_DB_FILE"
+  [[ -f "$profile" ]] || { printf 'HABIT_SCORES []\n'; return 0; }
+  python3 - "$profile" "$db" "$today" <<'PYEOF' 2>/dev/null || printf 'HABIT_SCORES []\n'
+import json, re, sys, sqlite3, os
+
+profile, db, today_s = sys.argv[1], sys.argv[2], sys.argv[3]
+
+try:
+    with open(profile) as fh:
+        text = fh.read()
+except Exception:
+    print("HABIT_SCORES []")
+    sys.exit(0)
+
+m = re.search(r"```json\s*\n(.*?)```", text, re.DOTALL)
+raw = m.group(1).strip() if m else text.strip()
+try:
+    data = json.loads(raw)
+except Exception:
+    print("HABIT_SCORES []")
+    sys.exit(0)
+
+def slug(name):
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return s or "habit"
+
+habits = data.get("habits") or []
+scored = []
+for h in habits:
+    if h.get("archived"):
+        continue
+    scoring = h.get("scoring")
+    if not isinstance(scoring, dict):
+        continue
+    name = str(h.get("name", "")).strip()
+    if not name:
+        continue
+    hid = str(h.get("id", "")).strip() or slug(name)
+    prio = str(h.get("priority", "medium")).strip().lower()
+    stype = str(scoring.get("type", "")).strip()
+    scored.append({"id": hid, "name": name, "priority": prio, "scoring_type": stype, "score": None})
+
+if not scored:
+    print("HABIT_SCORES []")
+    sys.exit(0)
+
+ids = [h["id"] for h in scored]
+amounts = {}
+if os.path.exists(db):
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("PRAGMA busy_timeout=5000")
+        q = ("SELECT habit_id, amount FROM habit_events WHERE habit_id IN (%s) AND occurred_on=?"
+             % ",".join("?" * len(ids)))
+        for hid, amt in con.execute(q, ids + [today_s]):
+            if amt is not None:
+                amounts[hid] = float(amt)
+        con.close()
+    except Exception:
+        amounts = {}
+
+lines = []
+result = []
+for h in scored:
+    raw_score = amounts.get(h["id"])
+    if raw_score is not None:
+        score_int = int(raw_score + 0.5)
+        score_disp = f"{score_int}/100"
+        score_val = score_int
+    else:
+        score_disp = "not marked"
+        score_val = None
+    lines.append(f"- {h['name']} · {score_disp} · {h['scoring_type']} · {h['priority']}")
+    result.append({"name": h["name"], "id": h["id"], "scoring_type": h["scoring_type"],
+                   "priority": h["priority"], "score": score_val})
+
+print("\n".join(lines))
+print("HABIT_SCORES " + json.dumps(result))
+PYEOF
+}
+
 # ── daily markdown tracking layer ───────────────────────────────────────────
 #
 # The human-facing log is a dated markdown file, one per day, generated from the
@@ -1001,9 +1099,13 @@ elif op == "mark":
     if con is not None:
         mirror_rows(con, rows, date, active, now)
         refresh_progress(con, rows, active, date)
+    # Write markdown first (source of truth), then commit DB so that if the
+    # file write fails the DB is not committed — consolidate will re-mirror on
+    # next run and recover consistency.
+    open(f, "w").write(render(pre, rows, post))
+    if con is not None:
         con.commit()
         con.close()
-    open(f, "w").write(render(pre, rows, post))
     print(f"marked: {h['name']} on {date}")
 
 elif op == "score":
