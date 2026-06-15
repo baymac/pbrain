@@ -311,7 +311,46 @@ EOF
   [ -z "$output" ]
   for id in 0001_prefs_feedback_to_vault 0002_plans_profile_rebuild \
             0003_fitness_profiles 0004_diet_profile_combine \
-            0005_habits_profile_to_store 0006_food_library_to_store; do
+            0005_habits_profile_to_store 0006_food_library_to_store \
+            0007_goals_project_reframe; do
     [ -f "$LEDGER/$id.done" ]
   done
+}
+
+@test "0007 pending when a goals file lacks allocation_percent; not once it has it" {
+  store="$VAULT_DIR/life/daily-planning/.profile"
+  mkdir -p "$store"
+  # legacy weekly-goals (task-level, no allocation_percent) → pending
+  cat > "$store/weekly-goals.v1.md" <<'EOF'
+---
+type: weekly-goals
+period: 2026-W24
+version: 1
+committed: false
+---
+```json
+{"period":"2026-W24","goals":[{"id":"g1","goal":"ship","tie":"lt/w1","priority":1,"status":"active"}]}
+```
+EOF
+  run pbrain_migration_pending 0007_goals_project_reframe
+  [ "$status" -eq 0 ]
+  # once reframed (allocation_percent present) → not pending
+  cat > "$store/weekly-goals.v1.md" <<'EOF'
+---
+type: weekly-goals
+period: 2026-W24
+version: 1
+committed: false
+---
+```json
+{"period":"2026-W24","goals":[{"id":"g1","goal":"ship","plane_project":"uuid-1","project_name":"Lettuce","priority":1,"allocation_percent":100,"status":"active"}]}
+```
+EOF
+  run pbrain_migration_pending 0007_goals_project_reframe
+  [ "$status" -ne 0 ]
+}
+
+@test "0007 not pending for a fresh user with no goals files" {
+  run pbrain_migration_pending 0007_goals_project_reframe
+  [ "$status" -ne 0 ]
 }
