@@ -22,7 +22,7 @@ set -euo pipefail
 #                                  verbatim — unlike custom prompts, Codex does NOT
 #                                  expand $NAME placeholders in a skill body, so
 #                                  $VAULT_DIR / $ARGUMENTS survive as literal text.
-#                                  Excludes init-obsidian and codex-install
+#                                  Excludes init-obsidian, init-plane, codex-install
 #                                  (Claude-side setup that runs before / alongside).
 #
 #   AGENTS.md                      a delimited, managed pbrain block carrying the
@@ -108,7 +108,7 @@ cmd_dir, skills_dir, prompts_dir, pbrain_root = \
     sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 # Claude-side setup commands that do NOT get a Codex skill.
-EXCLUDE = {"init-obsidian", "codex-install"}
+EXCLUDE = {"init-obsidian", "codex-install", "init-plane"}
 MARKER = "pbrain-codex-managed"
 
 # The exact path token every command .md uses to locate its .sh under Claude
