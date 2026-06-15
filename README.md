@@ -307,6 +307,7 @@ pbrain/
 ├── commands/                           ← .md + .sh pairs for each slash command
 ├── lib/
 │   ├── vault.sh                        ← shared VAULT_DIR resolver + entry point for helpers
+│   ├── scaffold.sh                     ← standalone vault-scaffold helpers (git init, .gitignore, CLAUDE.md, config); shared by /init-obsidian + vault.sh zero-config fallback
 │   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
 │   ├── prefs.sh                        ← per-command preference injection
 │   ├── self-improve.sh                 ← end-of-session feedback capture
@@ -315,9 +316,11 @@ pbrain/
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
 │   ├── habit_schedule.py               ← habit schedule engine (is_due, derive_schedule, spacing helpers)
 │   ├── profiles.sh                     ← versioned profile store (.profile dirs: latest/new/commit)
-│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts
+│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts (0001–0007)
 │   ├── profile_lock.py                 ← atomic read-modify-write for Habits Profile.md (flock + tempfile-rename)
 │   ├── launchd.sh                      ← shared native-helper build + LaunchAgent helpers (pbrain_swift_build, pbrain_launchagent_install)
+│   ├── plane.py                        ← Plane backend (stdlib urllib, no pip deps); READ/WRITE seams; multi-project config
+│   ├── projects.sh                     ← Plane seam layer for the daily loop; degrades gracefully when Plane is unconfigured
 │   ├── reminders.sh                    ← Apple Reminders helpers + cron→recurrence mapper (/remind); blocking overlay/tick/cron (/remind-blocking); Calendar read for plan-my-day
 │   ├── pbrain-reminders.swift          ← source for the EventKit Reminders helper app (/remind)
 │   ├── pbrain-notify.swift             ← source for pbrain's macOS notifier app
