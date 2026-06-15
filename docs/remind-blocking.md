@@ -1,7 +1,8 @@
 # /remind-blocking
 
-Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, a **10-second warning panel** appears top-right first: small, non-intrusive, with a **Skip** button so you can dismiss it before the overlay takes over. If you don't skip, the opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown. Each occurrence resolves to exactly one outcome:
+Reminders that fire as a **full-screen blocking overlay** instead of a dismissible notification — the "Take a break" pattern. When one fires, a **10-second warning panel** appears top-right first: small, non-intrusive, with **Snooze 5m** and **Skip** buttons so you can push it out or dismiss it before the overlay takes over. If you do neither, the opaque screen drops over **every display**, above the menu bar and Dock, with your message shown huge and (optionally) a countdown — and a **Snooze 5m** button sits there too. Each occurrence resolves to exactly one outcome:
 
+- **Click Snooze 5m** (on the warning panel *or* the overlay) → the same reminder re-fires 5 minutes later. It stays pending (nothing is resolved); a recurring series also keeps its normal next occurrence.
 - **Click Skip in the warning panel** → dismissed before the overlay fires (same result as skipped)
 - **Hold Control (⌃)** for a few seconds on the overlay → **skipped** (a deliberate hold, so it can't be hit by accident)
 - **Let the countdown run out** → **done** — you waited out the full break. *This is the only way to get a "done".*
@@ -90,6 +91,7 @@ The overlay sets macOS kiosk options while it's up — it hides the Dock and men
 | `PBRAIN_DB_FILE` | SQLite DB path (shared with `/habits`) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_OVERLAY_APP` | Where the compiled overlay app is cached/built | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | Default overlay background colour (hex, e.g. `#1e3a5f`) | unset → slate |
+| `PBRAIN_OVERLAY_SNOOZE_MINUTES` | Warning-panel **Snooze** button push-out, in minutes; `0` hides the button | unset → `5` |
 | `PBRAIN_REMIND_GRACE_SECONDS` | How overdue an occurrence may be and still fire; past it → `missed` | `600` (10 min) |
 | `PBRAIN_SCREEN_LOCKED` | Override the screen-lock probe: `1` = treat as locked (defer overlays), `0` = unlocked | unset → auto-detect via `ioreg` |
 
