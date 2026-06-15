@@ -209,8 +209,9 @@ MONTHLY_GOALS_CONTENT=""
 [[ -n "$WEEKLY_GOALS_FILE" ]] && WEEKLY_GOALS_CONTENT="$(cat "$WEEKLY_GOALS_FILE" 2>/dev/null || true)"
 [[ -n "$MONTHLY_GOALS_FILE" ]] && MONTHLY_GOALS_CONTENT="$(cat "$MONTHLY_GOALS_FILE" 2>/dev/null || true)"
 
-# Read this week's task logs from day-plan files to show goal progress.
-TASK_LOG_DATA="$(python3 - "$PLAN_DIR" "$FIRST_DATE" "$LAST_DATE" <<'PYEOF' 2>/dev/null || echo "(no task logs)"
+# Read this week's WORK TRACKER rows (new schema; legacy "## Task log" too) from
+# day-plan files to show project/goal progress.
+TASK_LOG_DATA="$(python3 - "$PLAN_DIR" "$FIRST_DATE" "$LAST_DATE" <<'PYEOF' 2>/dev/null || echo "(no work tracker)"
 import glob, os, re, sys
 plan_dir, first_date, last_date = sys.argv[1], sys.argv[2], sys.argv[3]
 rows = []
@@ -223,17 +224,19 @@ for f in sorted(glob.glob(os.path.join(plan_dir, "*.md"))):
             text = fh.read()
     except Exception:
         continue
-    m = re.search(r"## Task log\n+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    if not m:
-        continue
-    section = m.group(1).strip()
-    if section and "| Task |" in section:
-        rows.append(f"=== {date_str} ===")
-        rows.append(section)
+    for header in ("Work tracker", "Task log"):
+        m = re.search(r"## %s\n+(.*?)(?=\n## |\Z)" % header, text, re.DOTALL)
+        if not m:
+            continue
+        section = m.group(1).strip()
+        if section and ("| Block |" in section or "| Task |" in section):
+            rows.append("=== %s (%s) ===" % (date_str, header))
+            rows.append(section)
+        break
 if rows:
     print("\n".join(rows))
 else:
-    print("(no task logs this week)")
+    print("(no work tracker this week)")
 PYEOF
 )"
 
@@ -361,9 +364,29 @@ fi
 echo "--- END MONTHLY GOALS ---"
 
 echo ""
-echo "--- THIS WEEK'S TASK LOGS ---"
+echo "--- PROJECT REGISTRY (registry_json) ---"
+echo "plane_configured: $(pbrain_plane_configured 2>/dev/null && echo yes || echo no)"
+pbrain_projects_registry_json 2>/dev/null || echo "[]"
+echo "--- END PROJECT REGISTRY ---"
+
+echo ""
+echo "--- PROJECT PROGRESS (progress_json, this week's goal projects since $FIRST_DATE) ---"
+WR_WEEKLY_PIDS=""
+if [[ -n "$WEEKLY_GOALS_FILE" ]]; then
+  WR_WEEKLY_PIDS="$(pbrain_profile_json "$WEEKLY_GOALS_FILE" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || true)"
+fi
+echo "weekly_pids: ${WR_WEEKLY_PIDS:-(none)}"
+pbrain_projects_progress_json "$WR_WEEKLY_PIDS" "$FIRST_DATE" 2>/dev/null || echo "{}"
+echo "--- END PROJECT PROGRESS ---"
+
+echo ""
+echo "--- THIS WEEK'S WORK TRACKER ROWS ---"
 echo "$TASK_LOG_DATA"
-echo "--- END TASK LOGS ---"
+echo "--- END WORK TRACKER ROWS ---"
 
 if [[ -n "$CLIPPINGS_AVAILABLE" ]]; then
   echo ""
@@ -426,10 +449,17 @@ Dates: $FIRST_DATE → $LAST_DATE
 ## Double down on
 {verbatim answer to Q3}
 
+## Work review
+{filled in by Step 3w below — a per-project read of the week's work: planned vs
+done (from THIS WEEK'S WORK TRACKER ROWS), Plane pct + delta (from PROJECT
+PROGRESS), alloc% vs where the time actually went (estimate-rating), and any
+pile-up flags. If no project goals/tracker exist this week, write "No project
+work tracked."}
+
 ## Weekly goals — $ISO_WEEK
-{filled in by Step 4b below — the closing week's goals with their Done at/Status
-from the task logs (completed / partial / not started for each goal). If no
-weekly goals were set up, write "Weekly goals not configured."}
+{filled in by Step 4b below — the closing week's PROJECT goals with their status
+(from the work tracker + project progress: which projects advanced, which
+stalled). If no weekly goals were set up, write "Weekly goals not configured."}
 
 ## Improvements
 {filled in by Step 4 — every improvement you proposed, per command, with the
@@ -442,6 +472,20 @@ the HABITS rollup: what's sticking, what's lagging or over) plus any add/remove
 proposals and what the user decided. If habit tracking isn't set up, write
 "No habits tracked." If set up but nothing to change, give the read and write
 "No habit changes."}
+
+Step 3w — Work review. Fill the "## Work review" section from THIS WEEK'S WORK
+TRACKER ROWS + PROJECT PROGRESS + the weekly PROJECT goals. Per project in play
+this week (one bullet each):
+  - planned vs done: count work-tracker rows tied to the project's plane_project
+    (status done / partial / open) across the week.
+  - Plane pct + delta: from progress_json[pid].pct (the "delta" is your read of
+    movement — if you have a prior reference, note the change; else just the pct).
+  - alloc% vs actual: the goal's allocation_percent vs the share of the week's
+    done work that actually went to it — call out big mismatches (an
+    estimate/allocation calibration signal).
+  - pile-up flag: rows that stayed partial / not-started all week → "piling up".
+Lead with what moved and what stalled; keep it tight. If neither project goals
+nor a work tracker exist this week, write "No project work tracked." and move on.
 
 Step 4 — Improvements. Build a PER-COMMAND improvement list from the week's
 evidence, using the CORE PROFILES above as the baseline. One list per command:
@@ -487,23 +531,38 @@ Step 4b — Weekly Goals lifecycle. Walk this for every weekly review.
        bash "\$commands_dir/plan-my-day.sh" profile commit weekly-goals
   iii) MINT next week's draft: mint a fresh weekly-goals draft for next_iso_week:
        bash "\$commands_dir/plan-my-day.sh" profile new weekly-goals
-       This creates the file. Edit it to set:
+       This creates the file. Weekly goals are now a CEO overview — which Plane
+       PROJECTS are in play next week, at what priority, and at what % of your
+       importance/time (allocation_percent summing to 100). NOT task-level. The
+       real tasks live in Plane (see /plan-my-work). Edit the draft to set:
        - "period": "$NEXT_ISO_WEEK" in the JSON block
        - Derive the goals:
          * If monthly_goals_file is set and its period is the current month
-           ($MONTH_YEAR): derive from monthly goals (copy goal text/tie/priority,
-           ask user to confirm each + set difficulty: easy|normal|hard|nightmare).
+           ($MONTH_YEAR): derive from monthly goals (copy goal text + plane_project
+           + priority; confirm each).
          * Else: derive from the plans-profile's current_focus list (use their
-           priority, ask difficulty).
-       Walk goals ONE BY ONE — each round ask: "Include '{goal}' next week?
-       If yes, what difficulty? (easy/normal/hard/nightmare)". Allow adding new
-       goals not in the profile.
+           priority).
+       Walk goals ONE BY ONE — each round ask: "Include '{goal}' next week? If
+       yes, what % of next week's importance? (difficulty is optional — easy/
+       normal/hard/nightmare)". When the PROJECT REGISTRY above shows
+       plane_configured: yes, ALSO ask which **Plane project** it maps to (pick
+       from the registry; if missing, run /project-manager projects --sync first)
+       and record "plane_project" (uuid) + "project_name". When
+       plane_configured: no, SKIP the project-mapping question entirely — leave
+       "plane_project": "" and keep the goal as a focus-area + allocation_percent
+       only (auto task-pull + progress just aren't available without Plane).
+       Allow adding new goals. After all are assigned, **balance
+       allocation_percent to sum to 100** across active goals (show the split,
+       adjust until it's exactly 100).
        The final JSON shape is:
        {"created": "TODAY", "period": "NEXT_ISO_WEEK",
         "derived_from": "monthly-goals MONTH_YEAR or plans-profile vN",
-        "goals": [{"id": "<slug>", "goal": "...", "tie": "<profile/monthly id>",
-                   "priority": 1, "difficulty": "normal",
-                   "success_looks_like": "...", "status": "active"}]}
+        "goals": [{"id": "<slug>", "goal": "...", "plane_project": "<uuid or ''>",
+                   "project_name": "...", "priority": 1, "allocation_percent": 40,
+                   "success_looks_like": "...", "status": "active",
+                   "difficulty": "normal"}]}
+       (allocation_percent over active goals must total 100; difficulty is kept
+       but secondary.)
   iv) Commit the new next-week draft:
        bash "\$commands_dir/plan-my-day.sh" profile commit weekly-goals
   v) Record in "## Weekly goals — $ISO_WEEK" the closing week's goal progress.

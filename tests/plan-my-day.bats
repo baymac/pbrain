@@ -182,20 +182,23 @@ EOF
   [[ "$output" != *"CADENCE SIGNAL"* ]]
 }
 
-@test "daily INSTRUCTIONS propose a brainstorm slate and define anchors as life-only" {
+@test "daily INSTRUCTIONS lay EMPTY placeholder blocks (no task slate) and define anchors as life-only" {
   write_plans_profile
   write_libraries
   run PMD
   [ "$status" -eq 0 ]
-  # Step 2d flips from ASK to PROPOSE
-  [[ "$output" == *"PROPOSE, don't ask"* ]]
-  [[ "$output" == *"candidate task slate"* ]]
+  # Step 2d no longer proposes/assigns tasks — blocks are placeholders
+  [[ "$output" == *"WORK BLOCKS STAY EMPTY"* ]]
+  [[ "$output" == *"GENERIC PLACEHOLDER"* ]]
+  [[ "$output" != *"candidate task slate"* ]]
+  # the task slate + suggest-tier logic is gone
+  [[ "$output" != *"SUGGEST-TIER"* ]]
   # anchors are life structure only, never work
   [[ "$output" == *"ANCHORS are LIFE structure ONLY"* ]]
   [[ "$output" == *"Work and"* && "$output" == *"NEVER anchors"* ]]
-  # the GOALS-section rename landed
+  # nudge to /plan-my-work landed
+  [[ "$output" == *"/plan-my-work"* ]]
   [[ "$output" == *"## Today's focus"* ]]
-  [[ "$output" != *"## Anchoring on"* ]]
 }
 
 @test "fresh setup block carries the typical_day + variation_rules template" {
@@ -305,6 +308,30 @@ EOF
   write_libraries
   run PMD
   [[ "$output" == *"fitness_sleep: (not recorded — ask the user)"* ]]
+}
+
+@test "today's chosen fitness activity (focus:) is surfaced as fitness_today_activity" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+focus: Apple Fitness+ Kickboxing + Strength + Cooldown
+sleep_wake: 07:20
+---
+# Day A
+EOF
+  run PMD
+  [[ "$output" == *"fitness_today_activity: Apple Fitness+ Kickboxing + Strength + Cooldown"* ]]
+}
+
+@test "fitness_today_activity falls back when there is no focus field" {
+  write_goals_profile
+  write_libraries
+  run PMD
+  [[ "$output" == *"fitness_today_activity: (no fitness entry / focus not set)"* ]]
 }
 
 @test "diet meal times are read from the diet store" {
@@ -465,13 +492,13 @@ EOF
   [[ "$output" == *"week_period:"* ]]
 }
 
-@test "task-log table is in the plan instructions" {
+@test "no task-log table in the plan instructions; work blocks are placeholders" {
   write_goals_profile
   write_libraries
   run PMD
-  [[ "$output" == *"## Task log"* ]]
-  [[ "$output" == *"Done at"* ]]
-  [[ "$output" == *"Difficulty"* ]]
+  [[ "$output" != *"## Task log"* ]]
+  [[ "$output" == *"placeholders"* ]]
+  [[ "$output" == *"Block N — focus work"* ]]
 }
 
 @test "profile new weekly-goals mints a draft" {
@@ -505,124 +532,34 @@ EOF
   [[ "$output" == *"month_boundary_signal:"* ]]
 }
 
-# ── task subcommand (mid-day edits) ──────────────────────────────────────────
+# ── task subcommand MOVED to /plan-my-work ───────────────────────────────────
 
-write_today_plan() {
-  mkdir -p "$PLAN"
-  cat > "$PLAN/$TODAY.md" <<EOF
----
-type: plan
-date: $TODAY
-week_period: 2026-W24
-status: planned
----
-
-# Day Plan — $TODAY
-
-## Today at a glance
-
-| Time | Action | Tie |
-|---|---|---|
-| 07:30–08:00 | ✓ Wake, coffee | — |
-| 09:00–10:30 | Block 1: Lettuce algo | lettuce |
-| 13:00–13:45 | Lunch | Eating |
-
-## Task log
-
-| Task | Tie | Priority | Difficulty | Done at | Status | Notes |
-|---|---|---|---|---|---|---|
-| Ship the algo module | lettuce | 1 | hard | | planned | |
-| Email cleanup | — | — | — | 11:30 | done | |
-EOF
+@test "task verb redirects to /plan-my-work (any action), even with no plan/profile" {
+  for action in add remove list; do
+    run PMD task "$action"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PLAN_MY_DAY_TASK_MOVED"* ]]
+    [[ "$output" == *"/plan-my-work task $action"* ]]
+    # the old in-flow task handler is gone
+    [[ "$output" != *"REWRITE BOTH TABLES TOGETHER"* ]]
+  done
 }
 
-@test "task add with no plan today is a clean no-op pointing at /plan-my-day" {
-  write_goals_profile
-  write_libraries
-  run PMD task add
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_TASK_NO_PLAN"* ]]
-  [[ "$output" == *"run /plan-my-day first"* ]]
-  [[ "$output" != *"PLAN_MY_DAY_TASK"$'\n'* ]] || true
-}
-
-@test "task with no committed profile is still a clean no-op, not the setup interview" {
-  # No profile and no plan: the early guard must win over first-run setup.
+@test "task redirect never triggers the first-run setup interview" {
+  # No profile and no plan: the redirect must win over first-run setup.
   run PMD task list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_TASK_NO_PLAN"* ]]
+  [[ "$output" == *"PLAN_MY_DAY_TASK_MOVED"* ]]
   [[ "$output" != *"PLAN_MY_DAY_SETUP_PROFILE"* ]]
 }
 
-@test "task add on an existing plan emits the task block with the plan + goals context" {
+@test "task defaults to list in the redirect when no action is given" {
   write_goals_profile
   write_libraries
-  write_today_plan
-  run PMD task add
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_TASK"* ]]
-  [[ "$output" == *"action: add"* ]]
-  [[ "$output" == *"TODAY'S PLAN"* ]]
-  [[ "$output" == *"## Task log"* ]]
-  [[ "$output" == *"Ship the algo module"* ]]
-  [[ "$output" == *"REWRITE BOTH TABLES TOGETHER"* ]]
-  [[ "$output" == *"last_block_end"* ]]
-}
-
-@test "task add surfaces weekly_goals_file for tie + suggest-tier" {
-  write_goals_profile
-  write_libraries
-  local iso_week
-  iso_week="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
-  write_weekly_goals "$iso_week"
-  write_today_plan
-  run PMD task add
-  [[ "$output" == *"weekly_goals_file:"* ]]
-  [[ "$output" == *"WEEKLY GOALS"* ]]
-  [[ "$output" == *"lettuce-algo"* ]]
-  [[ "$output" == *"SUGGEST-TIER"* ]]
-}
-
-@test "task remove emits the confirm-on-closed-row guard" {
-  write_goals_profile
-  write_libraries
-  write_today_plan
-  run PMD task remove
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_TASK"* ]]
-  [[ "$output" == *"action: remove"* ]]
-  [[ "$output" == *"CONFIRM-ON-CLOSED-ROW"* ]]
-  [[ "$output" == *"REWRITE BOTH TABLES TOGETHER"* ]]
-}
-
-@test "task list shows the rows without rewriting the file" {
-  write_goals_profile
-  write_libraries
-  write_today_plan
-  run PMD task list
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_TASK"* ]]
-  [[ "$output" == *"action: list"* ]]
-  [[ "$output" == *"task list"* ]]
-  [[ "$output" == *"Do NOT rewrite the file"* ]]
-}
-
-@test "task defaults to list when no action is given" {
-  write_goals_profile
-  write_libraries
-  write_today_plan
   run PMD task
   [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_TASK_MOVED"* ]]
   [[ "$output" == *"action: list"* ]]
-}
-
-@test "task with an unknown action fails with usage" {
-  write_goals_profile
-  write_libraries
-  write_today_plan
-  run PMD task frobnicate
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"usage: plan-my-day.sh task add|remove|list"* ]]
 }
 
 # ── focus / library subcommands ──────────────────────────────────────────────

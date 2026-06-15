@@ -176,6 +176,12 @@ else
 fi
 echo "--- END MONTHLY GOALS ---"
 
+echo ""
+echo "--- PROJECT REGISTRY (registry_json) ---"
+echo "plane_configured: $(pbrain_plane_configured 2>/dev/null && echo yes || echo no)"
+pbrain_projects_registry_json 2>/dev/null || echo "[]"
+echo "--- END PROJECT REGISTRY ---"
+
 MONTH_FIRST_DAY="$(python3 -c "import datetime; t=datetime.date.today(); print(t.replace(day=1).isoformat())" 2>/dev/null || echo "$TODAY")"
 
 cat <<PROMPT
@@ -236,17 +242,30 @@ Step 4 — Monthly goals lifecycle. Walk this for every monthly review.
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
   iii) MINT next month's draft for $NEXT_MONTH_YEAR:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile new monthly-goals
-       Edit the file to set "period": "$NEXT_MONTH_YEAR" in the JSON block, then
-       derive goals from the plans-profile's current_focus list (priority only,
-       no difficulty at this tier). Walk goals ONE BY ONE:
+       Monthly goals are now a CEO overview — which Plane PROJECTS are in play
+       next month, at what priority, and at what % of importance/time
+       (allocation_percent summing to 100). NOT task-level. Edit the file to set
+       "period": "$NEXT_MONTH_YEAR", then derive goals from the plans-profile's
+       current_focus list. Walk goals ONE BY ONE:
          "Include '{goal}' next month? (yes/no) If yes — what's your one-month
           milestone for it?"
-       Allow adding goals not in the profile. Keep "status": "active" for all new goals.
+       When the PROJECT REGISTRY above shows plane_configured: yes, ALSO ask
+       which **Plane project** it maps to (pick from the registry; if missing,
+       /project-manager projects --sync first) and record "plane_project" +
+       "project_name". When plane_configured: no, SKIP the project-mapping
+       question — leave "plane_project": "" and keep the goal as a focus-area +
+       allocation_percent only (task-pull + progress need Plane).
+       Allow adding goals not in the profile. Keep "status": "active" for all new
+       goals. Then set allocation_percent per goal: DERIVE an initial split from
+       priority (higher priority → bigger share — e.g. inverse-rank weighting),
+       show it to the user, and adjust until it sums to exactly 100 across active
+       goals.
        Final JSON shape:
        {"created": "$TODAY", "period": "$NEXT_MONTH_YEAR",
         "derived_from": "plans-profile vN",
-        "goals": [{"id": "<slug>", "goal": "...", "tie": "<profile id or null>",
-                   "priority": 1, "success_looks_like": "...", "status": "active"}]}
+        "goals": [{"id": "<slug>", "goal": "...", "plane_project": "<uuid or ''>",
+                   "project_name": "...", "priority": 1, "allocation_percent": 40,
+                   "success_looks_like": "...", "status": "active"}]}
        Commit the draft once confirmed:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
   iv) PLANS-PROFILE HYGIENE PASS. Offer once, don't force:

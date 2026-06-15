@@ -82,7 +82,44 @@ EOD() { bash "$SH" "$@"; }
   [[ "$output" == *"weekly_goals_file: (not set up)"* ]]
 }
 
-@test "end-of-day: task-log actuals instructions mention Done at and Status" {
+@test "end-of-day: work-tracker actuals instructions mention Done at and Status" {
   run EOD --date 2026-06-01
   [[ "$output" == *"Done at"* ]] && [[ "$output" == *"Status"* ]]
+}
+
+@test "end-of-day: prompt drives the autostatus pass before consolidate" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"autostatus --date"* ]]
+  [[ "$output" == *"status=missed"* ]]
+}
+
+@test "end-of-day: reconcile targets the ## Work tracker (the new schema)" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"## Work tracker"* ]]
+  [[ "$output" == *"% complete"* ]]
+  [[ "$output" == *"Est rating"* ]]
+}
+
+@test "end-of-day: injects the Plane reconcile context (configured + completed-today)" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"plane_configured:"* ]]
+  [[ "$output" == *"weekly_pids:"* ]]
+  [[ "$output" == *"completed_in_plane_today:"* ]]
+}
+
+@test "end-of-day: unconfigured Plane skips sync — completed-today is []" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"plane_configured: no"* ]]
+  [[ "$output" == *"completed_in_plane_today: []"* ]]
+}
+
+@test "end-of-day: instructions cover the Plane push + unplanned detection (4k)" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLANE SYNC + UNPLANNED DETECTION"* ]]
+  [[ "$output" == *"plane_project"* ]]   # weekly-goal rollup matches by project
 }
