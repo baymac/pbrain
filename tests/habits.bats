@@ -408,6 +408,30 @@ PY
   [ "$output" = "0" ]
 }
 
+@test "sync reconciles the md Progress column for a habit ticked by hand (no stale snapshot)" {
+  _write_profile
+  # Tracker created in the morning: Brush at night is not done yet -> "0/7 wk".
+  HABITS track --date 2026-06-03
+  # User ticks the Done cell directly in Obsidian (markdown-first) — no command
+  # runs, so the Progress column is left at its stale creation-time snapshot.
+  python3 - "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'PY'
+import sys, re
+p = sys.argv[1]; t = open(p).read()
+t = re.sub(r"(\| Brush at night \|[^|\n]*\|[^|\n]*\|)[^|\n]*\|", r"\1 x |", t, count=1)
+open(p, "w").write(t)
+PY
+  # Precondition: Done is x but Progress is still the stale 0/7.
+  pre="$(grep 'Brush at night' "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$pre" == *" x "* ]]
+  [[ "$pre" == *"0/7 wk"* ]]
+  # A plain read-path sync (what every read command runs) must now reconcile the
+  # VISIBLE file's Progress with the mark — not leave it for end-of-day consolidate.
+  HABITS sync --days 0 --date 2026-06-03
+  post="$(grep 'Brush at night' "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$post" == *"1/7 wk"* ]]
+  [[ "$post" != *"0/7 wk"* ]]
+}
+
 @test "consolidate syncs to DB then prunes unchecked habits from the day file" {
   _write_profile
   HABITS track --date 2026-06-03
@@ -2062,4 +2086,477 @@ assert 'brush-at-night' not in ids, repr(ids)
   run HABITS scores --date "2026-06-13"
   [ "$status" -eq 0 ]
   [[ "$output" == *"HABIT_SCORES []"* ]]
+}
+
+# ── checklist (e.g. the "Supplements" scored habit) ──────────────────────────
+
+_write_supplements_profile() {
+  # 3 equal-weight components: morning ×2 + a night magnesium = score out of 3.
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+date: 2026-06-03
+tags: []
+---
+
+# Habits profile
+
+```json
+{
+  "created": "2026-06-03",
+  "habits": [
+    { "id": "supplements", "name": "Supplements", "schedule_type": "daily",
+      "direction": "at_least", "target_count": null, "priority": "high",
+      "archived": false, "unit": "", "measure_target": 100,
+      "scoring": { "type": "checklist", "components": [
+        { "id": "morning-vit-d", "name": "Morning vitamin D", "weight": 1 },
+        { "id": "morning-omega", "name": "Morning omega-3", "weight": 1 },
+        { "id": "magnesium-night", "name": "Magnesium (night)", "weight": 1 } ] } }
+  ]
+}
+```
+PEOF
+}
+
+@test "score checklist: all components done -> 100" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '["Morning vitamin D","Morning omega-3","Magnesium (night)"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "100" ]
+}
+
+@test "score checklist: morning only (2 of 3 equal weights) -> 67" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '["Morning vitamin D","Morning omega-3"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "67" ]
+}
+
+@test "score checklist: night magnesium only (1 of 3) -> 33" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '["Magnesium (night)"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "33" ]
+}
+
+@test "score checklist: components match by id as well as name" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '["morning-vit-d","magnesium-night"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "67" ]
+}
+
+@test "score checklist: nothing done (empty list) -> 0" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '[]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "score checklist: no --done at all -> blank (unmarked, not a zero)" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "score checklist: unknown component names are ignored" {
+  _write_supplements_profile
+  run HABITS score --name "Supplements" --done '["Morning vitamin D","creatine"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "33" ]
+}
+
+@test "score checklist: weighted components (morning group worth 2, night worth 1)" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+---
+```json
+{ "habits": [
+  { "id": "supplements", "name": "Supplements", "schedule_type": "daily",
+    "direction": "at_least", "target_count": null, "priority": "high",
+    "archived": false, "unit": "", "measure_target": 100,
+    "scoring": { "type": "checklist", "components": [
+      { "id": "morning", "name": "Morning stack", "weight": 2 },
+      { "id": "magnesium", "name": "Magnesium", "weight": 1 } ] } } ] }
+```
+PEOF
+  run HABITS score --name "Supplements" --done '["Morning stack"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "67" ]
+}
+
+@test "mark checklist: the computed score lands in habit_events.amount" {
+  _write_supplements_profile
+  run HABITS mark --name "Supplements" --date 2026-06-03 --done '["Morning vitamin D","Morning omega-3"]'
+  [ "$status" -eq 0 ]
+  amt="$(python3 -c "
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+row = con.execute(\"SELECT amount FROM habit_events WHERE habit_id='supplements' AND occurred_on='2026-06-03'\").fetchone()
+print(row[0] if row else 'none')
+" "$PBRAIN_DB_FILE")"
+  [ "$amt" = "67.0" ]
+}
+
+@test "add --components builds a checklist scoring block + defaults measure_target to 100" {
+  HABITS add --name "Supplements" --type daily --priority high \
+    --components "Morning vitamin D; Morning omega-3; Magnesium (night)" >/dev/null
+  run python3 -c "
+import json, re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r'\`\`\`json\s*\n(.*?)\`\`\`', text, re.DOTALL)
+data = json.loads(m.group(1))
+h = next(x for x in data['habits'] if x['id'] == 'supplements')
+sc = h['scoring']
+assert sc['type'] == 'checklist', sc
+assert len(sc['components']) == 3, sc
+assert [c['name'] for c in sc['components']] == ['Morning vitamin D','Morning omega-3','Magnesium (night)'], sc
+assert all(c['weight'] == 1 for c in sc['components']), sc
+assert h['measure_target'] == 100, h
+print('ok')
+" "$PBRAIN_HABITS_PROFILE_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "add --components parses per-item weights after '='" {
+  HABITS add --name "Supplements" --type daily \
+    --components "Morning stack=2; Magnesium=1" >/dev/null
+  run python3 -c "
+import json, re, sys
+data = json.loads(re.search(r'\`\`\`json\s*\n(.*?)\`\`\`', open(sys.argv[1]).read(), re.DOTALL).group(1))
+sc = next(x for x in data['habits'] if x['id'] == 'supplements')['scoring']
+assert [(c['name'], c['weight']) for c in sc['components']] == [('Morning stack', 2), ('Magnesium', 1)], sc
+print('ok')
+" "$PBRAIN_HABITS_PROFILE_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "add --components then score end-to-end via the freshly added habit" {
+  HABITS add --name "Supplements" --type daily \
+    --components "Morning vitamin D; Morning omega-3; Magnesium (night)" >/dev/null
+  run HABITS score --name "Supplements" --done '["Morning vitamin D"]'
+  [ "$status" -eq 0 ]
+  [ "$output" = "33" ]
+}
+
+@test "edit --components empty string clears the checklist scoring" {
+  _write_supplements_profile
+  HABITS edit --id supplements --components "" >/dev/null
+  run python3 -c "
+import json, re, sys
+data = json.loads(re.search(r'\`\`\`json\s*\n(.*?)\`\`\`', open(sys.argv[1]).read(), re.DOTALL).group(1))
+h = next(x for x in data['habits'] if x['id'] == 'supplements')
+assert 'scoring' not in h, h
+print('ok')
+" "$PBRAIN_HABITS_PROFILE_FILE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ok" ]
+}
+
+@test "emit_habits_extract surfaces checklist components + the --done channel" {
+  _write_supplements_profile
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract habits"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--done"* ]]
+  [[ "$output" == *"Magnesium (night)"* ]]
+}
+
+# ── weekly scored habits AVERAGE daily scores (not sum) ───────────────────────
+
+_write_weekly_scored_profile() {
+  # A weekly SCORED habit (deep-work) + a plain measured weekly habit (water).
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PEOF'
+---
+type: habits-profile
+---
+```json
+{ "habits": [
+  { "id": "deep-work", "name": "Deep work", "schedule_type": "weekly",
+    "direction": "at_least", "target_count": null, "priority": "high",
+    "archived": false, "unit": "", "measure_target": 75,
+    "schedule": {"type":"weekdays","days":["mon","tue","wed","thu","fri"]},
+    "scoring": { "type": "focus_ratio", "work_categories": ["work"],
+      "distraction_categories": ["social","entertainment"] } },
+  { "id": "water", "name": "Water", "schedule_type": "weekly",
+    "direction": "at_least", "target_count": null, "priority": "low",
+    "archived": false, "unit": "L", "measure_target": 28 }
+] }
+```
+PEOF
+}
+
+@test "rollup: a weekly scored habit reads the AVERAGE of its daily scores" {
+  _write_weekly_scored_profile
+  # Mon/Tue/Wed of the week containing 2026-06-17: scores 60, 80, 100 → avg 80.
+  HABITS mark --name "Deep work" --date 2026-06-15 --focus '{"work":60,"social":40}' >/dev/null
+  HABITS mark --name "Deep work" --date 2026-06-16 --focus '{"work":80,"social":20}' >/dev/null
+  HABITS mark --name "Deep work" --date 2026-06-17 --focus '{"work":100}' >/dev/null
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_habits_rollup 2026-06-17"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Deep work"* ]]
+  [[ "$output" == *"80/75 avg this week"* ]]
+  [[ "$output" != *"240"* ]]
+}
+
+@test "rollup: a plain measured weekly habit still SUMS its amounts" {
+  _write_weekly_scored_profile
+  HABITS mark --name "Water" --date 2026-06-15 --amount 4 >/dev/null
+  HABITS mark --name "Water" --date 2026-06-16 --amount 5 >/dev/null
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_habits_rollup 2026-06-17"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"9/28 L this week"* ]]
+}
+
+@test "tracker Progress column labels a weekly scored habit as 'wk avg'" {
+  _write_weekly_scored_profile
+  HABITS mark --name "Deep work" --date 2026-06-15 --focus '{"work":60,"social":40}' >/dev/null
+  HABITS mark --name "Deep work" --date 2026-06-17 --focus '{"work":100}' >/dev/null
+  HABITS track --date 2026-06-17 >/dev/null
+  run grep "Deep work" "$PBRAIN_HABIT_TRACK_DIR/2026-06-17.md"
+  [ "$status" -eq 0 ]
+  # (60 + 100) / 2 = 80
+  [[ "$output" == *"80/75 wk avg"* ]]
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# 3-state habit status: done / skipped / missed  (Phase 1)
+# ═════════════════════════════════════════════════════════════════════════
+
+# A weekdays-scheduled fitness profile used by status / reconcile / autostatus.
+# Gym Mon/Wed (linked 12:30); Apple Fitness Tue/Fri (linked 12:30); Meditation
+# floating (no explicit schedule, daily build); No smoking daily limit.
+_write_fitness_habits() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+```json
+{"habits":[
+ {"id":"gym","name":"Gym","direction":"at_least","schedule":{"type":"weekdays","days":["mon","wed"]},"schedule_type":"weekly","priority":"high","reminder":{"state":"linked","time":"12:30"}},
+ {"id":"apple-fitness","name":"Apple Fitness","direction":"at_least","schedule":{"type":"weekdays","days":["tue","fri"]},"schedule_type":"weekly","priority":"high","reminder":{"state":"linked","time":"12:30"}},
+ {"id":"meditation","name":"Meditation","direction":"at_least","priority":"medium"},
+ {"id":"no-smoking","name":"No smoking","direction":"at_most","schedule":{"type":"daily"},"schedule_type":"daily","target_count":0,"priority":"high"}
+]}
+```
+EOF
+}
+
+_plant_fitness_lib_multi() {
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-library.v1.md" <<'EOF'
+---
+type: fitness-library
+version: 1
+committed: true
+---
+```json
+{"activities":[
+ {"id":"gym","name":"Gym","occurrence":{"per":"week","times":2},"days":["Mon","Wed"],"typical_time":"12:30"},
+ {"id":"apple-fitness-kickboxing","name":"Apple Fitness+ Kickboxing","occurrence":{"per":"week","times":2},"days":["Tue"]},
+ {"id":"meditation","name":"Meditation","occurrence":{"per":"week","times":3},"days":[]}
+]}
+```
+EOF
+}
+
+# count|status of a habit_events row for a (habit_id, date), or "NONE".
+_ev() {
+  python3 -c "
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+r=c.execute('select count,status from habit_events where habit_id=? and occurred_on=?',(sys.argv[2],sys.argv[3])).fetchone()
+print('NONE' if not r else '%d|%s'%(r[0],r[1]))" "$PBRAIN_DB_FILE" "$1" "$2"
+}
+
+@test "mark --status skipped: skip token in md + count=0 status=skipped in DB" {
+  _write_profile
+  HABITS track --date 2026-06-15 >/dev/null
+  run HABITS mark --id brush-at-night --date 2026-06-15 --status skipped
+  [ "$status" -eq 0 ]
+  grep -qE '^\| Brush at night .*\| skip \|' "$PBRAIN_HABIT_TRACK_DIR/2026-06-15.md"
+  [ "$(_ev brush-at-night 2026-06-15)" = "0|skipped" ]
+}
+
+@test "mark --skip is sugar for --status skipped" {
+  _write_profile
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id brush-at-night --date 2026-06-15 --skip >/dev/null
+  [ "$(_ev brush-at-night 2026-06-15)" = "0|skipped" ]
+}
+
+@test "mark --status missed: miss token in md + count=0 status=missed in DB" {
+  _write_profile
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id brush-at-night --date 2026-06-15 --status missed >/dev/null
+  grep -qE '^\| Brush at night .*\| miss \|' "$PBRAIN_HABIT_TRACK_DIR/2026-06-15.md"
+  [ "$(_ev brush-at-night 2026-06-15)" = "0|missed" ]
+}
+
+@test "plain mark is still a done completion (count>=1 status=done)" {
+  _write_profile
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id brush-at-night --date 2026-06-15 >/dev/null
+  [ "$(_ev brush-at-night 2026-06-15)" = "1|done" ]
+}
+
+@test "consolidate keeps done + skipped + missed rows, prunes only untouched" {
+  _write_profile
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id brush-at-night --date 2026-06-15 >/dev/null              # done
+  HABITS mark --id nail-cut --date 2026-06-15 --status skipped >/dev/null   # skipped
+  HABITS mark --id long-run --date 2026-06-15 --status missed >/dev/null    # missed
+  HABITS consolidate --date 2026-06-15 >/dev/null
+  f="$PBRAIN_HABIT_TRACK_DIR/2026-06-15.md"
+  grep -qE '^\| Brush at night .*\| x \|' "$f"
+  grep -qE '^\| Nail cut .*\| skip \|' "$f"
+  grep -qE '^\| Long run .*\| miss \|' "$f"
+  run grep -qE '^\| Alcohol ' "$f"   # untouched limit row pruned
+  [ "$status" -ne 0 ]
+}
+
+@test "rollup: a skipped due day never breaks the streak; a missed one does" {
+  _write_fitness_habits
+  # Gym Mon/Wed. Wed 2026-06-10 done, Fri n/a, Mon 2026-06-15 done; middle day…
+  HABITS mark --id gym --date 2026-06-10 >/dev/null               # Wed done
+  HABITS mark --id gym --date 2026-06-15 >/dev/null               # Mon done
+  # With nothing between, streak from Mon back to Wed (no due day between) = 2
+  run bash -c "source '$REPO_ROOT/lib/vault.sh'; pbrain_habits_status 2026-06-15"
+  echo "$output" | python3 -c "import json,sys; h=[x for x in json.load(sys.stdin)['habits'] if x['id']=='gym'][0]; assert h['streak']==2, h['streak']"
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# reminders-cancel  (Phase 2)
+# ═════════════════════════════════════════════════════════════════════════
+
+@test "reminders-cancel: unknown habit → NOT_FOUND" {
+  _write_fitness_habits
+  run HABITS reminders-cancel --habit DoesNotExist --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [ "$output" = "NOT_FOUND" ]
+}
+
+@test "reminders-cancel: no pending one-shot → NOT_FOUND" {
+  _write_fitness_habits
+  run HABITS reminders-cancel --habit Gym --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [ "$output" = "NOT_FOUND" ]
+}
+
+@test "reminders-cancel: missing --habit is a soft error, not a crash" {
+  _write_fitness_habits
+  run HABITS reminders-cancel --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == ERROR:* ]]
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# fitness-reconcile  (Phase 3)
+# ═════════════════════════════════════════════════════════════════════════
+
+@test "fitness-reconcile: chosen activity resolves + off-activity is auto-skipped" {
+  _write_fitness_habits
+  _plant_fitness_lib_multi
+  HABITS track --date 2026-06-15 >/dev/null    # Monday → Gym is due
+  run HABITS fitness-reconcile --activity "Apple Fitness+ Kickboxing + Strength" --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == "RECONCILED chosen=Apple Fitness"* ]]
+  # Gym (scheduled Monday, not chosen) → auto-skipped
+  [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
+  # Meditation (floating, no fixed schedule) is NEVER auto-skipped
+  [ "$(_ev meditation 2026-06-15)" = "NONE" ]
+}
+
+@test "fitness-reconcile: unresolvable activity → NO_MATCH, nothing skipped" {
+  _write_fitness_habits
+  _plant_fitness_lib_multi
+  HABITS track --date 2026-06-15 >/dev/null
+  run HABITS fitness-reconcile --activity "Underwater Basket Weaving" --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == NO_MATCH* ]]
+  [ "$(_ev gym 2026-06-15)" = "NONE" ]
+}
+
+@test "fitness-reconcile: idempotent on a second run" {
+  _write_fitness_habits
+  _plant_fitness_lib_multi
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS fitness-reconcile --activity "Apple Fitness+ Kickboxing" --date 2026-06-15 >/dev/null
+  run HABITS fitness-reconcile --activity "Apple Fitness+ Kickboxing" --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == "RECONCILED chosen=Apple Fitness"* ]]
+  [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# autostatus  (Phase 4)
+# ═════════════════════════════════════════════════════════════════════════
+
+@test "autostatus: due build habit with no mark → missed; done/skipped/limit left" {
+  _write_fitness_habits
+  HABITS track --date 2026-06-15 >/dev/null      # Monday: Gym due, Meditation daily, No smoking daily, Apple Fitness not due
+  HABITS mark --id meditation --date 2026-06-15 >/dev/null   # Meditation done
+  run HABITS autostatus --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == AUTOSTATUS\ missed=* ]]
+  [ "$(_ev gym 2026-06-15)" = "0|missed" ]        # due build, unmarked → missed
+  [ "$(_ev meditation 2026-06-15)" = "1|done" ]   # done → left
+  [ "$(_ev no-smoking 2026-06-15)" = "NONE" ]     # limit habit → never auto-missed
+  [ "$(_ev apple-fitness 2026-06-15)" = "NONE" ]  # not due Monday → left
+}
+
+@test "autostatus: an already-skipped habit is left skipped (counted, not missed)" {
+  _write_fitness_habits
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id gym --date 2026-06-15 --status skipped >/dev/null
+  run HABITS autostatus --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped=1"* ]]
+  [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# per-activity seeding + activity backfill  (Phase 5)
+# ═════════════════════════════════════════════════════════════════════════
+
+@test "seeding: an existing habit gets its activity field backfilled (no duplicate)" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+```json
+{"habits":[{"id":"apple-fitness","name":"Apple Fitness","direction":"at_least","schedule":{"type":"weekdays","days":["tue","fri"]},"schedule_type":"weekly","priority":"high"}]}
+```
+EOF
+  _plant_fitness_lib_multi
+  run HABITS track --date 2026-06-15
+  [ "$status" -eq 0 ]
+  # apple-fitness habit now tagged with its activity slug…
+  grep -q '"activity": "apple-fitness-kickboxing"' "$PBRAIN_HABITS_PROFILE_FILE"
+  # …and there is still exactly ONE apple-fitness habit (no dup created)
+  run python3 -c "
+import json,re,sys
+d=json.loads(re.search(r'\`\`\`json\s*\n(.*?)\`\`\`',open(sys.argv[1]).read(),re.DOTALL).group(1))
+print(sum(1 for h in d['habits'] if 'apple fitness' in h['name'].lower()))" "$PBRAIN_HABITS_PROFILE_FILE"
+  [ "$output" = "1" ]
+}
+
+@test "seeding: a fresh vault gets one per-activity habit, each tagged with activity" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+```json
+{"habits":[]}
+```
+EOF
+  _plant_fitness_lib_multi
+  run HABITS track --date 2026-06-15
+  [ "$status" -eq 0 ]
+  grep -q '"id": "gym"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"activity": "gym"' "$PBRAIN_HABITS_PROFILE_FILE"
+  grep -q '"activity": "meditation"' "$PBRAIN_HABITS_PROFILE_FILE"
 }

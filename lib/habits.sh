@@ -29,6 +29,54 @@
 #   4. otherwise the store v1 path (not existing yet → triggers first-run setup;
 #      the bootstrap writes it with version: 1, committed: true)
 #
+# Scored-habit evaluator (score_from_spec) — the model only CLASSIFIES raw
+# inputs; the scoring rule on the habit computes the 0–100 number deterministically.
+# One line per scoring type:
+#   slip_ladder          counts → ladder index.
+#   meal_ratio    (eat-clean)  100·clean/(clean+unclean) meals; mark --good/--bad.
+#   deviation     (sleep-well) slips from circular bed-time diff vs normal_time
+#                              (per unit_minutes) + hours shortfall vs normal_hours
+#                              (per unit_hours), ladder-indexed; mark
+#                              --actual-time HH:MM --actual-hours N.N.
+#   weighted_completion (work-the-plan) 100·earned/possible; per-task weight =
+#                              difficulty_weights[difficulty] (easy1/normal2/hard3/
+#                              nightmare5) × priority boost (1 + max(0,
+#                              priority_pivot−priority)·priority_step, pivot 3 step
+#                              0.25); credit = status_credit[status] (done1/partial0.5/
+#                              dropped,carried0); every planned task is in the
+#                              denominator (overplanning costs you); pass rows as
+#                              --items '[{"priority":1,"difficulty":"hard","status":"done"},…]'.
+#   session_volume (train)     skipped→0; strength/duration with planned>0 & actual
+#                              present → 100·clamp(actual/planned,0,volume_cap) (cap
+#                              1.0); else binary 100·status_credit[status]
+#                              (completed100/partial50); pass --session
+#                              '{"mode":"strength|duration|binary","status":…,"planned":N,"actual":N}'.
+#   focus_ratio   (deep-work)  100·work/(work+distraction) of *active* minutes;
+#                              work_categories/distraction_categories default
+#                              ["work"]/["social","entertainment"]; neutral+afk
+#                              excluded; w+d=0 → unmarked; pass
+#                              --focus '{"work":120,"social":30,…}'.
+#   checklist                  fixed daily set of named weighted `components`;
+#                              100·sum(done weights)/sum(all weights); pass parts
+#                              done by name or id as --done '[…]'.
+#
+# Auto-seeded default habits (idempotent; archived defaults never resurrected):
+#   committed diet profile     → "Eat clean" (meal_ratio).
+#   committed fitness profile  → "Sleep well" (deviation; normal window from it).
+#   committed plans-profile    → "Work the plan" (weighted_completion, daily, target 70).
+#   committed fitness-library  → "Train" (session_volume, target 80; union of the
+#                                activities' fixed days; rest days never missed).
+#   tracker.db + committed plans-profile → "Deep work" (focus_ratio, target 75; on
+#                                the plan's WORKDAYS = weekdays minus
+#                                typical_day.rest_days).
+#
+# Habit↔reminder linking — a per-day ONE-SHOT reminder on the days the habit's
+# SCHEDULE is due (NOT Apple-recurring). The link is an INTENT on the habit:
+# "reminder":{"state":"linked","time":"HH:MM"} (or "declined"; absent = undecided)
+# — NO `days` on the reminder, the schedule owns days. Per-day reminder ids live
+# in the DB table habit_reminders(habit_id,occurred_on,reminder_id,status)
+# (idempotency PK); two-way sync via reminders-ensure / reminders-sync [--sweep].
+#
 # Never exits non-zero. Assumes lib/vault.sh has set VAULT_DIR and sourced
 # profile.sh + profiles.sh + db.sh first.
 
@@ -215,9 +263,11 @@ def norm(h):
     # this period, any days"), since a synthesized schedule is just for reminders.
     sched = derive_schedule(h)
     has_schedule = bool(isinstance(h.get("schedule"), dict) and h.get("schedule", {}).get("type"))
+    sc = h.get("scoring")
     return {"id": hid, "name": name, "schedule_type": st, "direction": direction,
             "target_count": tc, "priority": prio, "unit": unit,
             "measure_target": mt, "measured": measured,
+            "scoring": sc if isinstance(sc, dict) else None,
             "schedule": sched, "schedule_label": schedule_label(sched),
             "has_schedule": has_schedule,
             "reminder": reminder, "reminder_eligible": True,
@@ -234,23 +284,33 @@ month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
 lookback = today - datetime.timedelta(days=400)                   # bounds the streak scan
 
 # Single windowed query for every active habit; aggregate per-habit in python.
-# Each date maps to (count, amount): count = occurrences, amount = measured sum.
-events = {}  # id -> {date_iso: [count, amount]}
+# Each date maps to [count, amount, status]: count = occurrences, amount =
+# measured sum, status = done | skipped | missed (one row per habit-day, so the
+# last status wins). A skipped day is an OFF day (never breaks/denominates a
+# streak); a missed day is a real miss (count=0 breaks a build streak).
+events = {}  # id -> {date_iso: [count, amount, status]}
 ids = [h["id"] for h in active]
 if ids and os.path.exists(db):
     try:
         con = sqlite3.connect(db, timeout=5)
         con.execute("PRAGMA busy_timeout=5000")
-        q = ("SELECT habit_id, occurred_on, count, amount FROM habit_events "
+        cols = [r[1] for r in con.execute("PRAGMA table_info(habit_events)").fetchall()]
+        scol = "status" if "status" in cols else "'done'"   # tolerate a pre-migration DB
+        q = ("SELECT habit_id, occurred_on, count, amount, %s FROM habit_events "
              "WHERE habit_id IN (%s) AND occurred_on>=? AND occurred_on<=?"
-             % ",".join("?" * len(ids)))
-        for hid, d, c, a in con.execute(q, ids + [lookback.isoformat(), today.isoformat()]):
-            slot = events.setdefault(hid, {}).setdefault(d, [0, 0.0])
+             % (scol, ",".join("?" * len(ids))))
+        for hid, d, c, a, st in con.execute(q, ids + [lookback.isoformat(), today.isoformat()]):
+            slot = events.setdefault(hid, {}).setdefault(d, [0, 0.0, "done"])
             slot[0] += (c or 0)
             slot[1] += (a or 0.0)
+            slot[2] = (st or "done")
         con.close()
     except Exception:
         events = {}
+
+def _status_at(dates, di):
+    s = dates.get(di)
+    return (s[2] if s and len(s) > 2 else "done")
 
 def in_range(dates, start, end, idx=0):
     s, e = start.isoformat(), end.isoformat()
@@ -269,18 +329,22 @@ def due_dates_in(sched, start, end):
 
 def due_streak(sched, dates, today):
     """Consecutive DUE days (most recent backward) that were done. A non-due day
-    is skipped (never breaks the streak); today being due-but-not-yet-done does
-    not break it either. So a Mon/Wed/Fri habit isn't 'missed' on a Tuesday."""
+    is skipped (never breaks the streak); a deliberately SKIPPED due day is also
+    treated as an off day (never breaks it); today being due-but-not-yet-done
+    does not break it either. So a Mon/Wed/Fri habit isn't 'missed' on a Tuesday,
+    and an explicit skip is not a missed day."""
     n, d, limit = 0, today, today - datetime.timedelta(days=400)
     while d >= limit:
         di = d.isoformat()
         if is_due(sched, di):
-            if di in dates and dates[di][0] > 0:
+            if _status_at(dates, di) == "skipped":
+                pass   # explicit skip → off day, never breaks the streak
+            elif di in dates and dates[di][0] > 0:
                 n += 1
             elif di == today.isoformat():
                 pass   # today due but not done yet — don't break
             else:
-                break
+                break   # missed (count 0, not skipped) → breaks the streak
         d -= ONE
     return n
 
@@ -304,7 +368,8 @@ for h in active:
     month_count = in_range(dates, month_start, today, 0)
     week_amount = in_range(dates, week_start, week_end, 1)
     month_amount = in_range(dates, month_start, today, 1)
-    last = max(dates) if dates else None
+    done_dates = [d for d, v in dates.items() if (v[0] or 0) > 0 and _status_at(dates, d) == "done"]
+    last = max(done_dates) if done_dates else None
     st, tc, direction = h["schedule_type"], h["target_count"], h["direction"]
     sched = h["schedule"]
     sk = sched.get("type", "daily")
@@ -313,8 +378,17 @@ for h in active:
     fulfilled = over = at_cap = False
     streak_val = 0
     if h["measured"]:
-        # amount-based: summed measure over the (legacy-period) window vs target
-        amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}.get(st, today_amount)
+        # amount-based vs target. A plain measured habit (water, distance) SUMS
+        # the amount over the period. A SCORED habit stores a 0–100 score per day,
+        # so over a week/month we want the AVERAGE of those daily scores, not the
+        # sum (5 days × 75 must read 75, not 375). Daily stays today's score.
+        scored = isinstance(h.get("scoring"), dict)
+        if scored and st == "weekly":
+            amt = int(week_amount / week_count + 0.5) if week_count else 0
+        elif scored and st == "monthly":
+            amt = int(month_amount / month_count + 0.5) if month_count else 0
+        else:
+            amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}.get(st, today_amount)
         used, target = amt, h["measure_target"]
         if direction == "at_most":
             if target is not None:
@@ -335,7 +409,10 @@ for h in active:
         # interval/monthly). A non-due day is never counted against the habit;
         # the streak walks due days only (so an off-day never breaks it).
         p_start, p_end = (month_start, month_end) if sk in ("monthly", "interval") else (week_start, week_end)
-        due_in_period = due_dates_in(sched, p_start, p_end)
+        # A deliberately SKIPPED due day is an off day — drop it from the
+        # denominator so "3/4 this week" reads "3/3" once one is skipped.
+        due_in_period = [di for di in due_dates_in(sched, p_start, p_end)
+                         if _status_at(dates, di) != "skipped"]
         scheduled = len(due_in_period)
         done_due = sum(1 for di in due_in_period if (dates.get(di, [0])[0] or 0) > 0)
         used, target = done_due, (scheduled if scheduled else 1)
@@ -409,8 +486,12 @@ for h in habits[:LIMIT]:
     tag = "·limit" if direction == "at_most" else ""
     head = f"- {h['name']} ({h.get('schedule_label', 'daily')}{tag}, {h['priority']}): "
     if h["measured"]:
-        # amount-based: "2.5/4 L today ✅" — period word per schedule_type
+        # amount-based: "2.5/4 L today ✅" — period word per schedule_type. A
+        # scored habit reads as a weekly/monthly AVERAGE, so say so.
+        scored = isinstance(h.get("scoring"), dict)
         period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}.get(st, "today")
+        if scored and st in ("weekly", "monthly"):
+            period_word = "avg " + period_word
         unit = (" " + h["unit"]) if h["unit"] else ""
         if direction == "at_most":
             flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
@@ -598,7 +679,14 @@ import sys, os, re, json, sqlite3, datetime
 
 HEADER = "| Habit | Criteria | Progress | Done | Count | Note |"
 SEP    = "|-------|----------|----------|------|-------|------|"
+# The Done column carries a per-day STATE token, not just a checkbox:
+#   done    → x / yes / ✓ / …   (a real completion; count>=1)
+#   skipped → skip / skipped / ⊘ (deliberately cancelled today — an off day)
+#   missed  → miss / missed / ✗  (scheduled but never done — a real miss)
+#   blank   → not yet (in-day)
 DONE_TRUE = {"x", "yes", "y", "done", "true", "1", "✅", "✓"}
+SKIP_TOK  = {"skip", "skipped", "⊘"}
+MISS_TOK  = {"miss", "missed", "✗"}
 
 def slugify(s):
     s = re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
@@ -678,7 +766,7 @@ def _to_float(s):
 
 def score_from_spec(spec, good=None, bad=None, slips=None,
                     actual_time=None, actual_hours=None,
-                    items=None, session=None, focus=None):
+                    items=None, session=None, focus=None, done=None):
     """Generic, deterministic habit-score evaluator. The habit's profile owns
     the rule (spec); the caller supplies only raw inputs. Returns a float
     score, or None when the spec is unusable / no inputs were given (callers
@@ -745,6 +833,35 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
             return float(ladder[idx])
         except (TypeError, ValueError):
             return None
+
+    if stype == "checklist":
+        # A fixed daily SET of named components, each with a weight; the caller
+        # passes the list of components actually completed (`done`, by id OR
+        # name). score = 100 * sum(completed weights) / sum(all weights).
+        # Generalises any multi-item daily routine — e.g. a supplement stack
+        # (morning ×2 + a night magnesium = 3 components, each weight 1, so a
+        # morning-only day scores 67). Equal weights = a plain fraction-done.
+        comps = spec.get("components")
+        if not isinstance(comps, list) or not comps or not isinstance(done, list):
+            return None
+        done_set = set(str(x).strip().lower() for x in done if str(x).strip())
+        total = 0.0
+        earned = 0.0
+        for c in comps:
+            if not isinstance(c, dict):
+                continue
+            w = _to_float(c.get("weight"))
+            if w is None or w <= 0:
+                w = 1.0
+            total += w
+            cid = str(c.get("id", "")).strip().lower()
+            cname = str(c.get("name", "")).strip().lower()
+            if (cid and cid in done_set) or (cname and cname in done_set):
+                earned += w
+        if total <= 0.0:
+            return None
+        # int(x + 0.5): predictable half-up (python round() is banker's).
+        return float(int(100.0 * earned / total + 0.5))
 
     if stype == "weighted_completion":
         if not isinstance(items, list) or not items:
@@ -844,6 +961,26 @@ def criteria_str(h):
 def is_done(v):
     return (v or "").strip().lower() in DONE_TRUE
 
+def is_skipped(v):
+    return (v or "").strip().lower() in SKIP_TOK
+
+def is_missed(v):
+    return (v or "").strip().lower() in MISS_TOK
+
+def day_status(v):
+    """Classify a Done-column token into one of the 3 states (or '' = not yet)."""
+    t = (v or "").strip().lower()
+    if t in DONE_TRUE:
+        return "done"
+    if t in SKIP_TOK:
+        return "skipped"
+    if t in MISS_TOK:
+        return "missed"
+    return ""
+
+# Canonical Done-column token for each state (what mark/autostatus write).
+STATUS_TOKEN = {"done": "x", "skipped": "skip", "missed": "miss"}
+
 def db_progress(con, h, date):
     if con is None:
         return "—"
@@ -856,15 +993,27 @@ def db_progress(con, h, date):
                           "WHERE habit_id=? AND occurred_on>=? AND occurred_on<=?",
                           (h["id"], start.isoformat(), today.isoformat())).fetchone()
         return row[0] if row else 0
+    def avg(start):
+        # mean of the period's logged daily scores (scored habits only)
+        row = con.execute("SELECT COALESCE(SUM(amount),0), COUNT(amount) FROM habit_events "
+                          "WHERE habit_id=? AND occurred_on>=? AND occurred_on<=?",
+                          (h["id"], start.isoformat(), today.isoformat())).fetchone()
+        s, c = (row[0], row[1]) if row else (0, 0)
+        return int(s / c + 0.5) if c else 0
     st = h["schedule_type"]
     if h["measured"]:
-        # amount-based progress, e.g. "2.5/4 L wk" / "12/20 km mo" / "1.5/4 L day"
+        # amount-based progress, e.g. "2.5/4 L wk" / "12/20 km mo" / "1.5/4 L day".
+        # A scored habit reads as a weekly/monthly AVERAGE of daily scores (not a
+        # sum), so 75 means "averaged 75 this week", labelled "wk avg" / "mo avg".
+        scored = isinstance(h.get("scoring"), dict)
         unit = (" " + h["unit"]) if h["unit"] else ""
         tgt = fmtnum(h["measure_target"]) if h["measure_target"] is not None else "?"
         if st == "weekly":
-            return f"{fmtnum(agg(week_start))}/{tgt}{unit} wk"
+            return (f"{avg(week_start)}/{tgt}{unit} wk avg" if scored
+                    else f"{fmtnum(agg(week_start))}/{tgt}{unit} wk")
         if st == "monthly":
-            return f"{fmtnum(agg(month_start))}/{tgt}{unit} mo"
+            return (f"{avg(month_start)}/{tgt}{unit} mo avg" if scored
+                    else f"{fmtnum(agg(month_start))}/{tgt}{unit} mo")
         return f"{fmtnum(agg(today))}/{tgt}{unit} day"
     tc = h["target_count"]
     if st == "weekly":
@@ -924,17 +1073,26 @@ def new_rows(habits, con, date):
              "done": "", "count": "", "note": ""} for h in habits]
 
 def mirror_rows(con, rows, date, by_name, now):
-    # Mirror a parsed table's done rows into the DB for <date>: the DB must end
-    # up matching exactly the md's done rows (so un-checking removes the event).
-    done = []
+    # Mirror a parsed table's MARKED rows into the DB for <date>: the DB must
+    # end up matching exactly the md's marked rows (so un-checking removes the
+    # event). A row is "marked" when its Done column carries any of the 3 state
+    # tokens — done (count>=1), skipped or missed (both count=0 so they never
+    # inflate done-tallies, but the record survives consolidate). A blank Done
+    # column is "not yet" → no DB row.
+    marked = []
     for r in rows:
-        if not is_done(r["done"]):
+        status = day_status(r["done"])
+        if not status:
             continue
         nm = r["name"].strip()
         if not nm:
             continue
         h = by_name.get(nm.lower())
         hid = (h["id"] if h else None) or slugify(nm)
+        if status != "done":
+            # skipped / missed: recorded but not a completion
+            marked.append((hid, nm, 0, None, (r["note"].strip() or None), status))
+            continue
         cell = str(r["count"]).strip()
         if h and h["measured"]:
             # the Count cell holds the measured amount (e.g. 2.5); count stays 1
@@ -949,21 +1107,21 @@ def mirror_rows(con, rows, date, by_name, now):
                 c = max(1, int(float(cell))) if cell else 1
             except (TypeError, ValueError):
                 c = 1
-        done.append((hid, nm, c, amount, (r["note"].strip() or None)))
-    ids = [d[0] for d in done]
+        marked.append((hid, nm, c, amount, (r["note"].strip() or None), "done"))
+    ids = [d[0] for d in marked]
     if ids:
         con.execute("DELETE FROM habit_events WHERE occurred_on=? AND habit_id NOT IN (%s)"
                     % ",".join("?" * len(ids)), [date] + ids)
     else:
         con.execute("DELETE FROM habit_events WHERE occurred_on=?", (date,))
-    for hid, nm, c, amount, note in done:
+    for hid, nm, c, amount, note, status in marked:
         con.execute(
-            "INSERT INTO habit_events (habit_id,habit,occurred_on,count,amount,source,note,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(habit_id,occurred_on) DO UPDATE SET "
-            "count=excluded.count, amount=excluded.amount, habit=excluded.habit, "
-            "source=excluded.source, note=excluded.note",
-            (hid, nm, date, c, amount, "habit-tracking", note, now))
-    return len(done)
+            "INSERT INTO habit_events (habit_id,habit,occurred_on,count,amount,status,source,note,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(habit_id,occurred_on) DO UPDATE SET "
+            "count=excluded.count, amount=excluded.amount, status=excluded.status, "
+            "habit=excluded.habit, source=excluded.source, note=excluded.note",
+            (hid, nm, date, c, amount, status, "habit-tracking", note, now))
+    return sum(1 for d in marked if d[5] == "done")
 
 def refresh_progress(con, rows, by_name, date):
     # Recompute every row's Criteria + Progress from the profile/DB (call AFTER
@@ -1018,6 +1176,11 @@ elif op == "mark":
     items_json   = sys.argv[16] if len(sys.argv) > 16 else ""  # weighted_completion
     session_json = sys.argv[17] if len(sys.argv) > 17 else ""  # session_volume
     focus_json   = sys.argv[18] if len(sys.argv) > 18 else ""  # focus_ratio
+    done_json    = sys.argv[19] if len(sys.argv) > 19 else ""  # checklist
+    status       = sys.argv[20] if len(sys.argv) > 20 else ""  # done|skipped|missed
+    status = (status or "").strip().lower()
+    if status not in ("done", "skipped", "missed"):
+        status = "done"
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -1031,6 +1194,7 @@ elif op == "mark":
     items_parsed = None
     session_parsed = None
     focus_parsed = None
+    done_parsed = None
     if items_json.strip():
         try:
             items_parsed = json.loads(items_json)
@@ -1046,15 +1210,21 @@ elif op == "mark":
             focus_parsed = json.loads(focus_json)
         except Exception:
             pass
-    if h.get("scoring") and (g is not None or b is not None or sl is not None
+    if done_json.strip():
+        try:
+            done_parsed = json.loads(done_json)
+        except Exception:
+            pass
+    if status == "done" and h.get("scoring") and (
+                             g is not None or b is not None or sl is not None
                              or a_time.strip() or a_hours.strip()
                              or items_parsed is not None or session_parsed is not None
-                             or focus_parsed is not None):
+                             or focus_parsed is not None or done_parsed is not None):
         val = score_from_spec(h["scoring"], good=g, bad=b, slips=sl,
                               actual_time=a_time.strip() or None,
                               actual_hours=a_hours.strip() or None,
                               items=items_parsed, session=session_parsed,
-                              focus=focus_parsed)
+                              focus=focus_parsed, done=done_parsed)
         if val is not None:
             amount = fmtnum(val)  # feed the measured-amount path below
     con = sqlite3.connect(db) if os.path.exists(db) else None
@@ -1063,7 +1233,11 @@ elif op == "mark":
             f"| {r['name']} | {r['criteria']} | {r['progress']} | {r['done']} | {r['count']} | {r['note']} |"
             for r in new_rows([x for x in habits if not x["archived"]], con, date)]) + "\n")
     pre, rows, post = parse_table(open(f).read())
-    if h["measured"]:
+    token = STATUS_TOKEN.get(status, "x")
+    if status != "done":
+        # skipped / missed: a recorded non-completion — no count/amount.
+        cval = ""
+    elif h["measured"]:
         # measured habit: the Count cell carries the amount (e.g. "2.5").
         # Prefer --amount; fall back to --count if that's the number given.
         raw = amount.strip() if amount.strip() else count.strip()
@@ -1082,16 +1256,16 @@ elif op == "mark":
     found = False
     for r in rows:
         if r["name"].strip().lower() == target:
-            r["done"] = "x"
-            if cval:
-                r["count"] = cval
+            r["done"] = token
+            # On a skip/miss, clear any stale count from an earlier done mark.
+            r["count"] = cval if cval else ("" if status != "done" else r["count"])
             if note.strip():
                 r["note"] = note.strip()
             found = True
             break
     if not found:
         rows.append({"name": h["name"], "criteria": criteria_str(h),
-                     "progress": db_progress(con, h, date), "done": "x",
+                     "progress": db_progress(con, h, date), "done": token,
                      "count": cval, "note": note.strip()})
     # Mirror today's marks into the DB and recompute every row's Progress so the
     # file shows live numbers the instant a habit is marked (not a stale snapshot
@@ -1106,7 +1280,8 @@ elif op == "mark":
     if con is not None:
         con.commit()
         con.close()
-    print(f"marked: {h['name']} on {date}")
+    verb = {"skipped": "skipped", "missed": "missed"}.get(status, "marked")
+    print(f"{verb}: {h['name']} on {date}")
 
 elif op == "score":
     # Pure deterministic evaluator — compute a habit's score from its profile
@@ -1121,6 +1296,7 @@ elif op == "score":
     items_json   = sys.argv[9]  if len(sys.argv) > 9  else ""
     session_json = sys.argv[10] if len(sys.argv) > 10 else ""
     focus_json   = sys.argv[11] if len(sys.argv) > 11 else ""
+    done_json    = sys.argv[12] if len(sys.argv) > 12 else ""
     habits = load_habits(profile)
     active = {h["name"].strip().lower(): h for h in habits if not h["archived"]}
     byid = {h["id"]: h for h in habits if not h["archived"]}
@@ -1128,6 +1304,7 @@ elif op == "score":
     items_parsed = None
     session_parsed = None
     focus_parsed = None
+    done_parsed = None
     if items_json.strip():
         try:
             items_parsed = json.loads(items_json)
@@ -1143,12 +1320,17 @@ elif op == "score":
             focus_parsed = json.loads(focus_json)
         except Exception:
             pass
+    if done_json.strip():
+        try:
+            done_parsed = json.loads(done_json)
+        except Exception:
+            pass
     val = score_from_spec(h.get("scoring"), good=_to_int(good), bad=_to_int(bad),
                           slips=_to_int(slips),
                           actual_time=a_time.strip() or None,
                           actual_hours=a_hours.strip() or None,
                           items=items_parsed, session=session_parsed,
-                          focus=focus_parsed) if h else None
+                          focus=focus_parsed, done=done_parsed) if h else None
     print(fmtnum(val) if val is not None else "")
 
 elif op == "sync":
@@ -1184,8 +1366,9 @@ elif op == "consolidate":
         refresh_progress(con, rows, by_name, date)
         con.commit()
         con.close()
-    # prune the day's file to only the habits actually done
-    kept = [r for r in rows if is_done(r["done"])]
+    # prune the day's file to the habits with a recorded STATE (done / skipped /
+    # missed) — the day's record survives, only the untouched "not yet" rows go.
+    kept = [r for r in rows if day_status(r["done"])]
     open(f, "w").write(render(pre, kept, post))
     print("consolidated")
 
@@ -1229,7 +1412,7 @@ pbrain_habit_track_init() {
 # habit (one with a unit + target) the amount is what's recorded. Scored habits
 # take classification inputs instead: good/bad/slips (slip_ladder, meal_ratio)
 # or actual_time/actual_hours (deviation) — the score lands in amount.
-pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json]
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json] [done_json] [status]
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
@@ -1237,25 +1420,34 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [sli
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
     "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')" \
-    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}" "${13:-}"
+    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}" "${13:-}" "${14:-}" "${15:-}"
 }
 
 # Compute (without writing) a scored habit's score from its profile rule + raw
 # inputs. Echoes the numeric score, or "" if not a scored habit.
-pbrain_habit_score() {  # <name> [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json]
+pbrain_habit_score() {  # <name> [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json] [done_json]
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   _pbrain_habit_track_py score "$(pbrain_habits_profile_file)" \
-    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}"
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}"
 }
 
 # Mirror the last <days> days of tracking files into the DB (idempotent). Run by
 # read commands so the DB reflects the md before querying. Dates with no md file
-# are left untouched.
+# are left untouched. After mirroring, the end-date file's Progress column is
+# refreshed so the visible tracker the user opens always agrees with the DB
+# rollup the caller is about to read — a manual `x` ticked in Obsidian (or an
+# Apple-Reminder completion already mirrored in) updates the file's counts
+# automatically, instead of showing a stale creation-time snapshot until the
+# end-of-day consolidate finally rewrites it.
 pbrain_habits_sync_range() {  # [days] [end_date]
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
   local _end_date="${2:-$(date +%Y-%m-%d)}"
   _pbrain_habit_track_py sync "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" \
     "$(pbrain_habit_track_dir)" "$_end_date" "${1:-7}" "$(date '+%Y-%m-%d %H:%M')" >/dev/null 2>&1 || true
+  # Reconcile the visible (end-date) tracker's Progress column with the DB so the
+  # file and the rollup never disagree. Idempotent; only rewrites if the file
+  # exists (refresh is a no-op otherwise).
+  pbrain_habit_refresh "$_end_date" >/dev/null 2>&1 || true
 }
 
 # Sync one date's md into the DB and prune that file to the habits actually done.
@@ -1436,11 +1628,23 @@ out = []
 for h in data.get("habits") or []:
     if h.get("archived"):
         continue
-    if isinstance(h.get("scoring"), dict):
+    sc = h.get("scoring")
+    if isinstance(sc, dict):
         n = str(h.get("name", "")).strip()
         notes = str(h.get("notes", "")).strip()
-        if n and notes:
-            out.append(f"  {n}: {notes}")
+        if not n:
+            continue
+        line = f"  {n}: {notes}" if notes else ""
+        if str(sc.get("type", "")).strip() == "checklist":
+            comps = [c for c in (sc.get("components") or []) if isinstance(c, dict)]
+            labels = ", ".join(
+                str(c.get("name") or c.get("id") or "").strip()
+                + (f" (w{c.get('weight')})" if c.get("weight") not in (None, 1, 1.0) else "")
+                for c in comps if (c.get("name") or c.get("id")))
+            if labels:
+                line = (line + " " if line else f"  {n}: ") + f"[checklist components — pass the ones done via --done: {labels}]"
+        if line:
+            out.append(line)
 print("\n".join(out))
 ' 2>/dev/null || true)"
 
@@ -1486,6 +1690,13 @@ print("\n".join(out))
   printf '%s\n' "    --session '{\"mode\":\"strength\",\"status\":\"completed\",\"planned\":120,\"actual\":115}'"
   printf '%s\n' "For binary sessions (yoga, sport): omit planned/actual, set mode=binary;"
   printf '%s\n' "score is status_credit x 100 (completed=100, partial=50, skipped=0)."
+  printf '%s\n' "Checklist scored habits (e.g. Supplements): a fixed daily set of named"
+  printf '%s\n' "components, each with a weight. Pass the JSON list of components the user"
+  printf '%s\n' "actually took/did today (by component name or id — see the rules below):"
+  printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today \\"
+  printf '%s\n' "    --done '[\"Morning vitamin D\", \"Magnesium (night)\"]'"
+  printf '%s\n' "score = 100 x done-weight / total-weight (e.g. 2 of 3 equal items = 67)."
+  printf '%s\n' "List ONLY what was done; omit the rest. Never guess the score yourself."
   if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
     printf '%s\n' "Classification rules per scored habit — use EXACTLY these definitions to count"
     printf '%s\n' "good/bad units; every eating occasion counts (snacks included), not just mains:"
@@ -1522,6 +1733,9 @@ print("\n".join(out))
   fi
   printf '%s\n' "If the user wants it, add it with:"
   printf '%s\n' "  bash \"$cmd_path\" add --name \"<X>\" --type daily|weekly|monthly --direction at_least|at_most [--target N] [--unit \"L\"] [--measure-target N] [--priority low|medium|high]"
+  printf '%s\n' "For a multi-item daily routine scored out of its parts (e.g. a supplement"
+  printf '%s\n' "stack, a skincare routine), add it as a CHECKLIST scored habit with"
+  printf '%s\n' "--components \"Item A; Item B=2; Item C\" (weight after = is optional, default 1)."
   printf '%s\n' "Whether or not they accept, record the suggestion so it isn't re-nagged:"
   printf '%s\n' "  bash \"$cmd_path\" suggest-seen --name \"<X>\""
   printf '%s\n' "If the user has told you they don't want habit suggestions, skip this."
