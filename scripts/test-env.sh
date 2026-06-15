@@ -5,6 +5,13 @@
 #   source scripts/test-env.sh on [--full]   # activate test mode
 #   source scripts/test-env.sh off            # restore real setup
 #   source scripts/test-env.sh status         # show current mode
+#   source scripts/test-env.sh clear          # wipe test data + deactivate
+#
+# Env var persistence:
+#   Sourcing sets vars in the current interactive shell immediately.
+#   Vars are also written to ~/.zshenv so that Claude Code's Bash tool
+#   (which spawns a fresh zsh per command) picks them up without any
+#   extra steps. 'off' and 'clear' remove the ~/.zshenv block.
 #
 # Without --full (minimal):
 #   Creates an empty isolated vault + config dir. Copies plane.json so
@@ -48,6 +55,7 @@ _pbrain_test_env() {
   local real_xdg="${XDG_CONFIG_HOME:-$HOME/.config}"
   local test_xdg="$HOME/.config/pbrain-test"
   local test_vault="$HOME/pbrain-test-vault"
+  local zshenv="$HOME/.zshenv"
 
   # Resolve real vault path now, before we override PBRAIN_VAULT
   local real_vault=""
@@ -59,6 +67,38 @@ _pbrain_test_env() {
   else
     real_vault="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault"
   fi
+
+  # Manage a clearly-marked block in ~/.zshenv so all zsh subprocesses
+  # (including the Bash tool's fresh shell per command) see the env vars.
+  _pbrain_sync_zshenv() {
+    local action="${1:-remove}"  # add | remove
+    # Remove any existing block first (idempotent)
+    python3 - "$zshenv" <<'PYEOF'
+import sys, os, re
+path = sys.argv[1]
+if not os.path.exists(path):
+    open(path, 'w').close()
+content = open(path).read()
+content = re.sub(r'\n?# BEGIN pbrain-test-env\n.*?# END pbrain-test-env\n?', '', content, flags=re.DOTALL)
+# Normalise trailing newline
+content = content.rstrip('\n')
+if content:
+    content += '\n'
+open(path, 'w').write(content)
+PYEOF
+    if [[ "$action" == "add" ]]; then
+      {
+        printf '\n# BEGIN pbrain-test-env\n'
+        printf 'export PBRAIN_VAULT="%s"\n' "$test_vault"
+        printf 'export XDG_CONFIG_HOME="%s"\n' "$test_xdg"
+        printf 'export PBRAIN_UPDATE_CHECK=0\n'
+        printf '# END pbrain-test-env\n'
+      } >> "$zshenv"
+      echo "  wrote env vars to ~/.zshenv (Bash tool will use test vault immediately)"
+    else
+      echo "  removed env vars from ~/.zshenv"
+    fi
+  }
 
   case "$cmd" in
     on)
@@ -83,8 +123,7 @@ _pbrain_test_env() {
       if $full; then
         echo "  seeding test environment from real setup..."
 
-        # 1. Config dir: plane.json (already done), pbrain.db, and small state files
-        #    Use sqlite3 backup for a clean DB snapshot (handles WAL correctly)
+        # Use sqlite3 backup for a clean DB snapshot (handles WAL correctly)
         local real_db="$real_xdg/pbrain/pbrain.db"
         local test_db="$test_xdg/pbrain/pbrain.db"
         if [[ -f "$real_db" && ! -f "$test_db" ]]; then
@@ -106,14 +145,14 @@ _pbrain_test_env() {
           fi
         done
 
-        # 2. vault/.pbrain/ — prefs, feedback, migrations ledger
+        # vault/.pbrain/ — prefs, feedback, migrations ledger
         if [[ -d "$real_vault/.pbrain" ]]; then
           mkdir -p "$test_vault/.pbrain"
           cp -rp "$real_vault/.pbrain/." "$test_vault/.pbrain/"
           echo "  copied vault/.pbrain/ (prefs + migrations ledger)"
         fi
 
-        # 3. life/ and fitness/ — all pbrain entries + versioned profiles + libraries
+        # life/ fitness/ agent-work/ — all pbrain entries + versioned profiles + libraries
         local d
         for d in life fitness agent-work; do
           if [[ -d "$real_vault/$d" ]]; then
@@ -124,7 +163,9 @@ _pbrain_test_env() {
         done
       fi
 
-      # ── Activate ─────────────────────────────────────────────────────────
+      # ── Persist to ~/.zshenv + activate in current shell ─────────────────
+      _pbrain_sync_zshenv add
+
       export PBRAIN_VAULT="$test_vault"
       export XDG_CONFIG_HOME="$test_xdg"
       export PBRAIN_UPDATE_CHECK=0
@@ -135,6 +176,7 @@ _pbrain_test_env() {
       ;;
 
     off)
+      _pbrain_sync_zshenv remove
       unset PBRAIN_VAULT XDG_CONFIG_HOME PBRAIN_UPDATE_CHECK
       echo "pbrain TEST MODE: OFF — real setup restored"
       ;;
@@ -151,18 +193,24 @@ _pbrain_test_env() {
       echo "  rm -rf $test_xdg/pbrain/"
       rm -rf "$test_vault"
       rm -rf "$test_xdg/pbrain"
+      _pbrain_sync_zshenv remove
       unset PBRAIN_VAULT XDG_CONFIG_HOME PBRAIN_UPDATE_CHECK
       echo "Done — test mode deactivated."
       ;;
 
     status)
-      if [[ "${PBRAIN_VAULT:-}" == "$HOME/pbrain-test-vault" ]]; then
-        echo "pbrain TEST MODE: ON"
+      if [[ "${PBRAIN_VAULT:-}" == "$test_vault" ]]; then
+        echo "pbrain TEST MODE: ON (current shell)"
         echo "  vault  = $PBRAIN_VAULT"
         echo "  config = ${XDG_CONFIG_HOME}/pbrain/"
       else
-        echo "pbrain TEST MODE: OFF (real setup active)"
+        echo "pbrain TEST MODE: OFF in current shell"
         [[ -n "${PBRAIN_VAULT:-}" ]] && echo "  vault  = $PBRAIN_VAULT  (PBRAIN_VAULT override)"
+      fi
+      if grep -q "BEGIN pbrain-test-env" "$zshenv" 2>/dev/null; then
+        echo "  ~/.zshenv: test env block ACTIVE (Bash tool uses test vault)"
+      else
+        echo "  ~/.zshenv: no test env block (Bash tool uses real vault)"
       fi
       ;;
 
@@ -171,6 +219,8 @@ _pbrain_test_env() {
       return 1
       ;;
   esac
+
+  unset -f _pbrain_sync_zshenv
 }
 
 _pbrain_test_env "$@"

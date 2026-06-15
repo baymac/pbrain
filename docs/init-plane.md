@@ -1,6 +1,6 @@
 # /init-plane
 
-> **Superseded by [`/project-manager`](project-manager.md)** for users who already have a vault — it absorbs this whole wizard (`probe|fetch|up|config|portless|status`) plus all Plane ops. `/init-plane` stays as the **vault-free** setup path (it needs no Obsidian vault), so it's still the right entry point when you're bootstrapping Plane before anything else.
+> **Superseded by [`/project-manager`](project-manager.md)** for users who already have a vault — it absorbs this whole wizard (`probe|fetch|up|config|vhost|status`) plus all Plane ops. `/init-plane` stays as the **vault-free** setup path (it needs no Obsidian vault), so it's still the right entry point when you're bootstrapping Plane before anything else.
 
 Stand up a **self-hosted [Plane](https://plane.so)** instance on your own machine and wire pbrain to it — so Plane becomes the project brain (a Linear-like UI with Module → Issue → Sub-issue), and pbrain's daily loop reads ready tasks from it and writes status back. Guided and idempotent, in the spirit of `/init-obsidian`.
 
@@ -26,24 +26,27 @@ Run `/init-plane` and follow the wizard. The underlying subcommands (also runnab
 | `/init-plane fetch` | Download Plane's `setup.sh` into the managed dir. |
 | `/init-plane up` | Run Plane's installer menu (Install the first time, then Start). |
 | `/init-plane config --api-key <t> --workspace <slug> --project <id>` | Wire pbrain to the instance (base URL defaults to `http://localhost`). |
-| `/init-plane portless [flags]` | Optional: front Plane with a stable `https://plane.localhost` via [portless](https://portless.sh). |
+| `/init-plane vhost [flags]` | Optional: move Plane off port 80 to a named vhost (default `http://plane.localhost:1800`) by editing its own `plane.env`. |
 | `/init-plane status` | Docker + Plane container + whether pbrain is configured. |
 
-## Named URL with portless (optional)
+## Named vhost on a non-80 port (optional)
 
-Plane self-host serves on `http://localhost` (port 80). If you'd rather hit it at a stable, named URL like **`https://plane.localhost`** — so it never collides with another local app on port 80 and you get local HTTPS — front it with [portless](https://portless.sh) (`vercel-labs/portless`, needs Node 24+):
+Plane self-host serves on `http://localhost` (port 80). If you'd rather hit it at a stable, named URL like **`http://plane.localhost:1800`** — so it never collides with another local app on port 80 — run:
 
 ```bash
-npm install -g portless        # one-time, if the probe shows portless: no
-/init-plane portless           # registers the alias + re-points pbrain
-portless proxy start           # bring the proxy up (sudo for :443; 'portless service install' persists it)
+/init-plane vhost              # default: --host plane.localhost --port 1800
 ```
 
-`/init-plane portless` runs `portless alias plane 80` (its documented static-route case "for Docker containers" — portless's HTTPS proxy is on 443, Plane's nginx on 80, no conflict) and re-points pbrain's `base_url` to `https://plane.localhost`, **preserving** your token / workspace / project. One required manual step on Plane's side: add `https://plane.localhost` to **`CORS_ALLOWED_ORIGINS`** (and `WEB_URL`) in Plane's `.env`, then restart Plane from `setup.sh` — otherwise the API rejects the new origin. Then `/project-manager test`.
+This edits Plane's OWN `plane.env` (`APP_DOMAIN=plane.localhost:1800`, `LISTEN_HTTP_PORT=1800`, which Plane substitutes into `WEB_URL`/`CORS_ALLOWED_ORIGINS` itself), restarts the Plane stack via `docker compose up -d`, and re-points pbrain's `base_url` to the loopback form `http://127.0.0.1:1800` — **preserving** your token / workspace / project. No sidecar proxy, no Node, no `/etc/hosts`. Plane's built-in Caddy is host-agnostic on its listener port, so:
 
-Flags: `--name` (default `plane`), `--plane-port` (default `80`; set it if you changed Plane's nginx port), `--no-tls` (plain http), `--url <explicit>`, `--remove` (drop the alias and restore `http://localhost`).
+- **Browser** uses the vanity URL `http://plane.localhost:1800` — `*.localhost` resolves to `127.0.0.1` for free in every modern browser (RFC 6761).
+- **pbrain** uses `http://127.0.0.1:1800` — numeric loopback, no DNS gymnastics.
 
-Tip: bring Plane up on plain `http://localhost` and confirm `/project-manager test` works **first**, then add portless — that isolates "is pbrain wired right" from "did Plane accept the custom host."
+Both URLs hit the same Plane stack on the same port. Then `/project-manager test` to verify.
+
+Flags: `--host` (default `plane.localhost`), `--port` (default `1800`), `--plane-home` (override env-file discovery — by default the command finds `plane.env` via `PBRAIN_PLANE_HOME` or by inspecting the running `plane-app-proxy-1` container), `--no-restart` (edit only, you restart manually), `--remove` (revert via the `plane.env.pbrain-bak` written on first apply, falling back to resetting the two keys if no backup is found).
+
+Tip: bring Plane up on plain `http://localhost` and confirm `/project-manager test` works **first**, then run `vhost` — that isolates "is pbrain wired right" from "did Plane restart cleanly on the new port."
 
 ## Notes
 

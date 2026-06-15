@@ -1,6 +1,6 @@
 ---
 description: The technical commander of Plane (makeplane) — pbrain's project brain. One pbrain project = one Plane PROJECT (a workspace holds many); each is a Module → Issue → Sub-issue tree with Plane's own UI. /project-manager sets up a local or Cloud Plane instance and then reads/writes work items so the daily loop (/plan-my-work, /end-of-day, /weekly-review) can pull ready tasks and push status back. Absorbs the old /init-plane self-host wizard plus all Plane ops (projects, ready, progress, review/enrich, move, priority, timeline). Use to set up Plane, sync the project registry, run a progress report, enrich thin issues, or change an issue's status/priority/date.
-argument-hint: (none=probe) | fetch | up | config … | status | setup … | use plane|markdown | test | projects [--sync] | ready [--projects …] | progress --projects … | review --projects … | move <tie> --to … | priority <tie> --value … | timeline <tie> --target-date …
+argument-hint: (none=probe) | fetch | up | config … | vhost [--host … --port …] | status | setup … | use plane|markdown | test | projects [--sync] | ready [--projects …] | progress --projects … | review --projects … | move <tie> --to … | priority <tie> --value … | timeline <tie> --target-date …
 ---
 Run this with your shell first (substituting any argument for `$ARGUMENTS`), then follow the INSTRUCTIONS below based on the token it prints:
 
@@ -14,7 +14,7 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 
 ## Setup wizard (absorbed from the old /init-plane)
 
-With **no argument** the script runs `probe` → `INIT_PLANE_PROBE` + machine state (`docker`, `docker_running`, `compose`, `selfhost_dir`, `setup_sh`, `plane_config`, `plane_running`, `configured`, `default_url`, `portless`, `node`). **Drive the wizard one step at a time from that state.** This is the same local self-host flow /init-plane had:
+With **no argument** the script runs `probe` → `INIT_PLANE_PROBE` + machine state (`docker`, `docker_running`, `compose`, `selfhost_dir`, `setup_sh`, `plane_config`, `plane_running`, `configured`, `default_url`, `plane_env`, `vhost_port`, `vhost_domain`). **Drive the wizard one step at a time from that state.** This is the same local self-host flow /init-plane had:
 
 1. **Prerequisites.** Plane self-host needs **Docker + Docker Compose running** (≈4 GB RAM, 2 cores). `docker: no` → install Docker Desktop and stop. `docker_running: no` → start it and stop. `compose: no` → update Docker Desktop.
 2. **`fetch`** → downloads Plane's official `setup.sh` (`INIT_PLANE_FETCHED`).
@@ -24,7 +24,7 @@ With **no argument** the script runs `probe` → `INIT_PLANE_PROBE` + machine st
 6. **Wire pbrain → Plane.** For the **local** instance run `config --api-key <token> --workspace <slug> --project <project-id>` (base URL defaults to `http://localhost`). For **Cloud or a remote host** run `setup --base-url <url> --api-key <token> --workspace <slug> --project <id>` (no localhost default). Either writes `~/.config/pbrain/plane.json` (mode 0600, never synced). Confirm `PLANE_CONFIGURED`.
 7. **Sync the registry.** Run `projects --sync` so all of the workspace's projects are known to pbrain (`PM_PROJECTS` + a JSON array of `{id,name,shortcut}`). Offer to add short `shortcut` codes by editing `plane.json` (e.g. `lt` for Lettuce) — they make `--projects lt,pb` ergonomic.
 8. **Verify.** `test` lists the project's states; `ready` shows ready issues. On `PLANE_ERROR`, relay it (bad token, wrong workspace/project, or Plane not fully up) and help fix it — don't loop.
-9. **(Optional) Named URL via portless.** If the probe shows `portless: yes` (Node 24+), `portless` gives Plane a stable `https://plane.localhost` and re-points pbrain at it (token/workspace/project preserved). Then start the proxy (`portless proxy start`), add the host to Plane's `CORS_ALLOWED_ORIGINS`/`WEB_URL`, restart Plane, and re-run `test`. Flags: `--name`, `--plane-port`, `--no-tls`, `--url`, `--remove`.
+9. **(Optional) Named vhost on a non-80 port.** Run `vhost` to move Plane off port 80 to a stable `http://plane.localhost:1800` (so port 80 is free for other local apps and the URL never collides). Zero new daemons — it edits Plane's OWN `plane.env` (`APP_DOMAIN` + `LISTEN_HTTP_PORT`, which Plane substitutes into `WEB_URL`/`CORS_ALLOWED_ORIGINS` automatically), restarts the Plane stack, and re-points pbrain's `base_url` to the loopback form `http://127.0.0.1:1800` (token/workspace/project preserved; the vanity host is browser-only). Plane's built-in Caddy is host-agnostic on its listener port, so both URLs hit the same backend. Flags: `--host` (default `plane.localhost`), `--port` (default `1800`), `--plane-home` (override env-file discovery), `--no-restart` (edit only), `--remove` (revert via the backup written on first apply). Then `test` to verify.
 
 `status` (`INIT_PLANE_STATUS`) shows Docker + Plane container + configured state at any time. Everything is idempotent.
 

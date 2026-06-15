@@ -4,7 +4,7 @@ The **technical commander of Plane** ([makeplane](https://plane.so)) — pbrain'
 
 One pbrain "project" = **one Plane PROJECT** (a workspace holds many), tracked in a small registry. **Plane is pbrain's sole project backend** — task-based planning and project progress require it. When Plane isn't configured, the ops below print a friendly "set Plane up" note and the daily-loop seams degrade to empty, so pbrain stays a working life-planner without them.
 
-> `/project-manager` absorbs the old [`/init-plane`](init-plane.md) self-host wizard (`probe|fetch|up|config|portless|status`) **plus** all Plane ops. `/init-plane` stays as the truly vault-free setup path; `/project-manager` is the richer tool once you have a vault.
+> `/project-manager` absorbs the old [`/init-plane`](init-plane.md) self-host wizard (`probe|fetch|up|config|vhost|status`) **plus** all Plane ops. `/init-plane` stays as the truly vault-free setup path; `/project-manager` is the richer tool once you have a vault.
 
 ## Setup (absorbed from /init-plane)
 
@@ -21,7 +21,7 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
    Either writes `~/.config/pbrain/plane.json` (mode `0600`, never synced).
 7. `projects --sync` — pull every project in the workspace into the registry. Add short `shortcut` codes (edit `plane.json`) so `--projects lt,pb` is ergonomic.
 8. **Verify** — `test` (lists states), `ready` (ready issues).
-9. **(Optional)** `portless` — a stable `https://plane.localhost` URL (needs Node 24+).
+9. **(Optional)** `vhost` — move Plane off port 80 to a stable `http://plane.localhost:1800`. Edits Plane's own `plane.env` (`APP_DOMAIN`, `LISTEN_HTTP_PORT`) — no sidecar proxy, no Node, no `/etc/hosts`. Browser uses the vanity URL (RFC 6761 resolves `*.localhost` for free); pbrain's `base_url` becomes `http://127.0.0.1:1800` (no DNS needed). Flags: `--host`, `--port`, `--plane-home`, `--no-restart`, `--remove`.
 
 `status` shows Docker + Plane container + configured state at any time. Everything is idempotent. **The API token is a secret — it is never echoed back.**
 

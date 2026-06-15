@@ -19,13 +19,13 @@
 #                         Stop/Restart/Upgrade — Plane owns lifecycle).
 #   config <flags>        Wire pbrain → the instance (delegates to lib/plane.py
 #                         setup; --base-url/--api-key/--workspace/--project).
-#   portless [flags]      Front Plane with a stable named .localhost URL via
-#                         portless (vercel-labs/portless): registers a static
-#                         alias (https://<name>.localhost -> localhost:<port>)
-#                         and re-points pbrain's base_url at it. Optional — the
-#                         plain http://localhost setup works without it. Flags:
-#                         --name (default plane), --plane-port (default 80),
-#                         --no-tls, --url <explicit>, --remove (tear it down).
+#   vhost [flags]         Move Plane off port 80 to a named vhost (default
+#                         http://plane.localhost:1800) by editing Plane's own
+#                         plane.env knobs (LISTEN_HTTP_PORT + APP_DOMAIN). No
+#                         sidecar proxy — Plane's built-in Caddy serves both the
+#                         vanity URL (browser) and 127.0.0.1:<port> (pbrain).
+#                         Flags: --host (default plane.localhost), --port
+#                         (default 1800), --plane-home, --no-restart, --remove.
 #   status                Show Docker + Plane container + pbrain backend state.
 #   help
 #
@@ -67,6 +67,28 @@ _plane_running() {
   return 1
 }
 
+# Locate Plane's plane.env. Order: explicit --plane-home flag → PBRAIN_PLANE_HOME
+# canonical path → discovery from a running Plane proxy container's compose
+# labels. Echoes the absolute path (or nothing) and returns 0 either way.
+_vhost_envfile() {
+  local home_override="${1:-}"
+  if [[ -n "$home_override" && -f "$home_override/plane.env" ]]; then
+    echo "$home_override/plane.env"; return 0
+  fi
+  if [[ -f "$PLANE_HOME/plane.env" ]]; then
+    echo "$PLANE_HOME/plane.env"; return 0
+  fi
+  _docker_running || return 0
+  local envf
+  envf="$(docker inspect plane-app-proxy-1 \
+    --format '{{ index .Config.Labels "com.docker.compose.project.environment_file" }}' \
+    2>/dev/null)"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    echo "$envf"; return 0
+  fi
+  return 0
+}
+
 # yes (0) when a Plane API key is reachable (env or config file) — Plane is the
 # sole project backend, so "configured" is the only state that matters now.
 _plane_configured() {
@@ -91,8 +113,16 @@ case "$SUB" in
     echo "configured: $(_plane_configured)"
     echo "default_url: $DEFAULT_URL"
     echo "setup_url: $SETUP_URL"
-    echo "portless: $(_have portless && echo yes || echo no)"
-    echo "node: $(_have node && node -v 2>/dev/null || echo absent)"
+    vhost_env="$(_vhost_envfile 2>/dev/null || true)"
+    if [[ -n "$vhost_env" && -f "$vhost_env" ]]; then
+      vh_port="$(awk -F= '/^LISTEN_HTTP_PORT=/{print $2}' "$vhost_env" | tail -1)"
+      vh_dom="$(awk -F= '/^APP_DOMAIN=/{print $2}' "$vhost_env" | tail -1)"
+      echo "plane_env: $vhost_env"
+      echo "vhost_port: ${vh_port:-80}"
+      echo "vhost_domain: ${vh_dom:-localhost}"
+    else
+      echo "plane_env: absent"
+    fi
     ;;
 
   fetch)
@@ -136,78 +166,112 @@ case "$SUB" in
     fi
     ;;
 
-  portless)
-    # Front the self-hosted Plane with a stable named URL via portless
-    # (https://portless.sh — vercel-labs/portless). Plane's nginx listens on a
-    # fixed port (default 80); portless's HTTPS proxy listens on 443, so there's
-    # no conflict. `portless alias <name> <port>` is the documented static-route
-    # case ("for Docker containers") — exactly Plane's shape. We then re-point
-    # pbrain's base_url at the named URL (lib/plane.py setup MERGES, so the
+  vhost)
+    # Move Plane off port 80 to a stable named vhost (default
+    # http://plane.localhost:1800) by editing its OWN env knobs in plane.env.
+    # No sidecar proxy: Plane's bundled Caddy is host-agnostic on its listener
+    # port, so both the vanity URL (browser) and http://127.0.0.1:<port>
+    # (pbrain's API client) land on the same backend. We then re-point pbrain's
+    # base_url at the loopback form (lib/plane.py setup MERGES, so the
     # api_key / workspace / project already on file are preserved).
-    NAME="plane"
-    PLANE_PORT="80"
-    SCHEME="https"
-    DO_REMOVE=no
-    URL_OVERRIDE=""
+    HOSTNAME="plane.localhost"; PORT="1800"; DO_REMOVE=no; NO_RESTART=no; PLANE_HOME_OVERRIDE=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --name)       NAME="${2:?--name needs a value}"; shift 2;;
-        --plane-port) PLANE_PORT="${2:?--plane-port needs a value}"; shift 2;;
-        --no-tls)     SCHEME="http"; shift;;
-        --url)        URL_OVERRIDE="${2:?--url needs a value}"; shift 2;;
+        --host)       HOSTNAME="${2:?--host needs a value}"; shift 2;;
+        --port)       PORT="${2:?--port needs a value}"; shift 2;;
+        --plane-home) PLANE_HOME_OVERRIDE="${2:?--plane-home needs a value}"; shift 2;;
+        --no-restart) NO_RESTART=yes; shift;;
         --remove)     DO_REMOVE=yes; shift;;
-        *) echo "pbrain: unknown flag for /init-plane portless: $1" >&2; exit 1;;
+        *) echo "pbrain: unknown flag for /init-plane vhost: $1" >&2; exit 1;;
       esac
     done
-
-    if ! _have portless; then
-      echo "INIT_PLANE_PORTLESS_MISSING"
-      echo "portless isn't installed. It needs Node.js 24+, then:"
-      echo "  npm install -g portless"
-      echo "Docs: https://portless.sh"
+    ENVFILE="$(_vhost_envfile "$PLANE_HOME_OVERRIDE")"
+    if [[ -z "$ENVFILE" || ! -f "$ENVFILE" ]]; then
+      echo "INIT_PLANE_VHOST_NO_ENV"
+      echo "Couldn't find Plane's plane.env. Bring Plane up via /init-plane fetch + up,"
+      echo "or set PBRAIN_PLANE_HOME to the directory containing plane.env."
       exit 0
     fi
-
-    echo "INIT_PLANE_PORTLESS"
+    if ! _docker_running; then
+      echo "INIT_PLANE_NEED_DOCKER Docker isn't running. Start Docker Desktop, then re-run."
+      exit 0
+    fi
+    PLANE_DIR="$(dirname "$ENVFILE")"
+    BACKUP="$ENVFILE.pbrain-bak"
     _has_creds() { grep -q '"api_key"' "$PLANE_CONFIG" 2>/dev/null; }
 
     if [[ "$DO_REMOVE" == yes ]]; then
-      portless alias --remove "$NAME" || true
-      echo "removed portless alias: $NAME"
-      if [[ -f "$PLANE_ENGINE" ]] && _has_creds; then
-        if python3 "$PLANE_ENGINE" setup --base-url "$DEFAULT_URL" >/dev/null; then
-          echo "pbrain base_url -> $DEFAULT_URL"
-        fi
+      echo "INIT_PLANE_VHOST_REMOVE"
+      if [[ -f "$BACKUP" ]]; then
+        mv "$BACKUP" "$ENVFILE"
+        echo "restored plane.env from $BACKUP"
+      else
+        python3 - "$ENVFILE" <<'PYEOF'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1]); t = p.read_text()
+def upsert(t, k, v):
+    pat = re.compile(rf"(?m)^{re.escape(k)}=.*$")
+    return pat.sub(f"{k}={v}", t) if pat.search(t) else t.rstrip() + f"\n{k}={v}\n"
+t = upsert(t, "APP_DOMAIN", "localhost")
+t = upsert(t, "LISTEN_HTTP_PORT", "80")
+p.write_text(t)
+PYEOF
+        echo "no backup found — reset APP_DOMAIN=localhost, LISTEN_HTTP_PORT=80 in $ENVFILE"
       fi
-      echo "Plane itself is untouched; trim $NAME.localhost from its CORS/WEB_URL if you added it."
+      if [[ "$NO_RESTART" == no ]]; then
+        ( cd "$PLANE_DIR" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
+        echo "restarted Plane on http://localhost"
+      fi
+      if [[ -f "$PLANE_ENGINE" ]] && _has_creds; then
+        python3 "$PLANE_ENGINE" setup --base-url "$DEFAULT_URL" >/dev/null
+        echo "pbrain base_url -> $DEFAULT_URL"
+      fi
       exit 0
     fi
 
-    URL="${URL_OVERRIDE:-$SCHEME://$NAME.localhost}"
-
-    # Register the static route. --force keeps re-runs idempotent.
-    if ! portless alias "$NAME" "$PLANE_PORT" --force; then
-      echo "INIT_PLANE_ERROR portless alias failed (is the portless proxy installed correctly?)" >&2
-      exit 1
+    # Apply: back up once, upsert the two knobs, restart, re-point pbrain.
+    if [[ ! -f "$BACKUP" ]]; then
+      cp "$ENVFILE" "$BACKUP"
     fi
-    echo "alias registered: $URL -> localhost:$PLANE_PORT"
-
-    # Re-point pbrain at the named URL (merge — token/workspace/project kept).
+    APP_DOMAIN_VAL="$HOSTNAME:$PORT"
+    python3 - "$ENVFILE" "$APP_DOMAIN_VAL" "$PORT" <<'PYEOF'
+import re, sys, pathlib
+envfile, app_domain, port = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(envfile); t = p.read_text()
+def upsert(t, k, v):
+    pat = re.compile(rf"(?m)^{re.escape(k)}=.*$")
+    return pat.sub(f"{k}={v}", t) if pat.search(t) else t.rstrip() + f"\n{k}={v}\n"
+t = upsert(t, "APP_DOMAIN", app_domain)
+t = upsert(t, "LISTEN_HTTP_PORT", port)
+p.write_text(t)
+PYEOF
+    echo "INIT_PLANE_VHOST"
+    echo "edited $ENVFILE:"
+    echo "  APP_DOMAIN=$APP_DOMAIN_VAL"
+    echo "  LISTEN_HTTP_PORT=$PORT"
+    echo "  (WEB_URL + CORS_ALLOWED_ORIGINS rebuild from APP_DOMAIN — Plane's own substitution)"
+    if [[ "$NO_RESTART" == yes ]]; then
+      echo "skipped restart (--no-restart) — apply with: cd \"$PLANE_DIR\" && docker compose --env-file plane.env up -d"
+    else
+      ( cd "$PLANE_DIR" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
+      echo "restarted Plane stack on host port $PORT"
+    fi
+    BROWSER_URL="http://$APP_DOMAIN_VAL"
+    PBRAIN_URL="http://127.0.0.1:$PORT"
     if [[ -f "$PLANE_ENGINE" ]] && _has_creds; then
-      if python3 "$PLANE_ENGINE" setup --base-url "$URL" >/dev/null; then
-        echo "pbrain base_url -> $URL"
+      if python3 "$PLANE_ENGINE" setup --base-url "$PBRAIN_URL" >/dev/null; then
+        echo "pbrain base_url -> $PBRAIN_URL"
       else
-        echo "INIT_PLANE_WARN could not update pbrain base_url; run: /init-plane config --base-url $URL"
+        echo "INIT_PLANE_WARN could not update pbrain base_url; run: /init-plane config --base-url $PBRAIN_URL"
       fi
     else
       echo "Plane isn't wired to pbrain yet — once it is, set the URL with:"
-      echo "  /init-plane config --base-url $URL --api-key <pat> --workspace <slug> --project <id>"
+      echo "  /init-plane config --base-url $PBRAIN_URL --api-key <pat> --workspace <slug> --project <id>"
     fi
-
     echo "next steps:"
-    echo "  1) start the proxy (once):  portless proxy start   (sudo binds :443; 'portless service install' persists it across reboots)"
-    echo "  2) allow the host in Plane's .env — add $URL to CORS_ALLOWED_ORIGINS / WEB_URL, then restart Plane from setup.sh"
-    echo "  3) verify the round-trip:    /project-manager test"
+    echo "  1) bookmark Plane in your browser:  $BROWSER_URL"
+    echo "  2) verify the round-trip:           /project-manager test"
+    echo "  3) revert any time:                 /init-plane vhost --remove"
     ;;
 
   status)
@@ -228,7 +292,7 @@ case "$SUB" in
 
   *)
     echo "pbrain: unknown /init-plane subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | portless | status | help" >&2
+    echo "Try: probe | fetch | up | config | vhost | status | help" >&2
     exit 1
     ;;
 esac

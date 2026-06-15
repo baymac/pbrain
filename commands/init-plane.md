@@ -1,8 +1,8 @@
 ---
 description: Set up a local self-hosted Plane (makeplane) instance and wire pbrain to it. Plane is pbrain's sole project brain (Module → Issue → Sub-issue + a Linear-like UI); pbrain's /plan-my-work and /end-of-day then read ready tasks from Plane and write status back. Guided, idempotent — safe to re-run. Use when the user wants to run Plane locally as pbrain's task tracker (task planning + project progress require Plane).
-argument-hint: (none) | fetch | up | config | portless | status
+argument-hint: (none) | fetch | up | config | vhost | status
 ---
-> **Note:** `/project-manager` now absorbs this wizard (`probe|fetch|up|config|portless|status`) plus all Plane ops, and is the preferred entry point once a vault exists. `/init-plane` stays as the vault-free setup path (it needs no Obsidian vault). If the user already has pbrain set up, point them at `/project-manager`.
+> **Note:** `/project-manager` now absorbs this wizard (`probe|fetch|up|config|vhost|status`) plus all Plane ops, and is the preferred entry point once a vault exists. `/init-plane` stays as the vault-free setup path (it needs no Obsidian vault). If the user already has pbrain set up, point them at `/project-manager`.
 
 This is a guided setup wizard (like /init-obsidian). Run the script with your shell, read the token it prints, and walk the user through the steps below. Substitute any argument for `$ARGUMENTS`:
 
@@ -35,7 +35,7 @@ The flow:
 
 7. **Verify.** Run `/project-manager test` (should list your project's states) and `/project-manager ready` (your ready issues). If you see `PLANE_ERROR`, relay it — usually a bad token, wrong workspace/project, or Plane not fully started yet — and help fix it; don't loop.
 
-8. **(Optional) Named URL via portless.** If the probe shows `portless: yes` (and `node:` is v24+), you can give Plane a stable `https://plane.localhost` instead of `http://localhost` — handy so the URL never collides with another local app on port 80. Run `init-plane portless` — it registers a portless static alias (`https://plane.localhost` → `localhost:80`) and re-points pbrain's `base_url` at it (your token/workspace/project are preserved). Then, as the printed steps say: start the proxy once (`portless proxy start`, or `portless service install` to persist), **add `https://plane.localhost` to Plane's `CORS_ALLOWED_ORIGINS` / `WEB_URL` in its `.env` and restart Plane**, and re-run `/project-manager test`. If `portless: no`, skip this — install portless with `npm install -g portless` (needs Node 24+) first, or just stay on `http://localhost`. Flags: `--name` (default `plane`), `--plane-port` (default `80`, set it if you changed Plane's nginx port), `--no-tls` (plain http), `--url <explicit>`, `--remove` (tear it down and restore `http://localhost`).
+8. **(Optional) Named vhost on a non-80 port.** Run `init-plane vhost` to move Plane off port 80 to a stable `http://plane.localhost:1800` — handy so the URL never collides with another local app on port 80. It edits Plane's OWN `plane.env` (`APP_DOMAIN` + `LISTEN_HTTP_PORT`, which Plane substitutes into `WEB_URL`/`CORS_ALLOWED_ORIGINS` itself), restarts the Plane stack, and re-points pbrain's `base_url` at the loopback form `http://127.0.0.1:1800` (your token/workspace/project are preserved). No sidecar proxy, no Node, no `/etc/hosts` — Plane's built-in Caddy listens host-agnostically on the new port, so the browser's vanity URL (resolved free by RFC 6761) and pbrain's loopback hit the same backend. Then `/project-manager test` to verify. Flags: `--host` (default `plane.localhost`), `--port` (default `1800`), `--plane-home` (override env-file discovery), `--no-restart` (edit only), `--remove` (revert via the backup written on first apply).
 
 After this, `/plan-my-work` pulls ready issues from Plane into the day's blocks and `/end-of-day` writes their status back.
 

@@ -62,66 +62,91 @@ teardown() { rm -rf "$TMP"; }
   [ "$perm" = "600" ]
 }
 
-@test "probe reports portless availability" {
+@test "probe reports plane_env (absent when no PBRAIN_PLANE_HOME plane.env)" {
+  # Force docker discovery to find nothing so a real Plane on the dev box
+  # doesn't leak into the result.
+  STUB="$TMP/nodock"; mkdir -p "$STUB"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/docker"; chmod +x "$STUB/docker"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" probe
+  [[ "$output" == *"plane_env: absent"* ]]
+}
+
+@test "probe reflects vhost state when plane.env is seeded" {
+  _seed_plane_env
   run IP probe
-  [[ "$output" == *"portless:"* ]]
-  [[ "$output" == *"node:"* ]]
+  [[ "$output" == *"plane_env: $PBRAIN_PLANE_HOME/plane.env"* ]]
+  [[ "$output" == *"vhost_port: 80"* ]]
+  [[ "$output" == *"vhost_domain: localhost"* ]]
 }
 
-@test "portless without portless installed gives an install hint (no crash)" {
-  # Strip any real portless from PATH so the missing-branch fires.
-  STUB="$TMP/nobin"; mkdir -p "$STUB"
-  for b in bash dirname readlink python3 grep curl docker node; do
-    src="$(command -v "$b" 2>/dev/null)"; [ -n "$src" ] && ln -sf "$src" "$STUB/$b"
-  done
-  run env PATH="$STUB" bash "$REPO_ROOT/commands/init-plane.sh" portless
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"INIT_PLANE_PORTLESS_MISSING"* ]]
-  [[ "$output" == *"npm install -g portless"* ]]
+# --- vhost --------------------------------------------------------------------
+# Sketch a fake Plane install (plane.env in PBRAIN_PLANE_HOME) and stub the
+# `docker` CLI so info/compose are silent no-ops. We do NOT exercise the
+# discovery-by-docker-inspect fallback here — the explicit PBRAIN_PLANE_HOME
+# path is the documented one.
+_seed_plane_env() {
+  mkdir -p "$PBRAIN_PLANE_HOME"
+  cat > "$PBRAIN_PLANE_HOME/plane.env" <<'ENV'
+APP_DOMAIN=localhost
+LISTEN_HTTP_PORT=80
+LISTEN_HTTPS_PORT=443
+WEB_URL=http://${APP_DOMAIN}
+CORS_ALLOWED_ORIGINS=http://${APP_DOMAIN}
+ENV
 }
-
-@test "portless registers a static alias and re-points pbrain base_url" {
-  # Wire pbrain to Plane first so creds exist to preserve.
-  IP config --api-key SECRET --workspace ws --project pid >/dev/null
-  # Stub the portless CLI to capture its args and succeed.
+_stub_docker() {
   STUB="$TMP/bin"; mkdir -p "$STUB"
-  printf '#!/usr/bin/env bash\necho "$@" >> "$PORTLESS_LOG"\nexit 0\n' > "$STUB/portless"
-  chmod +x "$STUB/portless"
-  export PORTLESS_LOG="$TMP/portless.log"
-  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" portless
+  printf '#!/usr/bin/env bash\nif [[ "$1" == info ]]; then exit 0; fi\nif [[ "$1" == compose ]]; then exit 0; fi\nexit 0\n' > "$STUB/docker"
+  chmod +x "$STUB/docker"
+  echo "$STUB"
+}
+
+@test "vhost without plane.env reports INIT_PLANE_VHOST_NO_ENV (no crash)" {
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" vhost
   [ "$status" -eq 0 ]
-  [[ "$output" == *"INIT_PLANE_PORTLESS"* ]]
-  [[ "$output" == *"https://plane.localhost"* ]]
-  # the alias call carried the right name + Plane port + idempotent --force
-  grep -q "alias plane 80 --force" "$PORTLESS_LOG"
-  # base_url re-pointed, creds preserved
-  grep -q '"base_url": "https://plane.localhost"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+  [[ "$output" == *"INIT_PLANE_VHOST_NO_ENV"* ]]
+}
+
+@test "vhost edits plane.env, backs it up, and re-points pbrain to 127.0.0.1" {
+  IP config --api-key SECRET --workspace ws --project pid >/dev/null
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" vhost
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INIT_PLANE_VHOST"* ]]
+  [[ "$output" == *"http://plane.localhost:1800"* ]]
+  grep -q '^APP_DOMAIN=plane.localhost:1800$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '^LISTEN_HTTP_PORT=1800$' "$PBRAIN_PLANE_HOME/plane.env"
+  [ -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
+  grep -q '"base_url": "http://127.0.0.1:1800"' "$XDG_CONFIG_HOME/pbrain/plane.json"
   grep -q '"api_key": "SECRET"' "$XDG_CONFIG_HOME/pbrain/plane.json"
   grep -q '"workspace": "ws"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
-@test "portless --name and --plane-port flow through; --no-tls flips scheme" {
+@test "vhost --host and --port flow through into plane.env and pbrain" {
   IP config --api-key SECRET --workspace ws --project pid >/dev/null
-  STUB="$TMP/bin"; mkdir -p "$STUB"
-  printf '#!/usr/bin/env bash\necho "$@" >> "$PORTLESS_LOG"\nexit 0\n' > "$STUB/portless"
-  chmod +x "$STUB/portless"
-  export PORTLESS_LOG="$TMP/portless2.log"
-  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" portless --name proj --plane-port 8080 --no-tls
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" vhost --host proj.localhost --port 8080
   [ "$status" -eq 0 ]
-  [[ "$output" == *"http://proj.localhost"* ]]
-  grep -q "alias proj 8080 --force" "$PORTLESS_LOG"
-  grep -q '"base_url": "http://proj.localhost"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+  [[ "$output" == *"http://proj.localhost:8080"* ]]
+  grep -q '^APP_DOMAIN=proj.localhost:8080$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '^LISTEN_HTTP_PORT=8080$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '"base_url": "http://127.0.0.1:8080"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
-@test "portless --remove tears down the alias and restores the local URL" {
-  IP config --base-url https://plane.localhost --api-key SECRET --workspace ws --project pid >/dev/null
-  STUB="$TMP/bin"; mkdir -p "$STUB"
-  printf '#!/usr/bin/env bash\necho "$@" >> "$PORTLESS_LOG"\nexit 0\n' > "$STUB/portless"
-  chmod +x "$STUB/portless"
-  export PORTLESS_LOG="$TMP/portless3.log"
-  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" portless --remove
+@test "vhost --remove restores plane.env from the backup and resets base_url" {
+  IP config --api-key SECRET --workspace ws --project pid >/dev/null
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" vhost >/dev/null
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" vhost --remove
   [ "$status" -eq 0 ]
-  grep -q "alias --remove plane" "$PORTLESS_LOG"
+  [[ "$output" == *"INIT_PLANE_VHOST_REMOVE"* ]]
+  grep -q '^APP_DOMAIN=localhost$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '^LISTEN_HTTP_PORT=80$' "$PBRAIN_PLANE_HOME/plane.env"
+  [ ! -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
   grep -q '"base_url": "http://localhost"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
