@@ -2345,6 +2345,21 @@ type: habits-profile
 EOF
 }
 
+# A flexible "N times per week" habit (schedule_type weekly + target_count, no
+# fixed days) — exercises the period-aware autostatus path.
+_write_flex_weekly() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+```json
+{"habits":[
+ {"id":"microneedling","name":"Microneedling","direction":"at_least","schedule_type":"weekly","target_count":2,"priority":"medium"}
+]}
+```
+EOF
+}
+
 _plant_fitness_lib_multi() {
   mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
   cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-library.v1.md" <<'EOF'
@@ -2516,6 +2531,37 @@ print('NONE' if not r else '%d|%s'%(r[0],r[1]))" "$PBRAIN_DB_FILE" "$1" "$2"
   [ "$status" -eq 0 ]
   [[ "$output" == *"skipped=1"* ]]
   [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
+}
+
+@test "autostatus: a flexible weekly-count habit is NOT auto-missed mid-week" {
+  _write_flex_weekly
+  HABITS track --date 2026-06-15 >/dev/null          # Monday — mid-week, unmarked
+  run HABITS autostatus --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"missed=0"* ]]                    # weekly count, not a daily miss
+  [ "$(_ev microneedling 2026-06-15)" = "NONE" ]     # left "not yet", pruned later
+}
+
+@test "autostatus: a flexible weekly-count habit short at week-end IS missed once" {
+  _write_flex_weekly
+  HABITS track --date 2026-06-21 >/dev/null          # Sunday closes the week, 0/2 done
+  run HABITS autostatus --date 2026-06-21
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"missed=1"* ]]
+  [ "$(_ev microneedling 2026-06-21)" = "0|missed" ]
+}
+
+@test "autostatus: a flexible weekly-count habit that hit target is NOT missed at week-end" {
+  _write_flex_weekly
+  HABITS track --date 2026-06-15 >/dev/null
+  HABITS mark --id microneedling --date 2026-06-15 >/dev/null   # done Mon
+  HABITS track --date 2026-06-18 >/dev/null
+  HABITS mark --id microneedling --date 2026-06-18 >/dev/null   # done Thu → 2/2 met
+  HABITS track --date 2026-06-21 >/dev/null
+  run HABITS autostatus --date 2026-06-21                        # Sunday — target already hit
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"missed=0"* ]]
+  [ "$(_ev microneedling 2026-06-21)" = "NONE" ]
 }
 
 # ═════════════════════════════════════════════════════════════════════════

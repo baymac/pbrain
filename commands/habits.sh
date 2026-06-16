@@ -1567,18 +1567,31 @@ PYEOF
     case "$RES" in
       ADDED\ *)
         rid="${RES#ADDED }"; rid="${rid%% *}"
-        python3 - "$PBRAIN_DB_FILE" "$hid" "$RE_DATE" "$rid" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+        # Record the tracking row, then CONFIRM it points at this rid. If the
+        # write failed (transient DB lock) or a row for (habit,date) already
+        # exists with a different rid, this reminder is untracked → an orphan the
+        # end-of-day sweep could never resolve. Delete it rather than leave it.
+        INS="$(python3 - "$PBRAIN_DB_FILE" "$hid" "$RE_DATE" "$rid" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
 import sqlite3, sys
 db, hid, date, rid, now = sys.argv[1:6]
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("INSERT OR IGNORE INTO habit_reminders (habit_id, occurred_on, reminder_id, status, created_at) VALUES (?,?,?,?,?)",
                 (hid, date, rid, 'pending', now))
-    con.commit(); con.close()
+    con.commit()
+    row = con.execute("SELECT reminder_id FROM habit_reminders WHERE habit_id=? AND occurred_on=?", (hid, date)).fetchone()
+    con.close()
+    if row and row[0] == rid:
+        print("OK")
 except Exception:
     pass
 PYEOF
-        CREATED=$((CREATED + 1)) ;;
+)"
+        if [[ "${INS:-}" == OK ]]; then
+          CREATED=$((CREATED + 1))
+        else
+          pbrain_reminders_run delete --id "$rid" >/dev/null 2>&1 || true
+        fi ;;
       ACCESS_DENIED) echo "ACCESS_DENIED"; exit 0 ;;
       UNAVAILABLE)   echo "UNAVAILABLE"; exit 0 ;;
       *) : ;;  # transient error — leave it, retry next run
@@ -1602,6 +1615,13 @@ fi
 #         doesn't linger as an overdue notification. Gated behind --sweep so the
 #         morning plan-my-day sync never deletes the day's not-yet-done reminders;
 #         end-of-day passes --sweep.
+#   ORPHAN sweep (also --sweep only): the three steps above are DB-row-driven, so
+#         a habit reminder that exists in the Reminders app but has NO tracking
+#         row (a create-without-recorded-row orphan — e.g. a transient DB lock
+#         during plan-my-day's ensure) is invisible to them and lingers overdue.
+#         So after the row sweep, list the app's pbrain reminders for <date> and
+#         delete any whose title matches a known habit name AND has no tracking
+#         row. The title+date match keeps /remind reminders and other days safe.
 # PULL runs first so PUSH never double-handles a row. Degrades silently without
 # Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
 # "SYNCED pulled=<n> pushed=<n> swept=<n>". Run by plan-my-day (morning, no sweep)
@@ -1675,13 +1695,16 @@ PYEOF
     esac
   done <<< "$PEND"
 
-  # PUSH: habit → reminder
+  # PUSH: habit → reminder. Pass the status JSON via argv, NOT a pipe: a pipe into
+  # `python3 - <<HEREDOC` collides on stdin (the heredoc wins), so json.load(stdin)
+  # would always read empty — pushed would silently stay 0.
   PUSHED=0
-  PUSH="$(pbrain_habits_status "$RS_DATE" | python3 - "$PBRAIN_DB_FILE" "$RS_DATE" <<'PYEOF' 2>/dev/null || true
+  PUSH_STATUS="$(pbrain_habits_status "$RS_DATE" 2>/dev/null || true)"
+  PUSH="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" "$PUSH_STATUS" <<'PYEOF' 2>/dev/null || true
 import json, sys, sqlite3
-db, date = sys.argv[1:3]
+db, date, status_json = sys.argv[1:4]
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(status_json) if status_json.strip() else {}
 except Exception:
     sys.exit(0)
 done_ids = set()
@@ -1726,6 +1749,51 @@ PYEOF
       _hr_set_status "$hid" "$RS_DATE" cancelled
       SWEPT=$((SWEPT + 1))
     done <<< "$SWP"
+
+    # ORPHAN sweep: app reminders pbrain created for a habit but never recorded a
+    # row for. Match on (due date == RS_DATE) AND (title == a known habit name) so
+    # /remind reminders and other days are never touched; skip anything already
+    # tracked (handled above). Best-effort — silent if the helper is unavailable.
+    APP_LIST="$(pbrain_reminders_run list 2>/dev/null || true)"
+    if [[ -n "${APP_LIST//[[:space:]]/}" ]]; then
+      ORPHANS="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RS_DATE" "$APP_LIST" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+profile, db, date, app_list = sys.argv[1:5]
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+names = {str(h.get("name", "")).strip().lower() for h in (data.get("habits") or []) if str(h.get("name", "")).strip()}
+tracked = set()
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for (rid,) in con.execute("SELECT reminder_id FROM habit_reminders WHERE occurred_on=?", (date,)).fetchall():
+        if rid:
+            tracked.add(rid.strip())
+    con.close()
+except Exception:
+    pass
+for line in app_list.splitlines():
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 2:
+        continue
+    rid, due, title = parts[0].strip(), parts[1].strip(), parts[-1].strip()
+    if not rid or rid in tracked:
+        continue
+    if not due.startswith(date):
+        continue   # other day / no due date — never touch
+    if title.lower() not in names:
+        continue   # not a habit reminder (e.g. a /remind item) — never touch
+    print(rid)
+PYEOF
+)"
+      while IFS= read -r orid; do
+        [[ -n "${orid//[[:space:]]/}" ]] || continue
+        pbrain_reminders_run delete --id "$orid" >/dev/null 2>&1 || true
+        SWEPT=$((SWEPT + 1))
+      done <<< "$ORPHANS"
+    fi
   fi
 
   echo "SYNCED pulled=$PULLED pushed=$PUSHED swept=$SWEPT"
@@ -2049,6 +2117,16 @@ fi
 #   - is_due today AND a BUILD (at_least) habit with no mark → mark --status missed
 #   - not is_due today                          → leave (off day)
 # Limit (at_most) habits are never auto-missed — NOT doing them is success.
+#
+# FLEXIBLE COUNT habits ("N times per week/month" — schedule_type weekly/monthly
+# with target_count, or an explicit schedule carrying times_per_week/month) have
+# NO specific required day: only the weekly/monthly COUNT matters. They are
+# judged over the WHOLE period, never auto-missed on an individual day. autostatus
+# only records a miss for them on the LAST day of the period (Sunday / month-end)
+# and only when the period's completed count is still below target. On any other
+# day they are left untouched (an unmarked day is just "not yet", pruned by
+# consolidate) — so doing one on Tuesday no longer makes Monday a false miss.
+#
 # Run by /end-of-day BEFORE reminders-sync --sweep + consolidate.
 # Echoes: AUTOSTATUS missed=<n> skipped=<n>
 # ---------------------------------------------------------------------------
@@ -2065,14 +2143,15 @@ if [[ "$SUB" == "autostatus" ]]; then
   [[ "$AS_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$AS_DATE'"; exit 0; }
   AS_FILE="$(pbrain_habit_track_file "$AS_DATE")"
   AS_PLAN="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$AS_FILE" "$AS_DATE" <<'PYEOF' 2>/dev/null || true
-import json, re, sys
+import json, re, sys, os, datetime, calendar
 libdir, profile, trackfile, date = sys.argv[1:5]
 sys.path.insert(0, libdir)
 try:
-    from habit_schedule import derive_schedule, is_due
+    from habit_schedule import derive_schedule, is_due, norm_days
 except Exception:
     def derive_schedule(h): return {"type": "daily"}
     def is_due(s, d): return True
+    def norm_days(x): return [str(t).strip().lower() for t in (x or [])]
 
 DONE_TRUE = {"x", "yes", "y", "done", "true", "1", "✅", "✓"}
 SKIP_TOK  = {"skip", "skipped", "⊘"}
@@ -2084,25 +2163,95 @@ def day_status(v):
     if t in MISS_TOK:  return "missed"
     return ""
 
-# The md tracker is the source of truth for the day. Build name → current state.
-status_by_name = {}
-try:
-    lines = open(trackfile).read().splitlines()
-except Exception:
-    lines = []
-hi = None
-for i, l in enumerate(lines):
-    if re.match(r"\s*\|\s*Habit\s*\|", l):
-        hi = i
-        break
-if hi is not None:
-    j = hi + 2
-    while j < len(lines) and lines[j].strip().startswith("|"):
-        cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
-        while len(cells) < 6:
-            cells.append("")
-        status_by_name[cells[0].strip().lower()] = day_status(cells[3])
-        j += 1
+# A dated md tracker is the source of truth for that day. Parse name → state.
+_file_cache = {}
+def file_statuses(fp):
+    if fp in _file_cache:
+        return _file_cache[fp]
+    out = {}
+    try:
+        lines = open(fp).read().splitlines()
+    except Exception:
+        lines = []
+    hi = None
+    for i, l in enumerate(lines):
+        if re.match(r"\s*\|\s*Habit\s*\|", l):
+            hi = i
+            break
+    if hi is not None:
+        j = hi + 2
+        while j < len(lines) and lines[j].strip().startswith("|"):
+            cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+            while len(cells) < 6:
+                cells.append("")
+            out[cells[0].strip().lower()] = day_status(cells[3])
+            j += 1
+    _file_cache[fp] = out
+    return out
+
+status_by_name = file_statuses(trackfile)
+TRACK_DIR = os.path.dirname(trackfile)
+
+def flexible_target(h):
+    # A frequency-based ("N times per week/month") habit has no fixed required
+    # day — only a weekly/monthly COUNT target. Returns (target, period) for such
+    # habits, else None (daily / interval / explicit fixed-day schedules).
+    s = h.get("schedule")
+    if isinstance(s, dict) and s.get("type"):
+        for k, per in (("times_per_week", "week"), ("times_per_month", "month")):
+            if s.get(k):
+                try:
+                    return (max(1, int(s[k])), per)
+                except (TypeError, ValueError):
+                    return (1, per)
+        return None
+    rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+    if norm_days(rem.get("days")):
+        return None
+    st = str(h.get("schedule_type", "") or "").strip().lower()
+    if st in ("weekly", "monthly"):
+        try:
+            t = max(1, int(h.get("target_count")))
+        except (TypeError, ValueError):
+            t = 1
+        return (t, "week" if st == "weekly" else "month")
+    return None
+
+def is_period_end(period, date_iso):
+    try:
+        d = datetime.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return False
+    if period == "week":
+        return d.weekday() == 6          # Sunday closes the ISO week
+    if period == "month":
+        return d.day == calendar.monthrange(d.year, d.month)[1]
+    return False
+
+def done_in_period(period, date_iso, name):
+    # Count done marks for this habit across the whole period up to date_iso,
+    # reading each dated tracker file (sibling of trackfile).
+    try:
+        d = datetime.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return 0
+    if period == "week":
+        start = d - datetime.timedelta(days=d.weekday())
+        days = [start + datetime.timedelta(days=i) for i in range(7)]
+    elif period == "month":
+        last = calendar.monthrange(d.year, d.month)[1]
+        days = [datetime.date(d.year, d.month, k) for k in range(1, last + 1)]
+    else:
+        days = [d]
+    cnt = 0
+    key = name.strip().lower()
+    for dd in days:
+        if dd > d:
+            break
+        fp = os.path.join(TRACK_DIR, dd.isoformat() + ".md")
+        if file_statuses(fp).get(key) == "done":
+            cnt += 1
+    return cnt
 
 try:
     m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
@@ -2121,7 +2270,10 @@ for h in (data.get("habits") or []):
     nm = str(h.get("name", "")).strip()
     if not nm:
         continue
-    due = is_due(derive_schedule(h), date)
+    flex = flexible_target(h)
+    # A flexible-count habit has no fixed due-day, so treat it as "in play" every
+    # day for skipped-counting; its miss is decided over the whole period below.
+    due = True if flex is not None else is_due(derive_schedule(h), date)
     cur = status_by_name.get(nm.lower(), "")
     if cur == "skipped":
         if due:
@@ -2129,10 +2281,17 @@ for h in (data.get("habits") or []):
         continue
     if cur in ("done", "missed"):
         continue
-    if not due:
-        continue
     if direction != "at_least":
         continue   # not doing a limit habit is success, not a miss
+    if flex is not None:
+        target, period = flex
+        # Only a real miss once the period closes and the count fell short —
+        # never per-day. Mid-period unmarked days stay "not yet" (pruned).
+        if is_period_end(period, date) and done_in_period(period, date, nm) < target:
+            miss.append(nm)
+        continue
+    if not due:
+        continue
     miss.append(nm)
 print("SKIPPED\t%d" % skipped)
 for nm in miss:
