@@ -289,6 +289,9 @@ class PlaneClient:
             return res
         return None
 
+    def create_project(self, body):
+        return self._request("POST", "projects/", body=body)
+
     def create_work_item(self, project_id, body):
         return self._request("POST", "projects/%s/work-items/" % project_id, body=body)
 
@@ -428,7 +431,12 @@ def thinness_flags(issue, sub_count=None):
     Treats an ABSENT field as "can't assess" (no flag) — only a field that is
     present-but-empty is thin. Avoids false enrichment proposals when a
     self-host version simply doesn't return a field. Flags:
-      no_description | no_estimate | no_priority | no_subissues
+      no_description | no_priority
+
+    no_estimate is intentionally omitted: Plane's estimate_point requires a
+    UUID-based scheme configured in the UI. Without one, the API returns 400
+    on any PATCH — the flag is structurally unresolvable. Estimates live in
+    the tracker's free-text Est column instead.
     """
     flags = []
     if "description_stripped" in issue or "description_html" in issue:
@@ -436,12 +444,8 @@ def thinness_flags(issue, sub_count=None):
         html = (issue.get("description_html") or "").strip()
         if not stripped and html in ("", "<p></p>", "<p><br></p>"):
             flags.append("no_description")
-    if "estimate_point" in issue and not issue.get("estimate_point"):
-        flags.append("no_estimate")
     if "priority" in issue and (issue.get("priority") in (None, "", "none")):
         flags.append("no_priority")
-    if sub_count is not None and sub_count == 0:
-        flags.append("no_subissues")
     return flags
 
 
@@ -453,10 +457,19 @@ ENRICH_FIELD_MAP = {
     "estimate_point": "estimate_point",
     "target_date": "target_date",
     "due": "target_date",
+    "start_date": "start_date",
     "timeline": "target_date",
     "title": "name",
     "name": "name",
+    "assignees": "assignees",
+    "assignee": "assignees",
 }
+
+# Relation types supported by Plane's relations API.
+RELATION_TYPES = frozenset(
+    ["blocking", "blocked_by", "relates_to", "duplicate",
+     "start_after", "start_before", "finish_after", "finish_before"]
+)
 
 
 def build_enrich_body(field, value):
@@ -579,8 +592,9 @@ def progress(cfg, client, project_ids, since=None):
 
 
 def review_scan(cfg, client, project_ids, include_backlog=False):
-    """Read-only: for each ready issue, fetch its full record + sub-issue count
-    and flag thin ones. Never writes."""
+    """Read-only: for each top-level ready issue, fetch its full record and flag
+    thin ones. Sub-tasks (parent != None) are excluded — they're enriched via
+    their parent. Never writes."""
     out = []
     for pid in project_ids:
         try:
@@ -594,9 +608,9 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
                 issue = client.get_work_item(pid, iid)
             except PlaneError:
                 continue
-            subs = client.list_sub_issues(pid, iid)
-            sub_count = len(subs) if subs is not None else None
-            flags = thinness_flags(issue, sub_count)
+            if issue.get("parent"):
+                continue
+            flags = thinness_flags(issue)
             if flags:
                 out.append({"tie": r["tie"], "project_id": pid, "project": label,
                             "id": r.get("id"), "title": r["title"], "flags": flags})
@@ -604,9 +618,11 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
 
 
 def enrich(cfg, client, edits):
-    """Apply confirmed enrichments. edits: [{tie, field, value}]. field
-    'subissue' POSTs a sub-issue; everything else PATCHes the issue. Only ever
-    called after an explicit per-item confirm in the command layer."""
+    """Apply confirmed enrichments. edits: [{tie, field, value}]. Special fields:
+    'subissue'/'subtask' — POSTs a sub-issue (value = title string).
+    'relation:<type>' — POSTs a relation (value = target tie or issue uuid).
+    Everything else PATCHes the issue via ENRICH_FIELD_MAP. Only ever called
+    after an explicit per-item confirm in the command layer."""
     summary = []
     for e in edits:
         tie = normalize_tie(cfg, e.get("tie", ""))
@@ -619,6 +635,16 @@ def enrich(cfg, client, edits):
         try:
             if field in ("subissue", "sub_issue", "subtask"):
                 client.create_sub_issue(pid, iid, {"name": value})
+            elif field.startswith("relation:"):
+                rel_type = field.split(":", 1)[1]
+                if rel_type not in RELATION_TYPES:
+                    raise PlaneError("unknown relation type: %s (valid: %s)"
+                                     % (rel_type, ", ".join(sorted(RELATION_TYPES))))
+                # value may be a full tie (pid:iid) or a bare uuid
+                target_iid = value.split(":", 1)[-1] if ":" in str(value) else value
+                path = "projects/%s/work-items/%s/relations/" % (pid, iid)
+                client._request("POST", path,
+                                body={"relation_type": rel_type, "issues": [target_iid]})
             else:
                 client.update_work_item(pid, iid, build_enrich_body(field, value))
             summary.append({"tie": tie, "ok": True, "field": field})
@@ -642,6 +668,34 @@ def completed_today(cfg, client, project_ids, date):
                             "title": it.get("name", ""), "project": label,
                             "project_id": pid})
     return out
+
+
+def create_issue(cfg, client, project_ref, title, priority=None, target_date=None):
+    """Create a work item in the given project. Returns the created issue dict."""
+    pid = resolve_project_ref(cfg, project_ref)
+    if not pid:
+        raise PlaneError("unknown project: %s" % project_ref)
+    body = {"name": title}
+    if priority and priority != "none":
+        body["priority"] = priority
+    if target_date:
+        body["target_date"] = target_date
+    result = client.create_work_item(pid, body)
+    return {"project_id": pid, "project": project_label(cfg, pid), "issue": result}
+
+
+def create_project(cfg, client, name, shortcut=None):
+    """Create a new Plane project in the workspace and add it to the registry."""
+    body = {"name": name, "network": 0, "identifier": (shortcut or name[:3]).upper()}
+    result = client.create_project(body)
+    pid = result.get("id")
+    if not pid:
+        raise PlaneError("Plane returned no id for new project")
+    reg = normalize_registry(cfg)
+    reg.append({"id": pid, "name": name, "shortcut": shortcut or ""})
+    cfg["projects"] = reg
+    save_config(cfg)
+    return {"id": pid, "name": name, "shortcut": shortcut or ""}
 
 
 def move_status(cfg, client, tie, status, completed_at=None):
@@ -838,6 +892,23 @@ def cmd_move(args):
     return 0
 
 
+def cmd_issue(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    result = create_issue(cfg, client, args.project, args.title,
+                          priority=args.priority, target_date=args.target_date)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def cmd_project_create(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    result = create_project(cfg, client, args.name, shortcut=args.shortcut)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="plane.py")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -890,6 +961,19 @@ def build_parser():
     sp.add_argument("--tie", required=True); sp.add_argument("--status", required=True)
     sp.add_argument("--completed-at")
     sp.set_defaults(func=cmd_move)
+
+    sp = sub.add_parser("issue")
+    sp.add_argument("--project", required=True, help="project uuid|name|shortcut")
+    sp.add_argument("--title", required=True)
+    sp.add_argument("--priority", default=None, choices=["urgent", "high", "medium", "low", "none"])
+    sp.add_argument("--target-date", default=None)
+    sp.set_defaults(func=cmd_issue)
+
+    sp = sub.add_parser("project-create")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--shortcut", default=None, help="short alias, e.g. 'dj'")
+    sp.set_defaults(func=cmd_project_create)
+
     return p
 
 

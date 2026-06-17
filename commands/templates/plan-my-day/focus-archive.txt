@@ -1,0 +1,6 @@
+The user named an item to archive (id or shortcut in their message). Identify it
+from the current_focus list, quote it back to confirm, then:
+1. Remove the entry from current_focus in the profile file (in-place edit).
+2. In the library card (work-library or goals-library per lib), set
+   "timeline": {"started": "<created date or best estimate>", "ended": "$TODAY"}
+3. Confirm: "Archived '[name]' — library card stamped with end date."

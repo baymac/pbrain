@@ -42,20 +42,26 @@ If you had the old `Goals Profile.md` (or `plan-profile.json`), the first run af
 
 ## Daily flow
 
-After setup, every run:
+A bare `/plan-my-day` **smart-dispatches**: the **`plan`** flow below when today has no plan yet, or a light **`update`** pass when today's plan already exists. Force either with `/plan-my-day plan` or `/plan-my-day update`.
 
-1. Reads your plans profile + both libraries + today's `/fitness-journal` (including recorded **sleep data** *and* the **chosen activity** from its `focus:` field) + today's `/journal` + the diet profile's **meal times** + today's **scheduled fitness activity** + the last 7 day-plans + your calendar + your habit rollup.
+The `plan` flow:
+
+1. Reads your plans profile (the full lens — `current_focus`, `working_style`, `typical_day`, `daily_anchors`, `variation_rules`, `anti_patterns`) + today's `/fitness-journal` (including recorded **sleep data** *and* the **chosen activity** from its `focus:` field) + today's `/journal` + the diet profile's **meal times** + today's **scheduled fitness activity** + a compact **3-day shape digest** (wake · #blocks · meal times · energy — not the full text of recent plans) + carry-forward + your calendar + your habit rollup. The work/goals libraries are **not** loaded for planning — blocks are empty placeholders and the libraries belong to [`/plan-my-work`](plan-my-work.md).
    - **Activity-aware habit reminders.** When today's fitness entry names a chosen activity, the planner reconciles your fitness-habit reminders to it deterministically: the matching habit's reminder is set (even off its usual schedule), and any *other* fitness habit that was scheduled today but isn't the one you chose has its reminder cancelled and is auto-**skipped** (no stale "go to the gym" notification on a day you did Apple Fitness instead). Floating activities (Yoga, Meditation) that co-occur with a workout are never auto-skipped.
-2. Surfaces your `current_focus` as the anchor for today.
-3. **Wake time** — confirmed from the fitness entry if recorded; otherwise "what time did you wake up?"
-4. **Backfill** — "what have you done since waking?" slotted gap-free, no overlaps.
-5. **Today's shape** — when a `typical_day` template exists, the planner picks `workday` vs `rest_day` (from your `rest_days`), lays it as today's padded baseline, anchors today's non-negotiables (calendar + an explicit "anything that can't move?" ask) **first**, then applies `variation_rules` — preponing/postponing around the fixed points, detecting a non-gym fitness day or a late wake-up, keeping the meal count, and proposing its own reshaped day for you to accept or tweak. (No template yet → it plans from scratch and offers to add one.)
-6. **Focus hours → block layout** — "how many focused hours from now?" The planner computes work blocks around your **life anchors** (calendar events, the fitness session, meal slots, the walk/wind-down/bed, habit reminder times) and lays the blocks as **generic placeholders** ("Block N — focus work"). Anchors are life structure only — work is never an anchor; it fills the gaps the anchors leave.
-7. Confirm the gap-free **Today at a glance** table, then it writes the plan and nudges you to run **[`/plan-my-work`](plan-my-work.md)** to fill the blocks with tasks.
+2. **Wake time** — confirmed from the fitness entry if recorded; otherwise "what time did you wake up?"
+3. **Backfill** — "what have you done since waking?" slotted gap-free, no overlaps.
+4. **Today's shape** — when a `typical_day` template exists, the planner picks `workday` vs `rest_day` (from your `rest_days`), lays it as today's padded baseline, anchors today's non-negotiables (calendar + an explicit "anything that can't move?" ask) **first**, then applies `variation_rules` — preponing/postponing around the fixed points, detecting a non-gym fitness day or a late wake-up, keeping the meal count, and proposing its own reshaped day for you to accept or tweak. (No template yet → it plans from scratch and offers to add one.)
+5. **Focus hours → block layout** — "how many focused hours from now?" The planner computes work blocks around your **life anchors** (calendar events, the fitness session, meal slots, the walk/wind-down/bed, habit reminder times) and lays the blocks as **generic placeholders** ("Block N — focus work"). Anchors are life structure only — work is never an anchor; it fills the gaps the anchors leave.
+6. Confirm the gap-free **Today at a glance** table, then it writes the plan and nudges you to run **[`/plan-my-work`](plan-my-work.md)** to fill the blocks with tasks.
+7. **Habit reconcile (automatic, silent).** After the plan is written, the habit module scans today's vault entries (journal, gratitude, thoughts, fitness, diet, planning) for evidence of any tracked habit, marks what it finds, and realigns today's one-shot reminders to the planned times. Permanent reminder/schedule changes stay in [`/habits`](habits.md).
+
+### Update — revising today's plan
+
+When today's plan already exists, `/plan-my-day` (or `/plan-my-day update`) loads **only** today's plan + your `current_focus` lens + this week's/month's goals — no libraries, no recent-day digest, no planning prompt — and helps you tweak it in place: update "How it went", add/move/drop a row, re-split blocks. End-of-day reconciliation (actual vs plan, Plane sync, scoring) stays in [`/end-of-day`](end-of-day.md).
 
 **AUTO-LIBRARY**: if you mention a project or goal not already in a library card, the planner offers to register a shortcut card (name + shortcut + context) so future sessions can reference it by name or shortcut.
 
-The plan includes: a **Today at a glance** schedule table (work blocks are placeholders), **Today's focus** (the week's projects), **Anchors** (life only), **Blocks**, **Breaks & movement**, **Eating**, **Rest**, **Avoiding today**, **Notes**, and a lean **How it went** template `/end-of-day` fills at close (**Executive summary**, **Goal progress**, **Sleep**, **Carry-forward**). It **no longer writes a Task log** — [`/plan-my-work`](plan-my-work.md) writes the `## Work tracker` when it fills the blocks.
+The plan includes: a **Today at a glance** schedule table (work blocks are placeholders), **Anchors** (life only), **Blocks**, **Breaks & movement**, **Eating**, **Rest**, **Avoiding today**, **Notes**, and a lean **How it went** template `/end-of-day` fills at close (**Executive summary**, **Goal progress**, **Sleep**, **Carry-forward**). It **no longer writes a Task log** — [`/plan-my-work`](plan-my-work.md) writes the `## Work tracker` when it fills the blocks.
 
 ## Tasks moved to /plan-my-work
 
@@ -116,4 +122,4 @@ Libraries are living documents — cards are appended and enriched in place; the
 | `PBRAIN_WEEKLY_DIR` | Last week's review (Monday nudge, cross-ref) |
 | `PBRAIN_HABITS_PROFILE_FILE` / `PBRAIN_DB_FILE` | Habits profile / shared SQLite store (cross-ref) |
 
-If today's plan already exists, it's shown and you're asked if you want to update the "How it went" section or revise blocks.
+If today's plan already exists, a bare `/plan-my-day` routes to the **`update`** path (see *Daily flow → Update*) — it's shown and you're asked what to revise, in place.

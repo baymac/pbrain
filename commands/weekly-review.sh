@@ -60,28 +60,51 @@ unset _LEGACY_WEEKLY
 
 mkdir -p "$WEEKLY_DIR"
 
+# Optional --date YYYY-MM-DD flag — anchors the review on the ISO week
+# containing that date instead of the current week. Useful for retroactive
+# reviews (e.g. run on Tuesday to review the previous Mon–Sun week).
+ANCHOR_DATE=""
+FORCE_RUN=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --date) ANCHOR_DATE="$2"; FORCE_RUN=1; shift 2 ;;
+    --force) FORCE_RUN=1; shift ;;
+    *) shift ;;
+  esac
+done
 TODAY="$(date +%Y-%m-%d)"
+[[ -n "$ANCHOR_DATE" ]] && TODAY="$ANCHOR_DATE"
 
-# ISO week (e.g. 2026-W22). Use python to stay portable across BSD/GNU date.
-ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
-MONTH_YEAR="$(date +%Y-%m)"
-NEXT_ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today()+datetime.timedelta(weeks=1); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
-NEXT_MONTH_YEAR="$(python3 -c "import datetime; t=datetime.date.today(); import calendar; nxt=t.replace(day=1)+datetime.timedelta(days=calendar.monthrange(t.year, t.month)[1]); print(nxt.strftime('%Y-%m'))")"
-OUT_FILE="$WEEKLY_DIR/$ISO_WEEK.md"
+# Derive ISO week bounds (Mon–Sun) from the anchor date.
+read -r ISO_WEEK FIRST_DATE LAST_DATE MONTH_YEAR NEXT_ISO_WEEK NEXT_MONTH_YEAR < <(python3 - "$TODAY" <<'PY'
+import sys, datetime, calendar
+anchor = datetime.date.fromisoformat(sys.argv[1])
+y, w, _ = anchor.isocalendar()
+iso_week = f"{y}-W{w:02d}"
+mon = anchor - datetime.timedelta(days=anchor.weekday())  # Monday
+sun = mon + datetime.timedelta(days=6)                    # Sunday
+month_year = mon.strftime("%Y-%m")
+next_anchor = anchor + datetime.timedelta(weeks=1)
+ny, nw, _ = next_anchor.isocalendar()
+next_iso = f"{ny}-W{nw:02d}"
+nxt_mon = datetime.date(mon.year, mon.month, 1) + datetime.timedelta(days=calendar.monthrange(mon.year, mon.month)[1])
+next_month = nxt_mon.strftime("%Y-%m")
+print(iso_week, mon.isoformat(), sun.isoformat(), month_year, next_iso, next_month)
+PY
+)
 
-# Last 7 dates: today and 6 days back, oldest first.
-DATES="$(python3 - "$TODAY" <<'PY'
+# Generate the 7 dates for the ISO week (Mon through Sun), oldest first.
+DATES="$(python3 - "$FIRST_DATE" <<'PY'
 import sys, datetime
-today = datetime.date.fromisoformat(sys.argv[1])
-for i in range(6, -1, -1):
-    print((today - datetime.timedelta(days=i)).isoformat())
+mon = datetime.date.fromisoformat(sys.argv[1])
+for i in range(7):
+    print((mon + datetime.timedelta(days=i)).isoformat())
 PY
 )"
 
-FIRST_DATE="$(echo "$DATES" | head -1)"
-LAST_DATE="$(echo "$DATES" | tail -1)"
+OUT_FILE="$WEEKLY_DIR/$ISO_WEEK.md"
 
-if [[ -f "$OUT_FILE" ]]; then
+if [[ -f "$OUT_FILE" && "$FORCE_RUN" -eq 0 ]]; then
   echo "This week's review already exists: $OUT_FILE"
   echo ""
   cat "$OUT_FILE"

@@ -803,6 +803,7 @@ Step 5A — IF INTENT = GYM:
   week: {N}
   block: {N}
   day: {letter}
+  activity: gym
   focus: {muscle groups matching the gym profile day}
   bodyweight: {kg or leave blank if skipped}
   sleep_bed: {HH:MM from Step 1}

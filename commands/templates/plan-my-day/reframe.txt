@@ -1,0 +1,48 @@
+
+---
+INSTRUCTIONS — reframe your goals to PROJECT level. Do not plan any day yet.
+Tell the user: "Your weekly/monthly goals are moving from task-level to a CEO
+overview — which Plane PROJECTS are in play, at what priority, and what % of
+your importance/time each gets. The real tasks now live in Plane. Let's reframe
+your CURRENT open goals."
+
+Scope: edit ONLY the CURRENT open period's draft(s) shown above (this week's
+weekly-goals and, if set, this month's monthly-goals). Leave any older committed
+period files alone — readers tolerate the absence of allocation_percent, and the
+next /weekly-review mints fresh files in the new shape.
+
+For EACH goals file with a real path above, walk its goals ONE AT A TIME:
+  1. Quote the goal back. When plane_configured: yes (registry_json non-empty),
+     ask which **Plane project** it maps to — offer the names from registry_json
+     above. If the project isn't in the registry yet, tell the user to run
+     "/project-manager projects --sync" (or add it in Plane), then pick it.
+     Record both "plane_project" (the uuid) and "project_name" (the friendly
+     name). If they truly have no Plane project for it yet, leave plane_project
+     as "" and keep the goal text. When plane_configured: no, SKIP the project
+     question entirely — leave "plane_project": "" and keep the goal as a
+     focus-area; the reframe to allocation_percent still applies (task-pull +
+     progress just need Plane, which isn't set up).
+  2. Keep "priority" as-is (display order).
+  3. Ask for "allocation_percent" — this goal's share of the week's/month's
+     importance. After all goals are assigned, **balance them to sum to 100**
+     across active goals (show the user the split and adjust until it sums to
+     100). Drop "tie" (task-level) — it's superseded by plane_project.
+  4. Keep success_looks_like, status, and difficulty (difficulty is now
+     secondary but retained).
+
+Rewrite each file's fenced JSON so every active goal item is:
+  {"id": "<slug>", "goal": "...", "plane_project": "<uuid or ''>",
+   "project_name": "...", "priority": 1, "allocation_percent": 40,
+   "success_looks_like": "...", "status": "active", "difficulty": "normal"}
+Keep the frontmatter (version/committed) and the "period"/"created"/"derived_from"
+keys intact. Edit the draft in place (these are the open period's files — if a
+file is already committed for the current period, that's fine to edit in place
+for this one-time historical fixup).
+
+When done (or if there are no open goals files to reframe — vacuous), record so
+this never re-runs:
+  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0007_goals_project_reframe
+
+Confirm: "Goals reframed to project level → allocation balanced to 100%.
+Re-run /plan-my-day to lay out today, then /plan-my-work to fill the blocks."
+Stop here.

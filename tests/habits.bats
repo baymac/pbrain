@@ -357,6 +357,36 @@ assert "long-run" not in ids, ids
   [[ "$output" == *"mark --name"* ]]
 }
 
+@test "emit_habits_scan is silent without a profile" {
+  run pbrain_emit_habits_scan plan-my-day
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "emit_habits_scan emits the scan + reminder-alignment + the reused extraction block" {
+  _write_profile
+  run pbrain_emit_habits_scan plan-my-day
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HABIT SCAN (plan-my-day)"* ]]
+  [[ "$output" == *"EVIDENCE SCAN"* ]]
+  [[ "$output" == *"reminders-reschedule --habit"* ]]
+  [[ "$output" == *"reminders-cancel --habit"* ]]
+  # it reuses the full extraction block (mark syntax) rather than duplicating it
+  [[ "$output" == *"HABIT EXTRACTION (plan-my-day)"* && "$output" == *"Brush at night"* ]]
+}
+
+@test "emit_habits_scan lists today's existing vault entries to scan" {
+  _write_profile
+  local today; today="$(date +%Y-%m-%d)"
+  mkdir -p "$PBRAIN_VAULT/life/daily-tracking" "$PBRAIN_VAULT/fitness/diet-tracking"
+  echo "# journal" > "$PBRAIN_VAULT/life/daily-tracking/$today.md"
+  echo "# diet"    > "$PBRAIN_VAULT/fitness/diet-tracking/$today.md"
+  run pbrain_emit_habits_scan plan-my-day
+  [ "$status" -eq 0 ]
+  # only the files that exist are listed; a missing one (gratitude) is not
+  [[ "$output" == *"journal → "* && "$output" == *"diet → "* && "$output" != *"gratitude → "* ]]
+}
+
 # ── markdown tracking layer (md is source of truth; DB derived) ──────────────
 @test "track init creates a dated md with a row per active habit + empty cells" {
   _write_profile

@@ -198,7 +198,8 @@ EOF
   [[ "$output" == *"Work and"* && "$output" == *"NEVER anchors"* ]]
   # nudge to /plan-my-work landed
   [[ "$output" == *"/plan-my-work"* ]]
-  [[ "$output" == *"## Today's focus"* ]]
+  # weekly/monthly goals anchoring is gone (moved to /plan-my-work)
+  [[ "$output" != *"## Today's focus"* ]]
 }
 
 @test "fresh setup block carries the typical_day + variation_rules template" {
@@ -247,7 +248,7 @@ PYEOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"typical_day_present: yes"* ]]
   [[ "$output" == *"RECENT FITNESS ACTIVITY"* ]]
-  [[ "$output" == *"2b.5"* ]]
+  [[ "$output" == *"1b.5"* ]]
   [[ "$output" == *"NON-NEGOTIABLES"* ]]
 }
 
@@ -274,13 +275,16 @@ EOF
   [[ "$output" == *"typical_day_present: no"* ]]
 }
 
-@test "daily session injects work + goals libraries" {
+@test "plan path does NOT inject work/goals libraries (moved to /plan-my-work)" {
   write_plans_profile
   write_libraries
   run PMD
-  [[ "$output" == *"WORK LIBRARY"* ]]
-  [[ "$output" == *"autonomous trading platform"* ]]
-  [[ "$output" == *"GOALS LIBRARY"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  # blocks are empty placeholders now, so the libraries are no longer planning
+  # context — they belong to /plan-my-work. Combined into the final command so
+  # every condition is actually enforced (bats only fails on the last command).
+  [[ "$output" != *"=== WORK LIBRARY"* && "$output" != *"=== GOALS LIBRARY"* && "$output" != *"autonomous trading platform"* ]]
 }
 
 @test "fitness sleep frontmatter is surfaced when today's entry has it" {
@@ -384,13 +388,100 @@ EOF
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
 
-@test "existing plan today routes to the existing block" {
+@test "existing plan today routes to the UPDATE path" {
   write_goals_profile
   write_libraries
   mkdir -p "$PLAN"
   echo "plan content" > "$PLAN/$TODAY.md"
   run PMD
-  [[ "$output" == *"PLAN_MY_DAY_EXISTING"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"TODAY'S PLAN (current)"* && "$output" == *"plan content"* ]]
+}
+
+@test "plan path emits a compact recent-days digest, not the full prior plans" {
+  write_plans_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  cat > "$PLAN/2000-01-02.md" <<EOF
+---
+energy: 6
+sleep_hours: 7.5
+---
+# Day Plan — 2000-01-02 (Sun)
+## Today at a glance
+| Time | Action | Tie |
+|---|---|---|
+| 07:00–07:30 | Wake | — |
+| 09:00–10:30 | Block 1 — focus work | — |
+| 13:00–13:45 | Lunch | Eating |
+SECRET_FULL_PLAN_BODY_MARKER
+EOF
+  run PMD
+  [ "$status" -eq 0 ]
+  # digest header present; the old full-7 dump is gone; the prior plan's body
+  # is NOT pasted in (all enforced — final command is the meaningful one).
+  [[ "$output" == *"RECENT DAYS (last 3"* && "$output" != *"RECENT DAY PLANS (last 7)"* && "$output" != *"SECRET_FULL_PLAN_BODY_MARKER"* ]]
+}
+
+@test "recent-days digest summarizes a prior day in one line" {
+  write_plans_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  cat > "$PLAN/2000-01-02.md" <<EOF
+---
+energy: 6
+---
+# Day Plan
+## Today at a glance
+| Time | Action | Tie |
+|---|---|---|
+| 07:00–07:30 | Wake | — |
+| 09:00–10:30 | Block 1 — focus work | — |
+| 13:00–13:45 | Lunch | Eating |
+| 20:00–20:45 | Dinner | Eating |
+EOF
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2000-01-02"* && "$output" == *"lunch 13:00"* && "$output" == *"energy 6"* ]]
+}
+
+@test "no timing signal block in the plan path" {
+  write_plans_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"TIMING SIGNAL"* ]]
+}
+
+@test "explicit 'plan' verb forces the plan path even when today's plan exists" {
+  write_plans_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  echo "# existing" > "$PLAN/$TODAY.md"
+  run PMD plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* && "$output" != *"PLAN_MY_DAY_UPDATE"* ]]
+}
+
+@test "explicit 'update' verb with no plan yet says so" {
+  write_plans_profile
+  write_libraries
+  run PMD update
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_NO_PLAN_YET"* ]]
+}
+
+@test "update path surfaces this week's goals and the update template" {
+  write_goals_profile
+  write_libraries
+  local iso_week
+  iso_week="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+  write_weekly_goals "$iso_week"
+  mkdir -p "$PLAN"
+  echo "# Day Plan" > "$PLAN/$TODAY.md"
+  run PMD update
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"WEEKLY GOALS ($iso_week)"* && "$output" == *"revise-in-place"* ]]
 }
 
 @test "env-override profile file is honored" {
@@ -458,7 +549,9 @@ committed: true
 EOF
 }
 
-@test "daily session surfaces weekly goals when they match the current ISO week" {
+@test "daily session does NOT surface weekly/monthly goals anchoring" {
+  # /plan-my-day no longer anchors on weekly/monthly goals — that's /plan-my-work's
+  # job now. Even when this week's goals exist, the daily planner ignores them.
   write_goals_profile
   write_libraries
   local iso_week
@@ -466,23 +559,12 @@ EOF
   write_weekly_goals "$iso_week"
   run PMD
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WEEKLY GOALS"* ]]
-  [[ "$output" == *"lettuce-algo"* ]]
-  [[ "$output" == *"weekly_goals_file:"* ]]
-}
-
-@test "daily session shows weekly_goals_file as (not set up yet) when no weekly goals" {
-  write_goals_profile
-  write_libraries
-  run PMD
-  [[ "$output" == *"weekly_goals_file: (not set up yet)"* ]]
-}
-
-@test "daily session includes iso_week in the header" {
-  write_goals_profile
-  write_libraries
-  run PMD
-  [[ "$output" == *"iso_week: 20"* ]]  # partial match — format 20XX-WXX
+  [[ "$output" != *"=== WEEKLY GOALS"* ]]
+  [[ "$output" != *"=== MONTHLY GOALS"* ]]
+  [[ "$output" != *"lettuce-algo"* ]]
+  [[ "$output" != *"weekly_goals_file:"* ]]
+  [[ "$output" != *"monthly_goals_file:"* ]]
+  [[ "$output" != *"iso_week:"* ]]
 }
 
 @test "plan frontmatter template includes week_period" {

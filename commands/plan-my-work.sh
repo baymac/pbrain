@@ -400,11 +400,59 @@ last_block_end) and the typical_day bed time; read them from the JSON above.
      You'll create a minimal file with just a "## Work tracker" (and a short
      "## Today at a glance" listing only the work blocks).
 
-2. REVIEW FIRST (so pulled tasks are well-formed). Run the project manager's
-   read-only review over this week's goal projects, then walk the thin issues
-   per-item and enrich only what the user confirms:
+2. ENRICH + TRIAGE (the PM step — do this before picking today's tasks).
+   Run the review scan over this week's goal projects (always include backlog since
+   new issues default there):
      bash "${PM_CMD:-/project-manager}" review --projects "${WEEKLY_PIDS:-<weekly-goal pids>}"
    (If weekly_pids is empty, ask which projects to pull from and use those.)
+
+   For EVERY issue flagged as thin, apply ALL of the following without asking —
+   infer sensible values yourself as a PM would:
+
+   a) DESCRIPTION — write a clear, actionable description covering: what the task
+      is, why it matters, what "done" looks like, and any known blockers or
+      dependencies. Use description_html. No placeholders.
+
+   b) PRIORITY — assign urgent/high/medium/low based on: deadline proximity,
+      dependency chain (blockers get higher priority), week goal allocation%, and
+      impact. Urgent = must ship this week or blocks others. High = this week.
+      Medium = this month. Low = backlog, no deadline.
+
+   c) ESTIMATE — set the Est field in the tracker (free text: 30m / 1h / 2h / 3h
+      / 4h / 6h). Plane's estimate_point is not patchable without a configured UUID
+      scheme (and there is none in this workspace); use the tracker column only.
+      Base estimates on scope of work in the description: quick fix = 30m–1h,
+      feature = 2–4h, large feature = 6h+.
+
+   d) START DATE — set to today for any issue going into today's blocks. Leave
+      blank for backlog issues not being worked today.
+        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"start_date","value":"$TODAY"}]'
+
+   e) ASSIGNEE — assign to the sole developer (kylojavier68,
+      id=e364da77-b440-4f36-a167-f3b96c535bb9) for every issue that has no assignee.
+        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"assignees","value":["e364da77-b440-4f36-a167-f3b96c535bb9"]}]'
+
+   f) RELATIONS — wire blocking/blocked_by between issues whose descriptions
+      imply a dependency (e.g. "blocked by", "requires X first", "unblocks Y").
+      Use field "relation:<type>" (valid types: blocking, blocked_by, relates_to,
+      duplicate, start_after, start_before, finish_after, finish_before):
+        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"relation:blocking","value":"<target_tie>"}]'
+
+   g) SUB-TASKS — if a task's description implies multiple sequential steps, break
+      it into sub-issues now so it's actionable in blocks:
+        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"subissue","value":"<subtask title>"}]'
+      Create sub-tasks for any issue estimated > 2h or with a clear multi-step
+      delivery (e.g. build → test → publish). Aim for sub-tasks of 30m–1h each.
+
+   h) TRIAGE — after enriching, move issues that are ready to work from backlog →
+      todo state so they appear in the ready pull:
+        bash "${PM_CMD:-/project-manager}" move "<tie>" --to todo
+
+   Apply all enrichments in a single batch enrich call per group where possible.
+   Do NOT ask the user to confirm each field — use your PM judgment and apply.
+   Only pause if you genuinely cannot infer a value (e.g. a task title that's
+   completely ambiguous). Report what you set at the end of this step as a
+   compact table: issue | priority | est | assignee | start | relations | subtasks.
 
 3. PROGRESS REPORT (before picking projects). Using progress_json + this week's
    goals (each with allocation_percent + plane_project):
@@ -423,18 +471,25 @@ last_block_end) and the typical_day bed time; read them from the JSON above.
    blocks in "Today at a glance" (plan_exists=yes) or the standalone count from
    step 1.
 
-5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects:
-     bash "${PM_CMD:-/project-manager}" ready --projects "<chosen pids>"
-   (or rely on the seam pbrain_projects_ready_multi_json). Map tasks → blocks:
+5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects — ALWAYS pass
+   the explicit project list so all projects are queried (not just the default):
+     bash "${PM_CMD:-/project-manager}" ready --projects "<chosen pids comma-separated>"
+   If ready returns empty for a project, check with --include-backlog and triage
+   (move to todo + set priority) before assigning. Map tasks → blocks:
    PREFER one project per block; combine projects in a block only when a project
    has few/easy tasks. Biggest-rock first (priority → est). Honor last_block_end.
 
 6. WRITE "## Work tracker" into $OUT_FILE and (re)label the "## Today at a glance"
    work-block rows so each names its task/project. Tracker schema:
-     | Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+     | Block | Task | Project | Plane | Priority | Est | Status | Done at | % complete | Est rating | Notes |
    - "Block" = the time range (e.g. "Block 1 (10:00–11:30)").
-   - "Plane id" = the full tie "<project_id>:<issue_id>" (so /end-of-day resolves
-     it back to Plane). Use "—" for a task with no Plane issue.
+   - "Plane" = clickable markdown link(s) using the format
+       [PB-19](http://plane.localhost:1800/pb/browse/PB-19/)
+     Multiple issues in one block: comma-separated links. Use "—" for no Plane issue.
+     The tie (<project_id>:<issue_id>) is what /end-of-day uses for reconciliation;
+     embed it as a data comment if needed, but the visible cell must be the link.
+     Plane issue URL pattern: http://plane.localhost:1800/pb/browse/<IDENTIFIER>-<seq>/
+     Project identifiers (uppercase): PB, YT, KA, ML, MUC, BIO.
    - Status starts "planned"; Done at / % complete / Est rating stay blank for
      /end-of-day. "Est rating" later judges whether the estimate held.
    If plan_exists=no, write a minimal file: frontmatter + a short "## Today at a

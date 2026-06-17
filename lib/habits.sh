@@ -1009,10 +1009,10 @@ def db_progress(con, h, date):
         unit = (" " + h["unit"]) if h["unit"] else ""
         tgt = fmtnum(h["measure_target"]) if h["measure_target"] is not None else "?"
         if st == "weekly":
-            return (f"{avg(week_start)}/{tgt}{unit} wk avg" if scored
+            return (f"{fmtnum(agg(week_start))}/{tgt}{unit} wk" if scored
                     else f"{fmtnum(agg(week_start))}/{tgt}{unit} wk")
         if st == "monthly":
-            return (f"{avg(month_start)}/{tgt}{unit} mo avg" if scored
+            return (f"{fmtnum(agg(month_start))}/{tgt}{unit} mo" if scored
                     else f"{fmtnum(agg(month_start))}/{tgt}{unit} mo")
         return f"{fmtnum(agg(today))}/{tgt}{unit} day"
     tc = h["target_count"]
@@ -1021,8 +1021,7 @@ def db_progress(con, h, date):
     if st == "monthly":
         return f"{agg(month_start)}/{tc if tc is not None else '?'} mo"
     # daily: a limit reads today's count against the per-day cap ("2/1 day" =
-    # over); a build reads how many days done so far this week (count is 1/day
-    # for these, so the sum is a day-count).
+    # over); a build reads how many days done so far this week out of 7.
     if h["direction"] == "at_most":
         cap = tc if tc is not None else 0
         return f"{agg(today)}/{cap} day"
@@ -1740,5 +1739,87 @@ print("\n".join(out))
   printf '%s\n' "  bash \"$cmd_path\" suggest-seen --name \"<X>\""
   printf '%s\n' "If the user has told you they don't want habit suggestions, skip this."
   printf '%s\n' "--- END HABIT SUGGEST ---"
+  return 0
+}
+
+# pbrain_emit_habits_scan <cmd>
+# The daily planner's habit reconcile, owned here in the habit module so the logic
+# lives with /habits rather than spread across plan-my-day. Two deterministic parts
+# the script provides, then the model acts on:
+#   (A) enumerate which of TODAY'S vault entries exist (journal, gratitude, thoughts,
+#       fitness, diet, planning) → the model reads them for habit evidence and marks;
+#   (B) realign today's ONE-SHOT habit reminders to the planned times in today's
+#       plan (reminders-reschedule / reminders-cancel — pending one-shots only).
+# Reuses pbrain_emit_habits_extract verbatim for the full mark + suggest mechanics
+# (no duplication). Silent when no habits profile exists. PERMANENT reminder
+# add/delete (changing a habit's schedule) stays in /habits, not here.
+pbrain_emit_habits_scan() {
+  local cmd today vault cmd_path json
+  cmd="${1:-}"
+  [[ -n "$cmd" ]] || return 0
+  json="$(pbrain_habits_json)"
+  [[ -n "${json//[[:space:]]/}" ]] || return 0   # silent without a habits profile
+
+  today="$(date +%Y-%m-%d)"
+  cmd_path="$(pbrain_habits_cmd)"
+  # VAULT_DIR is set when habits.sh is sourced through vault.sh (the normal path);
+  # fall back to PBRAIN_VAULT so the function still resolves entries when sourced
+  # standalone (e.g. unit tests).
+  vault="${VAULT_DIR:-${PBRAIN_VAULT:-}}"
+
+  # Which of today's entry files exist (honoring the same env overrides the daily
+  # commands use). The model reads ONLY the ones present — no inference from gaps.
+  local journal_dir grat_dir thought_dir fitness_dir diet_dir plan_dir
+  journal_dir="${PBRAIN_JOURNAL_DIR:-$vault/life/daily-tracking}"
+  grat_dir="${PBRAIN_GRATITUDE_DIR:-$vault/life/gratitude-journal}"
+  thought_dir="${PBRAIN_THOUGHTS_DIR:-$vault/life/thought-tracking}"
+  fitness_dir="${PBRAIN_FITNESS_DIR:-$vault/fitness/daily-tracking}"
+  diet_dir="${PBRAIN_DIET_DIR:-$vault/fitness/diet-tracking}"
+  plan_dir="${PBRAIN_PLAN_DIR:-$vault/life/daily-planning}"
+
+  local present=()
+  local pair label path
+  for pair in \
+    "journal:$journal_dir/$today.md" \
+    "gratitude:$grat_dir/$today.md" \
+    "thoughts:$thought_dir/$today.md" \
+    "fitness:$fitness_dir/$today.md" \
+    "diet:$diet_dir/$today.md" \
+    "planning:$plan_dir/$today.md"; do
+    label="${pair%%:*}"; path="${pair#*:}"
+    [[ -f "$path" ]] && present+=("$label → $path")
+  done
+
+  printf '%s\n' ""
+  printf '%s\n' "--- HABIT SCAN ($cmd) ---"
+  printf '%s\n' "Run this AFTER the command's main work, silently. Two parts:"
+  printf '%s\n' ""
+  printf '%s\n' "(A) EVIDENCE SCAN — today's vault entries that exist. Read these for any"
+  printf '%s\n' "    tracked habit the user did / skipped / lapsed, then mark per the HABIT"
+  printf '%s\n' "    EXTRACTION block below (which lists the habits + exact mark syntax):"
+  if [[ ${#present[@]} -eq 0 ]]; then
+    printf '%s\n' "    (no entries logged today yet — nothing to scan; use what the user said)"
+  else
+    local e
+    for e in "${present[@]}"; do printf '%s\n' "    - $e"; done
+  fi
+  printf '%s\n' "    Read only what's there; never infer a habit from a missing file. Combine"
+  printf '%s\n' "    with what the user said this session. Mark each evidenced habit ONE time."
+  printf '%s\n' ""
+  printf '%s\n' "(B) REMINDER ALIGNMENT — for any tracked habit that maps to a TIMED row in"
+  printf '%s\n' "    today's plan ($plan_dir/$today.md), realign its one-shot Apple Reminder to"
+  printf '%s\n' "    that planned start time:"
+  printf '%s\n' "      bash \"$cmd_path\" reminders-reschedule --habit \"<exact habit name>\" --time \"HH:MM\" --date $today"
+  printf '%s\n' "    Only for habits at a specific clock time in the plan. NOT_LINKED / NOT_FOUND"
+  printf '%s\n' "    → skip silently. To stand down a one-shot for a habit clearly NOT happening"
+  printf '%s\n' "    today, cancel it:"
+  printf '%s\n' "      bash \"$cmd_path\" reminders-cancel --habit \"<exact habit name>\" --date $today"
+  printf '%s\n' "    Do NOT add or delete a habit's PERMANENT reminder here — changing a habit's"
+  printf '%s\n' "    schedule is /habits' job. After any reschedule/cancel, push state through:"
+  printf '%s\n' "      bash \"$cmd_path\" reminders-sync --date $today"
+  printf '%s\n' "--- END HABIT SCAN ---"
+
+  # Full mark syntax + new-habit suggestion (reused verbatim, not duplicated).
+  pbrain_emit_habits_extract "$cmd"
   return 0
 }

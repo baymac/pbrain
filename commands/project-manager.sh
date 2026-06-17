@@ -38,10 +38,20 @@ set -euo pipefail
 #   ready [--projects …]  Ready tasks across projects (cross-project sorted).
 #   progress --projects … [--since DATE]   Per-project progress report.
 #   review --projects …   Read-only thin-issue scan (walk + confirm enrichment).
-#   enrich --edits '<json>'  Apply confirmed enrichments ([{tie,field,value}]).
+#   enrich --edits '<json>'  Apply enrichments ([{tie,field,value}]). Supported
+#                         fields: priority, target_date/due, start_date, title/name,
+#                         description/description_html, assignees (array of user UUIDs),
+#                         subissue/subtask (value=title, creates a sub-issue),
+#                         relation:<type> (value=target tie; types: blocking, blocked_by,
+#                         relates_to, duplicate, start_after, start_before, finish_after,
+#                         finish_before). estimate_point needs a Plane estimate scheme.
 #   move <tie> --to <status>           Move one issue's status.
 #   priority <tie> --value <p>          Set one issue's priority.
 #   timeline <tie> --target-date <d>    Set one issue's target date.
+#   issue --project P --title T [--priority p] [--target-date d]
+#                         Create a new issue in an existing project.
+#   project-create --name N [--shortcut s]
+#                         Create a new Plane project and add it to the registry.
 #
 # Overrides:
 #   PBRAIN_PLANE_HOME     where setup.sh + its data live (default
@@ -133,7 +143,7 @@ SUB="${1:-probe}"
 # Ops subcommands need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  test|ping|states|projects|ready|progress|review|enrich|move|priority|timeline|completed)
+  test|ping|states|projects|ready|progress|review|enrich|move|priority|timeline|completed|issue|project-create)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — '$SUB' needs a configured Plane instance."
@@ -386,7 +396,7 @@ PYEOF
     echo "PM_REVIEW"
     python3 "$PLANE" review \
       ${F_projects:+--projects "$F_projects"} \
-      $(_has_bool include_backlog && echo --include-backlog) || true
+      --include-backlog || true
     ;;
 
   enrich)
@@ -419,6 +429,32 @@ PYEOF
     python3 "$PLANE" timeline --tie "$tie" --target-date "$td" || true
     ;;
 
+  issue)
+    _parse_args "$@"
+    project="${POS[0]:-$(_flag project)}"
+    title="$(_flag title)"
+    [[ -n "$project" && -n "$title" ]] || {
+      echo "Usage: /project-manager issue --project <ref> --title <title> [--priority p] [--target-date YYYY-MM-DD]" >&2
+      exit 1
+    }
+    echo "PM_ISSUE"
+    python3 "$PLANE" issue \
+      --project "$project" \
+      --title "$title" \
+      ${F_priority:+--priority "$F_priority"} \
+      ${F_target_date:+--target-date "$F_target_date"} || true
+    ;;
+
+  project-create)
+    _parse_args "$@"
+    name="${POS[0]:-$(_flag name)}"
+    [[ -n "$name" ]] || { echo "Usage: /project-manager project-create --name <name> [--shortcut <s>]" >&2; exit 1; }
+    echo "PM_PROJECT_CREATE"
+    python3 "$PLANE" project-create \
+      --name "$name" \
+      ${F_shortcut:+--shortcut "$F_shortcut"} || true
+    ;;
+
   completed)
     _parse_args "$@"
     echo "PM_COMPLETED"
@@ -433,7 +469,7 @@ PYEOF
 
   *)
     echo "pbrain: unknown /project-manager subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | vhost | status | setup | use | test | states | projects | ready | progress | review | enrich | move | priority | timeline" >&2
+    echo "Try: probe | fetch | up | config | vhost | status | setup | use | test | states | projects | ready | progress | review | enrich | move | priority | timeline | issue | project-create" >&2
     exit 1
     ;;
 esac

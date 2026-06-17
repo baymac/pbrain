@@ -37,6 +37,8 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `move <tie> --to <status>` | Move one issue's status (`todo\|doing\|done\|blocked\|dropped`). |
 | `priority <tie> --value <p>` | Set one issue's priority (`urgent\|high\|medium\|low\|none`). |
 | `timeline <tie> --target-date <d>` | Set one issue's target date (`YYYY-MM-DD`). |
+| `issue --project <ref> --title <t> [--priority p] [--target-date d]` | Create a new issue in an existing project (`ref` = uuid \| name \| shortcut). Reports the new `sequence_id` + title. |
+| `project-create --name <n> [--shortcut <s>]` | Create a new Plane project and add it to the local registry (no `projects --sync` needed). |
 
 A **tie** is `<project_id>:<issue_id>` — the handle that flows through the daily loop (the `## Work tracker` carries it, `/end-of-day` resolves it back).
 

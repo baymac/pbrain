@@ -1,0 +1,24 @@
+The user's message describes a new focus item to add. Gather:
+  - name + one-line description
+  - lib: "work" (project/career/money) or "goals" (health/creative/
+    relationships/financial/personal)
+  - track: professional | personal
+  - horizon: short (3–6 months) | long (6+ months)
+  - priority (1 = most important; ask if not obvious — show current list)
+  - deadline: YYYY-MM or "ongoing"
+  - success_looks_like (short phrase)
+  - context (working-notes paragraph — what it is, where it stands, what effort
+    it needs — the rich detail that makes plan blocks useful)
+Suggest a 2-3-letter shortcut (e.g. "lt" for Lettuce); confirm with the user.
+After gathering:
+1. APPEND the new entry to current_focus in the profile file (in-place edit).
+2. REGISTER a short library card in the appropriate library:
+   lib: "work" → work-library: {id, name, shortcut, category:"work",
+     summary, metadata:{}, timeline:null}
+   lib: "goals" → goals-library: {id, name, shortcut, category, summary,
+     timeline:null}
+   Edit the library file in place (living document).
+3. AUTO-APPEND OFFER: if there is no existing library card, remind the user
+   that the shortcut can be used to reference this item tersely in any entry.
+4. Confirm: "Added '[name]' (shortcut: xx) to current_focus and registered a
+   card in the [work|goals] library."

@@ -1,0 +1,78 @@
+# plans-profile JSON schema (reference for setup + rebuild flows)
+# Use this shape when writing plans-profile.v1.md, work-library.v1.md, goals-library.v1.md.
+# Fill in the user's actual values — replace all "..." placeholders.
+
+## plans-profile.v1.md
+```json
+{"created": "YYYY-MM-DD",
+ "working_style": {"session_length_min": 90, "break_min": 30,
+   "break_activities": ["..."], "work_hours_per_day": 7,
+   "focus_hours": "9-12,15-17", "last_block_end": "HH:MM",
+   "energy_peak": "...", "day_wreckers": ["..."], "other_prefs": ["..."]},
+ "planning_guidelines": "Prose: how /plan-my-day will plan the day...",
+ "current_focus": [
+   {"id": "<library-id>", "lib": "work|goals", "name": "...",
+    "track": "professional|personal", "horizon": "short|long",
+    "priority": 1, "deadline": "YYYY-MM | ongoing",
+    "success_looks_like": "...", "context": "...", "status": "active"}],
+ "daily_anchors": {"wake_time": "HH:MM", "workout_time": "HH:MM",
+   "lunch_time": "HH:MM", "dinner_time": "HH:MM",
+   "walk_time": "HH:MM or null", "bed_target": "HH:MM"},
+ "typical_day": {
+   "padded": true,
+   "note": "Generous baseline — each block padded so real days leave slack, never a deficit. The planner may COMPRESS these segments but should never need to expand them.",
+   "rest_days": ["sat", "sun"],
+   "workday": [
+     {"slot": "wake",      "start": "07:00", "end": "07:30", "duration_min": 30,  "category": "wake",     "flex": "fixed"},
+     {"slot": "workout",   "start": "08:00", "end": "09:15", "duration_min": 75,  "category": "fitness",  "flex": "skippable"},
+     {"slot": "breakfast", "start": "09:15", "end": "09:45", "duration_min": 30,  "category": "meal",     "flex": "fixed"},
+     {"slot": "work_am",   "start": "10:00", "end": "13:00", "duration_min": 180, "category": "work",     "flex": "flex"},
+     {"slot": "lunch",     "start": "13:00", "end": "13:45", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+     {"slot": "work_pm",   "start": "14:00", "end": "18:00", "duration_min": 240, "category": "work",     "flex": "flex"},
+     {"slot": "walk",      "start": "18:30", "end": "19:00", "duration_min": 30,  "category": "movement", "flex": "flex"},
+     {"slot": "dinner",    "start": "19:30", "end": "20:15", "duration_min": 45,  "category": "meal",     "flex": "fixed"},
+     {"slot": "wind_down", "start": "22:30", "end": "23:00", "duration_min": 30,  "category": "rest",     "flex": "flex"},
+     {"slot": "bed",       "start": "23:00", "end": "23:00", "duration_min": 0,   "category": "bed",      "flex": "fixed"}],
+   "rest_day": [
+     {"slot": "wake",   "start": "08:30", "end": "09:00", "duration_min": 30, "category": "wake", "flex": "fixed"},
+     {"slot": "...rest of the user's weekend rhythm, same segment shape...", "start": "", "end": "", "duration_min": 0, "category": "rest", "flex": "flex"}]},
+ "variation_rules": {
+   "priority_order": ["events_and_nonnegotiables", "meals_and_fitness", "work"],
+   "work_is_flex": true,
+   "keep_meal_count": true,
+   "min_wake_to_work_gap_min": 30,
+   "non_gym_fitness": {"ask_duration_including_buffer": false, "shift_meals_to_fit": true},
+   "activity_buffers": {
+     "football": {"commute_before_min": 30, "commute_after_min": 30, "post_home_settle_min": 30, "total_window_min": 120, "note": "30 min commute there + session + 30 min back + 30 min shower/settle. Same treatment as gym — never ask for commute time."},
+     "apple_fitness": {"buffer_before_min": 5, "buffer_after_min": 5, "note": "5 min prep before + 5 min settle after. Never ask for buffer time."}
+   },
+   "late_wake": {"shift_timeline": true},
+   "skip_fitness_when": "Suggest (never silently drop) skipping today's fitness only when meals are running late AND the last few days have already been active — judge both in context."},
+ "anti_patterns": ["..."],
+ "personal_anchors": {"relationships": ["..."], "creative_pursuits": ["..."],
+   "health_habits": ["..."]},
+ "notes": "free-form anything important not captured above"}
+```
+
+## work-library.v1.md
+```json
+{"created": "YYYY-MM-DD", "projects": [
+  {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
+   "summary": "...", "category": "work",
+   "metadata": {"repo": "...", "stack": "...", "links": []},
+   "timeline": null}]}
+```
+
+## goals-library.v1.md
+```json
+{"created": "YYYY-MM-DD", "goals": [
+  {"id": "<slug>", "name": "...", "shortcut": "<2-3 letters>",
+   "category": "health|creative|relationships|financial|personal",
+   "summary": "...", "timeline": null}]}
+```
+
+Notes:
+- Every current_focus entry references a library card by id.
+- Libraries are LIVING documents: entries appended/enriched in place;
+  versions only mint on structural rebuilds.
+- Use the user's actual words — don't sanitize their voice.

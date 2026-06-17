@@ -229,6 +229,27 @@ Step 3 — Decide filename:
   - If you rename the file, ALSO plan to rewrite the frontmatter `title:` field
     to the same short name (without .md) so Obsidian's inline title stays in sync.
 
+Step 3.5 — Format the file before moving:
+  Apply light cosmetic cleanup to the body. Do not change any words, remove content,
+  or extend the text. Only fix:
+  - Collapsed or missing blank lines between sections (add a blank line between
+    numbered/bulleted items that have no separator, or before a new "section" of
+    thought that runs together).
+  - Excessive blank lines (more than one consecutive blank line → one blank line).
+  - Stray horizontal rules (--- or ***) that aren't frontmatter delimiters and add
+    no meaning — remove them if they only separate adjacent list items.
+  - "---" separators between thread items: replace with a single blank line only
+    (they're visual noise in Obsidian markdown).
+  Keep the frontmatter block untouched (except `title:` if renamed — Step 3).
+  Write the cleaned body back to the file in place before the mv.
+
+Step 3.6 — Add a verdict line at the very top of the body (below the closing `---`
+  of the frontmatter, before any other content). The verdict is a single italic line
+  summarising the core takeaway in 10–15 words. Format:
+      *[one-sentence verdict — what this clip is really about or why it was saved]*
+  Followed by a blank line, then the original body. Do not add a heading; just the
+  italic line. Do not add the verdict if one already exists (starts with `*`).
+
 Step 4 — Confidence check:
   - If you are >= ~70% sure on the destination AND filename: announce it concisely
     in one line ("→ moving OLD to DEST/NEW") and ask "ok?" — wait for a short ack

@@ -1,6 +1,8 @@
 .env
 .env.local
 *.log
+# Per-machine Claude Code local settings (permissions, etc.)
+.claude/settings.local.json
 .gbrain/
 .DS_Store
 .context/
