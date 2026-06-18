@@ -115,6 +115,46 @@ PYEOF
   [[ "$output" == *PLANE_ERROR* ]]
 }
 
+# --- secret redaction shield (PB-16) ----------------------------------------
+@test "redact() masks registered secrets; short values are left alone" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.register_secret("plane_api_0123456789abcdef")
+m.register_secret("short")          # < 8 chars -> not a secret, never masked
+out = m.redact("tok=plane_api_0123456789abcdef end=short")
+print("ok" if ("plane_api_0123456789abcdef" not in out
+               and m._REDACTION in out and "end=short" in out) else "BAD:%s" % out)
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "load_config registers the api_key as a redaction secret" {
+  PY setup --base-url https://api.plane.so --api-key plane_api_supersecrettoken --workspace ws --project pid >/dev/null
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.load_config()
+print("ok" if m.redact("key plane_api_supersecrettoken x")
+      == "key %s x" % m._REDACTION else "BAD")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "install_redaction_shield scrubs a registered secret from real stdout" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.register_secret("plane_api_TOPSECRETvalue123")
+m.install_redaction_shield()
+print("leaking plane_api_TOPSECRETvalue123 here")   # even a direct print is masked
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" != *plane_api_TOPSECRETvalue123* ]] && [[ "$output" == *REDACTED* ]]
+}
+
 # --- projects.sh seams ------------------------------------------------------
 @test "ready_json routes to Plane and degrades to [] when unreachable" {
   export PBRAIN_PLANE_BASE_URL=http://127.0.0.1:9 PBRAIN_PLANE_API_KEY=SECRET
