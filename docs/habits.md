@@ -65,9 +65,9 @@ The structured data lives in a fenced ` ```json ` block. Each habit has a **stab
   "created": "2026-06-03",
   "habits": [
     { "id": "brush-at-night", "name": "Brush at night", "direction": "at_least",
-      "schedule": { "type": "daily" }, "priority": "high", "archived": false, "notes": "" },
+      "schedule": { "type": "daily" }, "priority": "high", "category": "cleanliness", "archived": false, "notes": "" },
     { "id": "gym", "name": "Gym", "direction": "at_least",
-      "schedule": { "type": "weekdays", "days": ["mon","wed","fri"] }, "priority": "high", "archived": false },
+      "schedule": { "type": "weekdays", "days": ["mon","wed","fri"] }, "priority": "high", "category": "fitness-activity", "archived": false },
     { "id": "water", "name": "Water", "direction": "at_least",
       "schedule": { "type": "daily" }, "unit": "L", "measure_target": 4, "priority": "high", "archived": false },
     { "id": "alcohol", "name": "Alcohol", "direction": "at_most",
@@ -80,18 +80,46 @@ The structured data lives in a fenced ` ```json ` block. Each habit has a **stab
 
 Don't hand-edit ids — the `add`/`edit`/`archive` subcommands manage them and keep the JSON valid.
 
+## Parts (categories)
+
+Each habit can belong to **one part** — a coarse area it lives in. There are seven canonical parts:
+
+`wellness` · `fitness-activity` · `bad-habits` · `looks` · `cleanliness` · `work` · `diet`
+
+A custom part is fine too (any slug) when none fit; it just sorts after the canonical ones. Set a part when you create or change a habit:
+
+```
+/habits add  … --category cleanliness          # or --part "fitness activity" (it slugifies)
+/habits edit --id <id> --category work          # --category "" clears it
+```
+
+The part shows up in the dashboard, which **groups habits under part headers** (canonical order, then any custom parts, then *Uncategorized*), keeping the priority sort within each part. If you already had habits before parts existed, the first `/habits` run after upgrading walks you through sorting them — one part at a time, your call on each — as a one-time pass.
+
 ## Daily tracking files (the human surface)
 
-Each day has its own file: `life/habit-tracking/<date>.md`. It's generated from your profile as a table — a row per active habit, with empty cells to tick:
+Each day has its own file: `life/habit-tracking/<date>.md`. It's generated from your profile and **split into one table per [part](#parts-categories)**, each under a `## <Part>` heading (canonical order, then custom parts, then `## Other` for uncategorized), with empty cells to tick:
 
 ```
-| Habit          | Criteria   | Progress  | Done | Count | Note     |
-|----------------|------------|-----------|------|-------|----------|
-| Brush at night | daily      | 5/7 wk    | x    |       |          |
-| Water          | daily ≥4 L | 2.5/4 L   | x    | 2.5   |          |
-| Nail cut       | weekly ≥2  | 1/2 wk    |      |       |          |
-| Alcohol        | weekly ≤2  | 1/2 wk    | x    |       | one beer |
+## Fitness activity
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Gym   | weekdays | 1/3 wk   | x    |       |      |
+
+## Wellness
+
+| Habit | Criteria   | Progress | Done | Count | Note |
+|-------|------------|----------|------|-------|------|
+| Water | daily ≥4 L | 2.5/4 L  | x    | 2.5   |      |
+
+## Cleanliness
+
+| Habit          | Criteria | Progress | Done | Count | Note |
+|----------------|----------|----------|------|-------|------|
+| Brush at night | daily    | 5/7 wk   | x    |       |      |
 ```
+
+The sectioning is derived from your profile on every refresh — editing a habit's category moves it to the right section on the next sync. Old single-table files (with or without a Part column) are still read fine and get re-sectioned the next time they're written.
 
 You can open it in Obsidian and tick the **Done** column by hand, or let the agent mark cells for you (below). The `Progress` column shows where each habit stands so far (from the DB) for context. For a **measured** habit (one with a unit), put the day's amount in the **Count** cell — that's the litres/minutes/km the rest of the tooling reads as your quantity.
 
@@ -124,6 +152,8 @@ Running `/habits` (with a profile in place) syncs your recent files, then shows 
 - measured: amount-based progress with the unit, like `2.5/4 L today ⏳` or `12/20 km this week`,
 - limit habits: **⚠️ OVER** or `— at cap`,
 - the head shows each habit's schedule (e.g. `Gym (Mon/Wed/Fri, high)`); last-done date; a `+N more` line if you track more than 20.
+
+When any habit has a **part** (see [Parts](#parts-categories)), the list is grouped under part headers — `**Wellness**`, `**Fitness activity**`, … then `**Uncategorized**` — with habits still priority-sorted inside each part. With nothing categorized, it stays a flat priority list.
 
 Then it offers to open today's tracker, mark a habit, add/edit/archive one, or show history.
 

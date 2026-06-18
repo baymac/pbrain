@@ -194,6 +194,13 @@ except Exception:
     def derive_schedule(h): return {"type": "daily"}
     def is_due(s, d): return True
     def schedule_label(s): return "daily"
+try:
+    from habit_category import normalize as cat_norm, label as cat_label, order as cat_order
+except Exception:
+    # Degrade gracefully: a bare slug, title-cased label, uncategorized-last order.
+    def cat_norm(v): return re.sub(r"[^a-z0-9]+", "-", str(v or "").strip().lower()).strip("-")
+    def cat_label(v): return (" ".join(w.capitalize() for w in cat_norm(v).split("-"))) or "Uncategorized"
+    def cat_order(v): return 1000 if not cat_norm(v) else 100
 
 try:
     with open(profile) as fh:
@@ -264,12 +271,16 @@ def norm(h):
     sched = derive_schedule(h)
     has_schedule = bool(isinstance(h.get("schedule"), dict) and h.get("schedule", {}).get("type"))
     sc = h.get("scoring")
+    # Category ("part") — a single normalized slug; "" = uncategorized. Carries
+    # its display label + a sort index so the rollup can group without importing.
+    cat = cat_norm(h.get("category"))
     return {"id": hid, "name": name, "schedule_type": st, "direction": direction,
             "target_count": tc, "priority": prio, "unit": unit,
             "measure_target": mt, "measured": measured,
             "scoring": sc if isinstance(sc, dict) else None,
             "schedule": sched, "schedule_label": schedule_label(sched),
             "has_schedule": has_schedule,
+            "category": cat, "category_label": cat_label(cat), "category_order": cat_order(cat),
             "reminder": reminder, "reminder_eligible": True,
             "archived": bool(h.get("archived")), "notes": str(h.get("notes", "")).strip()}
 
@@ -476,8 +487,7 @@ def fmt(n):
         return str(int(n))
     return str(n)
 
-lines = []
-for h in habits[:LIMIT]:
+def render(h):
     direction = h["direction"]
     st = h["schedule_type"]
     sk = (h.get("schedule") or {}).get("type", "daily")
@@ -536,9 +546,39 @@ for h in habits[:LIMIT]:
     rem = h.get("reminder") or {}
     if rem.get("state") == "linked":
         body += f" · 🔔 {rem.get('time') or 'on'}"
-    lines.append(head + body)
-if len(habits) > LIMIT:
-    lines.append(f"… +{len(habits) - LIMIT} more (showing top {LIMIT} by priority)")
+    return head + body
+
+# `habits` arrives sorted by priority. When any habit carries a category, group
+# under part headers (canonical order, then custom, then uncategorized last) —
+# priority order is preserved WITHIN each part. With nothing categorized, fall
+# back to the flat priority list (unchanged behaviour). LIMIT caps total rows.
+any_cat = any((h.get("category") or "").strip() for h in habits)
+lines = []
+if not any_cat:
+    for h in habits[:LIMIT]:
+        lines.append(render(h))
+    if len(habits) > LIMIT:
+        lines.append(f"… +{len(habits) - LIMIT} more (showing top {LIMIT} by priority)")
+else:
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for h in habits:
+        groups.setdefault((h.get("category") or "").strip(), []).append(h)
+    def gkey(item):
+        h0 = item[1][0]
+        return (h0.get("category_order", 1000), (h0.get("category_label") or "Uncategorized").lower())
+    shown = 0
+    for _key, hs in sorted(groups.items(), key=gkey):
+        if shown >= LIMIT:
+            break
+        lines.append(f"**{hs[0].get('category_label') or 'Uncategorized'}**")
+        for h in hs:
+            if shown >= LIMIT:
+                break
+            lines.append(render(h))
+            shown += 1
+    if len(habits) > shown:
+        lines.append(f"… +{len(habits) - shown} more (showing top {LIMIT} by priority)")
 print("\n".join(lines))
 PYEOF
 }
@@ -674,9 +714,22 @@ pbrain_habit_track_file() {
 #   consolidate <profile> <db> <file> <date> <now>
 _pbrain_habit_track_py() {
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$@" <<'PYEOF'
+  local _libdir; _libdir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  PBRAIN_HABITS_LIBDIR="$_libdir" python3 - "$@" <<'PYEOF'
 import sys, os, re, json, sqlite3, datetime
+sys.path.insert(0, os.environ.get("PBRAIN_HABITS_LIBDIR", ""))
+try:
+    from habit_category import normalize as cat_norm, label as cat_label, order as cat_order
+except Exception:
+    def cat_norm(v): return re.sub(r"[^a-z0-9]+", "-", str(v or "").strip().lower()).strip("-")
+    def cat_label(v): return (" ".join(w.capitalize() for w in cat_norm(v).split("-"))) or "Uncategorized"
+    def cat_order(v): return 1000 if not cat_norm(v) else 100
 
+# The dated tracking file is SPLIT into one table per part (category), each under
+# a `## <Part>` heading. Within a section the table is the plain 6-column shape
+# below — the heading carries the part. Grouping + section order are DERIVED from
+# the profile on every render (finalize_rows), never trusted from the file, so
+# editing a habit's category re-sections the file on the next sync/refresh.
 HEADER = "| Habit | Criteria | Progress | Done | Count | Note |"
 SEP    = "|-------|----------|----------|------|-------|------|"
 # The Done column carries a per-day STATE token, not just a checkbox:
@@ -727,12 +780,15 @@ def load_habits(profile):
         except (TypeError, ValueError):
             mt = None
         sc = h.get("scoring")
+        cat = cat_norm(h.get("category"))
         out.append({"id": str(h.get("id", "")).strip() or slugify(name), "name": name,
                     "schedule_type": st, "direction": direction, "target_count": tc,
                     "priority": str(h.get("priority", "medium")).strip().lower(),
                     "unit": unit, "measure_target": mt, "measured": mt is not None,
                     "scoring": sc if isinstance(sc, dict) else None,
-                    "archived": bool(h.get("archived"))})
+                    "archived": bool(h.get("archived")),
+                    "category": cat, "category_label": cat_label(cat),
+                    "category_order": cat_order(cat)})
     return out
 
 
@@ -1026,35 +1082,90 @@ def front(date):
             f"# Habits — {date}\n\n"
             "Mark what you did today: put `x` in **Done**. Count/Note optional.\n"
             "Generated from your Habits Profile; weekly/monthly progress is shown\n"
-            "for context. Unchecked habits are pruned at end of day.\n\n")
+            "for context. Habits are split into a table per **part** (category).\n"
+            "Unchecked habits are pruned at end of day.\n\n")
 
 def parse_table(text):
+    # The file holds one table per part section. Collect EVERY section's habit
+    # rows into one flat list; the `## <Part>` headings are throwaway (re-derived
+    # + re-emitted on render). pre = content before the first section/table;
+    # post = anything after the last table. Header-aware per table, so old
+    # single-table files (6- or 7-column, with or without a Part column) parse
+    # too.
     lines = text.splitlines()
-    hi = None
-    for i, l in enumerate(lines):
-        if re.match(r"\s*\|\s*Habit\s*\|", l):
-            hi = i
-            break
-    if hi is None:
+    hdr_idxs = [i for i, l in enumerate(lines) if re.match(r"\s*\|\s*Habit\s*\|", l)]
+    if not hdr_idxs:
         return text, [], ""
-    j = hi + 2
+    first = hdr_idxs[0]
+    # pre = everything before the first table, minus a trailing "## " section
+    # heading + surrounding blanks (regenerated on render).
+    k = first - 1
+    while k >= 0 and lines[k].strip() == "":
+        k -= 1
+    if k >= 0 and lines[k].lstrip().startswith("##"):
+        k -= 1
+        while k >= 0 and lines[k].strip() == "":
+            k -= 1
+    pre = "\n".join(lines[:k + 1])
     rows = []
-    while j < len(lines) and lines[j].strip().startswith("|"):
-        cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
-        while len(cells) < 6:
-            cells.append("")
-        rows.append({"name": cells[0], "criteria": cells[1], "progress": cells[2],
-                     "done": cells[3], "count": cells[4], "note": cells[5]})
-        j += 1
-    return "\n".join(lines[:hi]), rows, "\n".join(lines[j:])
+    last_end = first
+    for hi in hdr_idxs:
+        hdr = [c.strip().lower() for c in lines[hi].strip().strip("|").split("|")]
+        idx = {nm: kk for kk, nm in enumerate(hdr)}
+        def col(cells, nm, _idx=idx):
+            kk = _idx.get(nm)
+            return cells[kk].strip() if (kk is not None and kk < len(cells)) else ""
+        j = hi + 2
+        while j < len(lines) and lines[j].strip().startswith("|"):
+            cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+            rows.append({"name": col(cells, "habit"), "part": col(cells, "part"),
+                         "criteria": col(cells, "criteria"), "progress": col(cells, "progress"),
+                         "done": col(cells, "done"), "count": col(cells, "count"),
+                         "note": col(cells, "note")})
+            j += 1
+        last_end = j
+    post = "\n".join(lines[last_end:])
+    return pre, rows, post
+
+def row_line(r):
+    return ("| %s | %s | %s | %s | %s | %s |"
+            % (r["name"], r["criteria"], r["progress"], r["done"], r["count"], r["note"]))
+
+def finalize_rows(rows, by_name):
+    # Derive each row's Part + sort index from the profile (the source of truth),
+    # then GROUP by part: canonical order, then custom, then uncategorized last —
+    # preserving the original (profile) order within a part. A row whose habit is
+    # gone sorts to the end (Uncategorized).
+    for i, r in enumerate(rows):
+        h = by_name.get(r["name"].strip().lower())
+        if h:
+            r["part"] = h["category_label"] if h.get("category") else ""
+            r["_order"] = h.get("category_order", 1000)
+        else:
+            r.setdefault("part", "")
+            r["_order"] = 1000
+        r["_i"] = i
+    return sorted(rows, key=lambda r: (r.get("_order", 1000), (r.get("part") or "").lower(), r["_i"]))
 
 def render(pre, rows, post):
-    body = [HEADER, SEP]
+    # `rows` is already finalized (part set + grouped). Emit one `## <Part>`
+    # section + table per part, in that grouped order. Uncategorized -> "Other".
+    body = []
+    cur = object()
     for r in rows:
-        body.append(f"| {r['name']} | {r['criteria']} | {r['progress']} | {r['done']} | {r['count']} | {r['note']} |")
+        part = (r.get("part") or "").strip()
+        if part != cur:
+            if body:
+                body.append("")
+            body.append("## " + (part if part else "Other"))
+            body.append("")
+            body.append(HEADER)
+            body.append(SEP)
+            cur = part
+        body.append(row_line(r))
     out = pre.rstrip() + "\n\n" + "\n".join(body) + "\n"
     if post.strip():
-        out += post.rstrip() + "\n"
+        out += "\n" + post.rstrip() + "\n"
     return out
 
 def new_rows(habits, con, date):
@@ -1132,6 +1243,7 @@ op = sys.argv[1]
 if op == "init":
     profile, db, f, date = sys.argv[2:6]
     habits = [h for h in load_habits(profile) if not h["archived"]]
+    hbn = {h["name"].strip().lower(): h for h in habits}
     con = sqlite3.connect(db) if os.path.exists(db) else None
     if os.path.exists(f):
         pre, rows, post = parse_table(open(f).read())
@@ -1144,11 +1256,10 @@ if op == "init":
             else:
                 rows.append({"name": h["name"], "criteria": cr, "progress": pr,
                              "done": "", "count": "", "note": ""})
-        out = render(pre if pre.strip() else front(date).rstrip(), rows, post)
+        out = render(pre if pre.strip() else front(date).rstrip(),
+                     finalize_rows(rows, hbn), post)
     else:
-        out = front(date) + "\n".join([HEADER, SEP] + [
-            f"| {r['name']} | {r['criteria']} | {r['progress']} | {r['done']} | {r['count']} | {r['note']} |"
-            for r in new_rows(habits, con, date)]) + "\n"
+        out = render(front(date).rstrip(), finalize_rows(new_rows(habits, con, date), hbn), "")
     if con:
         con.close()
     open(f, "w").write(out)
@@ -1218,9 +1329,10 @@ elif op == "mark":
             amount = fmtnum(val)  # feed the measured-amount path below
     con = sqlite3.connect(db) if os.path.exists(db) else None
     if not os.path.exists(f):
-        open(f, "w").write(front(date) + "\n".join([HEADER, SEP] + [
-            f"| {r['name']} | {r['criteria']} | {r['progress']} | {r['done']} | {r['count']} | {r['note']} |"
-            for r in new_rows([x for x in habits if not x["archived"]], con, date)]) + "\n")
+        _act = [x for x in habits if not x["archived"]]
+        _hbn = {x["name"].strip().lower(): x for x in _act}
+        open(f, "w").write(render(front(date).rstrip(),
+                                  finalize_rows(new_rows(_act, con, date), _hbn), ""))
     pre, rows, post = parse_table(open(f).read())
     token = STATUS_TOKEN.get(status, "x")
     if status != "done":
@@ -1265,7 +1377,7 @@ elif op == "mark":
     # Write markdown first (source of truth), then commit DB so that if the
     # file write fails the DB is not committed — consolidate will re-mirror on
     # next run and recover consistency.
-    open(f, "w").write(render(pre, rows, post))
+    open(f, "w").write(render(pre, finalize_rows(rows, active), post))
     if con is not None:
         con.commit()
         con.close()
@@ -1358,7 +1470,7 @@ elif op == "consolidate":
     # prune the day's file to the habits with a recorded STATE (done / skipped /
     # missed) — the day's record survives, only the untouched "not yet" rows go.
     kept = [r for r in rows if day_status(r["done"])]
-    open(f, "w").write(render(pre, kept, post))
+    open(f, "w").write(render(pre, finalize_rows(kept, by_name), post))
     print("consolidated")
 
 elif op == "refresh":
@@ -1380,7 +1492,7 @@ elif op == "refresh":
         refresh_progress(con, rows, by_name, date)
         con.commit()
         con.close()
-    open(f, "w").write(render(pre, rows, post))
+    open(f, "w").write(render(pre, finalize_rows(rows, by_name), post))
     print(f"refreshed {f}")
 PYEOF
 }

@@ -27,9 +27,12 @@ set -euo pipefail
 #   habits.sh                        first run → setup; else → dashboard
 #   habits.sh log --name "X" --date YYYY-MM-DD [--count N] [--source cmd] [--note "..."]
 #   habits.sh add --name "X" --type daily|weekly|monthly --direction at_least|at_most
-#                 [--target N] [--priority low|medium|high] [--notes "..."]
+#                 [--target N] [--priority low|medium|high] [--category <part>] [--notes "..."]
 #   habits.sh edit --id <id> [--name ...] [--type ...] [--direction ...]
-#                  [--target N] [--priority ...] [--notes ...]
+#                  [--target N] [--priority ...] [--category <part>] [--notes ...]
+#                  (--category / --part: ONE part per habit — wellness | fitness-activity |
+#                   bad-habits | looks | cleanliness | work | diet | <custom slug>; "" clears it.
+#                   The dashboard rollup groups habits under their part.)
 #   habits.sh archive --id <id>      soft-delete (keeps history)
 #   habits.sh history --name "X"     event history for one habit (newest first)
 #   habits.sh rollup [--date YYYY-MM-DD]   text rollup (top 20 vs criteria)
@@ -587,7 +590,7 @@ fi
 if [[ "$SUB" == "add" ]]; then
   shift || true
   A_NAME=""; A_TYPE=""; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
-  A_UNIT=""; A_MEASURE=""; A_COMPONENTS=""
+  A_UNIT=""; A_MEASURE=""; A_COMPONENTS=""; A_CAT=""
   # Schedule (axis 1): kind + its params. Frequency forms resolve to spaced days.
   A_SCHED=""; A_DAYS=""; A_TPW=""; A_START_DAY=""; A_EVERY=""; A_START_DATE=""
   A_DOM=""; A_TPM=""; A_START_DOM=""
@@ -601,6 +604,7 @@ if [[ "$SUB" == "add" ]]; then
       --unit)            A_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
       --measure-target)  A_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
       --components)      A_COMPONENTS="${2:-}"; shift 2 2>/dev/null || shift ;;    # checklist scoring: "Item A; Item B=2; Item C"
+      --category|--part) A_CAT="${2:-}"; shift 2 2>/dev/null || shift ;;          # part: wellness|fitness-activity|bad-habits|looks|cleanliness|work|diet|<custom>
       --notes)           A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       --schedule)        A_SCHED="${2:-}"; shift 2 2>/dev/null || shift ;;         # daily|weekdays|interval|monthly
       --days)            A_DAYS="${2:-}"; shift 2 2>/dev/null || shift ;;          # weekdays: mon,wed,fri
@@ -679,12 +683,17 @@ print("\n".join(str(h.get("id","")).strip() for h in (d.get("habits") or []) if 
   PBH_KIND="$A_SCHED" PBH_DAYS="$A_DAYS" PBH_TPW="$A_TPW" PBH_START_DAY="$A_START_DAY" \
   PBH_EVERY="$A_EVERY" PBH_START_DATE="$A_START_DATE" PBH_DOM="$A_DOM" PBH_TPM="$A_TPM" \
   PBH_START_DOM="$A_START_DOM" PBH_TODAY="$TODAY" PBH_TARGET="$A_TARGET" PBH_COMPONENTS="$A_COMPONENTS" \
+  PBH_CATEGORY="$A_CAT" \
   python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_DIR" "$A_PRIO" "$A_NOTES" "$A_UNIT" "$A_MEASURE" <<'PYEOF'
 import json, os, re, sys
 libdir, path, hid, name, direction, priority, notes, unit, measure = sys.argv[1:10]
 sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields, schedule_label
 from profile_lock import ProfileLock
+try:
+    from habit_category import normalize as cat_norm
+except Exception:
+    def cat_norm(v): return re.sub(r"[^a-z0-9]+", "-", str(v or "").strip().lower()).strip("-")
 result_line = ""
 
 def _slug(s):
@@ -763,6 +772,10 @@ with ProfileLock(path) as lock:
         "priority": priority, "unit": unit.strip(), "measure_target": mv,
         "archived": False, "notes": notes.strip(),
     }
+    # Category ("part") — single slug; stored only when set (absence = uncategorized).
+    cat = cat_norm(os.environ.get("PBH_CATEGORY", ""))
+    if cat:
+        entry["category"] = cat
     if scoring is not None:
         entry["scoring"] = scoring
     habits.append(entry)
@@ -774,7 +787,8 @@ with ProfileLock(path) as lock:
     lock.write(text)
     measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
     score_note = (", checklist: " + " + ".join(f"{c['name']} ×{c['weight']}" for c in components)) if components else ""
-    result_line = f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note}{score_note})"
+    cat_note = f", {cat}" if cat else ""
+    result_line = f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{cat_note}{measure_note}{score_note})"
 print(result_line)
 PYEOF
   exit 0
@@ -786,7 +800,7 @@ fi
 if [[ "$SUB" == "edit" ]]; then
   shift || true
   E_ID=""; E_NAME="__keep__"; E_TYPE="__keep__"; E_DIR="__keep__"; E_TARGET="__keep__"; E_PRIO="__keep__"; E_NOTES="__keep__"
-  E_UNIT="__keep__"; E_MEASURE="__keep__"; E_COMPONENTS="__keep__"
+  E_UNIT="__keep__"; E_MEASURE="__keep__"; E_COMPONENTS="__keep__"; E_CAT="__keep__"
   # Schedule edit flags — passing ANY of these rebuilds the habit's schedule.
   E_SCHED=""; E_DAYS=""; E_TPW=""; E_START_DAY=""; E_EVERY=""; E_START_DATE=""
   E_DOM=""; E_TPM=""; E_START_DOM=""; E_SCHED_TOUCHED=0
@@ -801,6 +815,7 @@ if [[ "$SUB" == "edit" ]]; then
       --unit)            E_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
       --measure-target)  E_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
       --components)      E_COMPONENTS="${2:-}"; shift 2 2>/dev/null || shift ;;   # checklist scoring; "" clears it
+      --category|--part) E_CAT="${2:-}"; shift 2 2>/dev/null || shift ;;          # part; "" clears it (back to uncategorized)
       --notes)           E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       --schedule)        E_SCHED="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
       --days)            E_DAYS="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
@@ -829,12 +844,17 @@ if [[ "$SUB" == "edit" ]]; then
   PBH_TOUCHED="$E_SCHED_TOUCHED" PBH_KIND="$E_SCHED" PBH_DAYS="$E_DAYS" PBH_TPW="$E_TPW" \
   PBH_START_DAY="$E_START_DAY" PBH_EVERY="$E_EVERY" PBH_START_DATE="$E_START_DATE" \
   PBH_DOM="$E_DOM" PBH_TPM="$E_TPM" PBH_START_DOM="$E_START_DOM" PBH_TODAY="$TODAY" \
+  PBH_CATEGORY="$E_CAT" \
   python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" "$E_COMPONENTS" <<'PYEOF'
 import json, os, re, sys
 libdir, path, hid, name, direction, target, priority, notes, unit, measure, components = sys.argv[1:12]
 sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields
 from profile_lock import ProfileLock
+try:
+    from habit_category import normalize as cat_norm
+except Exception:
+    def cat_norm(v): return re.sub(r"[^a-z0-9]+", "-", str(v or "").strip().lower()).strip("-")
 KEEP = "__keep__"
 result_line = ""
 
@@ -901,6 +921,15 @@ with ProfileLock(path) as lock:
             found["measure_target"] = None
     if notes != KEEP:
         found["notes"] = notes.strip()
+    # Category ("part"): --category sets a single slug; --category "" clears it
+    # (drops the habit back to uncategorized).
+    cat_env = os.environ.get("PBH_CATEGORY", KEEP)
+    if cat_env != KEEP:
+        cat = cat_norm(cat_env)
+        if cat:
+            found["category"] = cat
+        else:
+            found.pop("category", None)
     # Checklist scoring: --components "A; B=2; C" sets the spec; --components ""
     # clears it (drops the habit back to a plain tracked habit).
     if components != KEEP:
@@ -2200,18 +2229,18 @@ def file_statuses(fp):
         lines = open(fp).read().splitlines()
     except Exception:
         lines = []
-    hi = None
-    for i, l in enumerate(lines):
-        if re.match(r"\s*\|\s*Habit\s*\|", l):
-            hi = i
-            break
-    if hi is not None:
+    # The file holds one table per part section — scan EVERY table. Header-aware:
+    # resolve Habit + Done by column name (tolerates the old single-table layout
+    # and any column order).
+    for hi in [i for i, l in enumerate(lines) if re.match(r"\s*\|\s*Habit\s*\|", l)]:
+        hdr = [c.strip().lower() for c in lines[hi].strip().strip("|").split("|")]
+        hidx = hdr.index("habit") if "habit" in hdr else 0
+        didx = hdr.index("done") if "done" in hdr else 3
         j = hi + 2
         while j < len(lines) and lines[j].strip().startswith("|"):
             cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
-            while len(cells) < 6:
-                cells.append("")
-            out[cells[0].strip().lower()] = day_status(cells[3])
+            if max(hidx, didx) < len(cells):
+                out[cells[hidx].strip().lower()] = day_status(cells[didx])
             j += 1
     _file_cache[fp] = out
     return out
@@ -2403,6 +2432,12 @@ STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time
     done/not-done. Most habits are plain yes/no — only ask/set this when the user
     frames it as a quantity. A measured habit's --target is then irrelevant.
   - priority: low / medium / high — how much it matters right now.
+  - part (category): which area it belongs to. PROPOSE one yourself from the
+    habit's name/notes — wellness | fitness-activity | bad-habits | looks |
+    cleanliness | work | diet (or a custom slug if none fit) — and confirm it in
+    the same breath ("I'll file this under cleanliness — ok?"). Pass it as
+    --category <slug>. Don't make the user pick from a list; suggest, let them
+    correct. Only skip it if they explicitly want it uncategorized.
   - notes: optional short note (e.g. "10 min morning", "weekends only").
   Then create it immediately by running the add_cmd above with those values.
   The command mints a stable id and writes valid JSON — never hand-edit the file.
@@ -2480,6 +2515,64 @@ for h in data.get("habits") or []:
 fi
 
 # ---------------------------------------------------------------------------
+# Staged migration 0008 — one-time backfill of habit categories ("parts").
+# Pending only while some active habit has no category; fires on the dashboard
+# path (other subcommands have exited above), halts so the model walks the
+# backfill part by part before showing the board, and records when done.
+# ---------------------------------------------------------------------------
+if declare -F pbrain_migration_pending >/dev/null \
+   && pbrain_migration_pending 0008_habits_categorize; then
+  CAT_LIST="$(printf '%s' "$PROFILE_JSON" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for h in (d.get("habits") or []):
+    if h.get("archived"):
+        continue
+    hid = str(h.get("id", ""))
+    name = str(h.get("name", "?"))
+    st = h.get("schedule_type") or "daily"
+    direction = h.get("direction") or "at_least"
+    cat = str(h.get("category", "")).strip() or "(none)"
+    print("- " + hid + " | " + name + " | " + st + "/" + direction + " | part: " + cat)
+' 2>/dev/null || true)"
+  echo "HABITS_MIGRATION"
+  echo "profile_file: $PROFILE_FILE"
+  echo ""
+  echo "=== ACTIVE HABITS (id | name | schedule/direction | current part) ==="
+  printf '%s\n' "$CAT_LIST"
+  cat <<MIGRATE
+
+---
+INSTRUCTIONS — one-time migration: sort the user's habits into PARTS. Do not show
+the dashboard or log anything yet. Tell the user: pbrain now groups habits into
+parts; you will sort their existing ones in one batch they can adjust.
+
+The seven canonical parts (use these slugs):
+  wellness · fitness-activity · bad-habits · looks · cleanliness · work · diet
+A habit gets exactly ONE part. A custom part is fine if none fit (pass any slug).
+
+Step 1 — AUTO-CATEGORIZE the WHOLE list yourself. For EACH habit showing
+"part: (none)", infer the best part from its name + notes. Present the full
+proposed mapping in ONE message, grouped by part so it scans fast, and call out
+the few genuine judgment calls explicitly (e.g. a chore that could be cleanliness
+or a custom "home"). Ask the user to confirm the batch or name the ones to move
+("night-walk → fitness-activity"). Do NOT write anything yet.
+
+Step 2 — Once they confirm (with any corrections folded in), apply the WHOLE
+batch — one edit per habit (the id is the first field above):
+  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> --category <slug>
+Skip any habit they want left uncategorized (do not write it).
+
+Step 3 — Then record the migration so it never re-runs:
+  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0008_habits_categorize
+
+Step 4 — Confirm: "Habits sorted into parts. Re-run /habits to see them grouped."
+Then stop.
+MIGRATE
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # Default — dashboard (structured status → tight read + offer to update).
 # Sync recent tracking md into the DB first so today's marks are reflected.
 # The Done column (x) is the source of truth — refresh today's Progress column
@@ -2512,16 +2605,20 @@ track_file above. The DB you see in the rollup is synced from those files.
 
 Step 1 — Give a tight read of the ROLLUP (don't dump it). Lead with what needs
 attention: limit habits over cap (⚠️), high-priority habits not yet fulfilled
-this period (⏳), nice streaks worth naming. The list is the top 20 by priority;
-if a "+N more" line shows, mention there are more lower-priority habits. 3–6 lines.
+this period (⏳), nice streaks worth naming. When any habit has a part, the rollup
+is grouped under **part** headers (Wellness, Fitness activity, Bad habits, Looks,
+Cleanliness, Work, Diet, then any custom, then Uncategorized) — habits stay
+priority-sorted within each part. The list is the top 20; if a "+N more" line
+shows, mention there are more lower-priority habits. 3–6 lines.
 
 Step 2 — Ask: "Want to open today's tracker, mark something, add or change a habit?"
 Use these commands — never hand-edit the profile JSON or the tracking table directly:
   - TRACK today: bash "$_SCRIPT_DIR/habits.sh" track --date $TODAY   (create/refresh today's checklist md)
   - MARK done:   bash "$_SCRIPT_DIR/habits.sh" mark --name "<exact name>" --date $TODAY [--count N] [--amount X] [--note "..."]
                  (for a measured habit — one with a unit — pass --amount, e.g. --amount 2.5)
-  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --direction at_least|at_most --schedule daily|weekdays|interval|monthly [--days mon,wed,fri | --times-per-week N [--start-day mon] | --every-days N [--start-date YYYY-MM-DD] | --days-of-month 1,16 | --times-per-month N [--start-dom D]] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--notes "..."]
-  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--direction ...] [--schedule ... + its schedule args] [--target N] [--unit ...] [--measure-target N] [--priority ...] [--notes ...]   (passing any schedule flag rebuilds the schedule)
+  - ADD habit:   bash "$_SCRIPT_DIR/habits.sh" add --name "<X>" --direction at_least|at_most --schedule daily|weekdays|interval|monthly [--days mon,wed,fri | --times-per-week N [--start-day mon] | --every-days N [--start-date YYYY-MM-DD] | --days-of-month 1,16 | --times-per-month N [--start-dom D]] [--unit "L"] [--measure-target N] [--priority low|medium|high] [--category <part>] [--notes "..."]
+                 (--category / --part = ONE part: wellness | fitness-activity | bad-habits | looks | cleanliness | work | diet | <custom>. ALWAYS propose a part yourself from the habit's name/notes and confirm it as you add, so the new habit lands in the right group — only leave it off if the user wants it uncategorized.)
+  - EDIT habit:  bash "$_SCRIPT_DIR/habits.sh" edit --id <id> [--name ...] [--direction ...] [--schedule ... + its schedule args] [--target N] [--unit ...] [--measure-target N] [--priority ...] [--category <part>] [--notes ...]   (passing any schedule flag rebuilds the schedule; --category "" clears the part)
   - ARCHIVE:     bash "$_SCRIPT_DIR/habits.sh" archive --id <id>   (removes it from the dashboard, keeps history)
   - HISTORY:     bash "$_SCRIPT_DIR/habits.sh" history --name "<X>"
   - REMINDER:    bash "$_SCRIPT_DIR/habits.sh" reminder --id <id> (--link --time HH:MM [--days mon,wed,fri] | --decline | --unlink [--cancel])

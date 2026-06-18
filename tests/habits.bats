@@ -325,6 +325,138 @@ assert "long-run" not in ids, ids
   [[ "$output" == *"2026-06-01"* ]]
 }
 
+# ── categories / parts (PB-27) ───────────────────────────────────────────────
+@test "add stores a normalized part (slugified from free text)" {
+  run HABITS add --name "Brush" --type daily --direction at_least --category "fitness activity"
+  echo "$output" | grep -q "fitness-activity" \
+    && pbrain_habits_json | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "brush")
+assert h.get("category") == "fitness-activity", h
+'
+}
+
+@test "add accepts a custom part verbatim (slugified)" {
+  HABITS add --name "Pray" --type daily --direction at_least --part "Spirituality"
+  pbrain_habits_json | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "pray")
+assert h.get("category") == "spirituality", h
+'
+}
+
+@test "edit sets a part by id" {
+  _write_profile
+  HABITS edit --id nail-cut --category looks
+  pbrain_habits_json | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "nail-cut")
+assert h.get("category") == "looks", h
+'
+}
+
+@test "edit --category \"\" clears the part" {
+  _write_profile
+  HABITS edit --id nail-cut --category looks
+  HABITS edit --id nail-cut --category ""
+  pbrain_habits_json | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "nail-cut")
+assert "category" not in h, h
+'
+}
+
+@test "status carries category + label + sort order" {
+  _write_profile
+  HABITS edit --id brush-at-night --category cleanliness
+  run pbrain_habits_status 2026-06-03
+  echo "$output" | python3 -c '
+import json, sys
+h = next(x for x in json.load(sys.stdin)["habits"] if x["id"] == "brush-at-night")
+assert h["category"] == "cleanliness" and h["category_label"] == "Cleanliness", h
+assert isinstance(h["category_order"], int) and h["category_order"] < 1000, h
+'
+}
+
+@test "rollup groups under part headers in canonical order, uncategorized last" {
+  _write_profile
+  HABITS edit --id brush-at-night --category cleanliness
+  HABITS edit --id long-run --category fitness-activity
+  # nail-cut + alcohol stay uncategorized
+  run pbrain_habits_rollup 2026-06-03
+  echo "$output" | python3 -c '
+import sys
+t = sys.stdin.read()
+for label in ("**Fitness activity**", "**Cleanliness**", "**Uncategorized**"):
+    assert label in t, (label, t)
+# canonical order: fitness-activity (1) before cleanliness (4); uncategorized last
+assert t.index("**Fitness activity**") < t.index("**Cleanliness**") < t.index("**Uncategorized**"), t
+'
+}
+
+@test "rollup stays a flat list when no habit has a part" {
+  _write_profile
+  run pbrain_habits_rollup 2026-06-03
+  [[ "$output" != *"**"* ]]
+}
+
+@test "migration 0008 is applicable while an active habit has no part" {
+  _write_profile
+  source "$REPO_ROOT/lib/migrations/0008_habits_categorize.sh"
+  run migration_applicable
+  [ "$status" -eq 0 ]
+}
+
+@test "migration 0008 stops being applicable once every active habit is parted" {
+  _write_profile
+  HABITS edit --id brush-at-night --category cleanliness
+  HABITS edit --id nail-cut --category looks
+  HABITS edit --id long-run --category fitness-activity
+  HABITS edit --id alcohol --category bad-habits
+  source "$REPO_ROOT/lib/migrations/0008_habits_categorize.sh"
+  run migration_applicable
+  [ "$status" -ne 0 ]
+}
+
+@test "track splits the daily file into one table per part, canonical order" {
+  _write_profile
+  HABITS edit --id brush-at-night --category cleanliness
+  HABITS edit --id long-run --category fitness-activity
+  HABITS track --date 2026-06-03
+  cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" | python3 -c '
+import sys
+t = sys.stdin.read()
+# a section heading per part, plain 6-column tables under each
+assert "## Fitness activity" in t and "## Cleanliness" in t and "## Other" in t, t
+assert "| Habit | Criteria | Progress | Done | Count | Note |" in t, t
+# fitness-activity (order 1) section before cleanliness (order 4); uncategorized (Other) last
+assert t.index("## Fitness activity") < t.index("## Cleanliness") < t.index("## Other"), t
+# each habit lands under its section
+assert t.index("## Fitness activity") < t.index("| Long run |") < t.index("## Cleanliness"), t
+assert t.index("## Cleanliness") < t.index("| Brush at night |") < t.index("## Other"), t
+'
+}
+
+@test "sync tolerates an old 6-column tracking file (no Part column)" {
+  _write_profile
+  mkdir -p "$PBRAIN_HABIT_TRACK_DIR"
+  cat > "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'EOF'
+---
+type: habit-tracking
+date: 2026-06-03
+tags: []
+---
+
+# Habits — 2026-06-03
+
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Brush at night | daily | 0/7 wk | x |  |  |
+EOF
+  HABITS sync --days 0 --date 2026-06-03
+  [ "$(_ev brush-at-night 2026-06-03)" = "1|done" ]
+}
+
 # ── history ──────────────────────────────────────────────────────────────────
 @test "history lists events newest-first; empty case is graceful" {
   _write_profile
@@ -534,6 +666,7 @@ PY
   python3 - "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'PY'
 import sys, re
 p = sys.argv[1]; t = open(p).read()
+# Tick the Done column (Habit | Criteria | Progress | Done | …).
 t = re.sub(r"(\| Brush at night \|[^|\n]*\|[^|\n]*\|)[^|\n]*\|", r"\1 x |", t, count=1)
 open(p, "w").write(t)
 PY
