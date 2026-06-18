@@ -354,3 +354,102 @@ EOF
   run pbrain_migration_pending 0007_goals_project_reframe
   [ "$status" -ne 0 ]
 }
+
+# ── real migration: 0009 scored-habit values → 0–1 unit scale ───────────────
+
+# A committed habits profile + a dated md + a DB, all carrying old 0–100 scored
+# values, plus a measured habit that must NOT be rescaled.
+_seed_unit_scale_fixtures() {
+  mkdir -p "$VAULT_DIR/life/habit-tracking/.profile"
+  cat > "$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md" <<'EOF'
+---
+type: habits-profile
+version: 1
+committed: true
+---
+
+```json
+{"created":"2026-06-01","habits":[
+  {"id":"eat-clean","name":"Eat clean","schedule_type":"weekly","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":7,"scoring":{"type":"slip_ladder","good_target":3,"ladder":[1.0,0.6,0.3,0]}},
+  {"id":"sleep-well","name":"Sleep well","schedule_type":"daily","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":100,"scoring":{"type":"deviation","normal_time":"23:00","normal_hours":8.0,"unit_minutes":30,"unit_hours":0.5,"ladder":[100,90,75,50,25,0]}},
+  {"id":"deep-work","name":"Deep work","schedule_type":"daily","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":75,"scoring":{"type":"focus_ratio","work_categories":["work"],"distraction_categories":["social"]}},
+  {"id":"water","name":"Water","schedule_type":"daily","direction":"at_least","priority":"medium","archived":false,"unit":"L","measure_target":4}
+]}
+```
+EOF
+  cat > "$VAULT_DIR/life/habit-tracking/2026-06-17.md" <<'EOF'
+| Habit | Criteria | Progress | Done | Count | Note |
+|-------|----------|----------|------|-------|------|
+| Sleep well | daily ≥100 | 50/100 day | x | 50 |  |
+| Deep work | daily ≥100 | 82/100 day | x | 82 |  |
+| Eat clean | weekly ≥7 | 0.6/7 wk | x | 0.6 | one slip |
+| Water | daily ≥4 | 2.5/4 day | x | 2.5 |  |
+EOF
+  export PBRAIN_DB_FILE="$TMP/pbrain.db"
+  python3 - "$PBRAIN_DB_FILE" <<'PY'
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE habit_events (habit_id TEXT, occurred_on TEXT, count INTEGER, amount REAL)")
+c.executemany("INSERT INTO habit_events VALUES (?,?,?,?)", [
+  ("sleep-well","2026-06-17",1,50.0),
+  ("deep-work","2026-06-17",1,82.0),
+  ("eat-clean","2026-06-17",1,0.6),   # already unit — must stay
+  ("water","2026-06-17",1,2.5),       # measured non-scored — must stay
+])
+c.commit()
+PY
+}
+
+@test "0009 rescales scored profile targets/ladders, md Count and DB; leaves eat-clean + measured" {
+  _seed_unit_scale_fixtures
+  run pbrain_run_migrations
+  [[ "$output" == *"PBRAIN_MIGRATED 0009_habit_scores_to_unit_scale"* ]]
+  local prof="$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md"
+  # profile: sleep-well ladder + targets → 0–1; eat-clean untouched
+  run python3 - "$prof" <<'PY'
+import json,re,sys
+d=json.loads(re.search(r"```json\s*\n(.*?)```",open(sys.argv[1]).read(),re.S).group(1))
+h={x["id"]:x for x in d["habits"]}
+ok=(h["sleep-well"]["scoring"]["ladder"]==[1.0,0.9,0.75,0.5,0.25,0.0]
+    and h["sleep-well"]["measure_target"]==1.0
+    and h["deep-work"]["measure_target"]==0.75
+    and h["eat-clean"]["scoring"]["ladder"]==[1.0,0.6,0.3,0]
+    and h["eat-clean"]["measure_target"]==7
+    and h["water"]["measure_target"]==4)
+print("OK" if ok else "BAD:"+json.dumps(h))
+PY
+  [ "$output" = "OK" ]
+  # md Count: scored rows ÷100, eat-clean + water untouched
+  run cat "$VAULT_DIR/life/habit-tracking/2026-06-17.md"
+  [[ "$output" == *"| Sleep well "*"| 0.5 |"* ]]
+  [[ "$output" == *"| Deep work "*"| 0.82 |"* ]]
+  [[ "$output" == *"| Eat clean "*"| 0.6 |"* ]]
+  [[ "$output" == *"| Water "*"| 2.5 |"* ]]
+  # DB: scored ÷100, eat-clean + water untouched
+  run sqlite3 "$PBRAIN_DB_FILE" "SELECT habit_id||'='||amount FROM habit_events ORDER BY habit_id"
+  [[ "$output" == *"deep-work=0.82"* ]]
+  [[ "$output" == *"sleep-well=0.5"* ]]
+  [[ "$output" == *"eat-clean=0.6"* ]]
+  [[ "$output" == *"water=2.5"* ]]
+  # backups parked; idempotent on re-run
+  [ -f "$VAULT_DIR/.pbrain/backup/habits-profile.v1.md.pre-0009" ]
+  run pbrain_run_migrations
+  [[ "$output" != *"0009_habit_scores_to_unit_scale"* ]]
+}
+
+@test "0009 is vacuous when all scored values are already on the 0–1 scale" {
+  mkdir -p "$VAULT_DIR/life/habit-tracking/.profile"
+  cat > "$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md" <<'EOF'
+---
+type: habits-profile
+version: 1
+committed: true
+---
+```json
+{"habits":[{"id":"deep-work","name":"Deep work","schedule_type":"daily","measure_target":0.75,"archived":false,"scoring":{"type":"focus_ratio"}}]}
+```
+EOF
+  run pbrain_run_migrations
+  [[ "$output" != *"0009_habit_scores_to_unit_scale"* ]]
+  [ -f "$VAULT_DIR/.pbrain/migrations/0009_habit_scores_to_unit_scale.done" ]
+}

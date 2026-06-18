@@ -183,11 +183,11 @@ with ProfileLock(path) as lock:
             "id": "eat-clean", "name": "Eat clean", "direction": "at_least",
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 80, "archived": False,
+            "unit": "", "measure_target": 0.8, "archived": False,
             "notes": ("Default scored habit (from the diet profile). Daily score = "
                       "share of clean meals: count clean vs unclean MEALS in the "
                       "diet log for the day (every eating occasion counts) and "
-                      "mark with --good/--bad; target 80+."),
+                      "mark with --good/--bad; target 0.8+."),
             "scoring": {"type": "meal_ratio"},
         })
         added.append("Eat clean (scored from your diet log)")
@@ -205,14 +205,14 @@ with ProfileLock(path) as lock:
             "id": "sleep-well", "name": "Sleep well", "direction": "at_least",
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 80, "archived": False,
+            "unit": "", "measure_target": 0.8, "archived": False,
             "notes": ("Default scored habit (from the fitness profile). Daily "
                       "score = deviation from the normal sleep window: mark with "
                       "--actual-time HH:MM (bed time) and --actual-hours N.N; "
-                      "target 80+."),
+                      "target 0.8+."),
             "scoring": {"type": "deviation", "normal_time": bed,
                         "normal_hours": hours, "unit_minutes": 30,
-                        "unit_hours": 0.5, "ladder": [100, 90, 75, 50, 25, 0]},
+                        "unit_hours": 0.5, "ladder": [1.0, 0.9, 0.75, 0.5, 0.25, 0]},
         })
         added.append("Sleep well (scored vs your normal sleep window)")
 
@@ -221,11 +221,11 @@ with ProfileLock(path) as lock:
             "id": "work-the-plan", "name": "Work the plan", "direction": "at_least",
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 70, "archived": False,
+            "unit": "", "measure_target": 0.7, "archived": False,
             "notes": ("Default scored habit (from the plans profile). Daily score = "
                       "weighted task completion (difficulty=load, priority=importance, "
                       "status=credit). Mark at end-of-day with "
-                      "--items JSON array of {priority,difficulty,status}; target 70+."),
+                      "--items JSON array of {priority,difficulty,status}; target 0.7+."),
             "scoring": {"type": "weighted_completion",
                         "difficulty_weights": {"easy": 1, "normal": 2, "hard": 3, "nightmare": 5},
                         "status_credit": {"done": 1.0, "partial": 0.5, "dropped": 0.0, "carried": 0.0},
@@ -284,10 +284,10 @@ with ProfileLock(path) as lock:
             "id": "train", "name": "Train", "direction": "at_least",
             "schedule": schedule, "schedule_type": schedule_type,
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 80, "archived": False,
+            "unit": "", "measure_target": 0.8, "archived": False,
             "notes": ("Default scored habit (from the fitness library). Daily score = "
                       "session volume ratio (actual vs planned volume). Mark after "
-                      "logging a session with --session JSON; target 80+."),
+                      "logging a session with --session JSON; target 0.8+."),
             "scoring": {"type": "session_volume",
                         "status_credit": {"completed": 1.0, "partial": 0.5, "skipped": 0.0},
                         "volume_cap": 1.0},
@@ -401,12 +401,12 @@ with ProfileLock(path) as lock:
             "id": "deep-work", "name": "Deep work", "direction": "at_least",
             "schedule": schedule, "schedule_type": schedule_type,
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 75, "archived": False,
+            "unit": "", "measure_target": 0.75, "archived": False,
             "notes": ("Default scored habit (from laptop tracking + the plans "
                       "profile). Auto-scored at /end-of-day: maps the day's laptop "
                       "activity onto the plan's work blocks; score = work / (work + "
                       "distraction) of active time (AFK is neutral, not penalized). "
-                      "Marked with --focus JSON of per-category minutes; target 75+."),
+                      "Marked with --focus JSON of per-category minutes; target 0.75+."),
             "scoring": {"type": "focus_ratio",
                         "work_categories": ["work"],
                         "distraction_categories": ["social", "entertainment"]},
@@ -758,14 +758,14 @@ with ProfileLock(path) as lock:
         mv = None
     # Checklist scoring (--components): a fixed daily set of weighted items. A
     # scored habit must be "measured" (carry a measure_target) for its computed
-    # 0-100 score to persist into the DB — default the daily target to 100 (take
-    # the whole stack) when one wasn't given.
+    # 0–1 unit score to persist into the DB — default the daily target to 1.0
+    # (take the whole stack) when one wasn't given.
     components = _parse_components(os.environ.get("PBH_COMPONENTS", ""))
     scoring = None
     if components:
         scoring = {"type": "checklist", "components": components}
         if mv is None:
-            mv = 100
+            mv = 1.0
     entry = {
         "id": hid, "name": name.strip(), "direction": direction,
         "schedule": sched, "schedule_type": st, "target_count": tv,
@@ -937,7 +937,7 @@ with ProfileLock(path) as lock:
         if comps:
             found["scoring"] = {"type": "checklist", "components": comps}
             if found.get("measure_target") is None:
-                found["measure_target"] = 100  # scored habit must be measured to persist
+                found["measure_target"] = 1.0  # scored habit must be measured to persist (0–1 scale)
         else:
             found.pop("scoring", None)
     # Rebuild the schedule only when a schedule-affecting flag was passed.
@@ -1124,8 +1124,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # scores — read back engine-computed scores for all scored habits on a date.
-# Scored habits carry a `scoring` block in the profile JSON; their 0–100 score
-# is stored in habit_events.amount at mark time. Emits human-readable lines
+# Scored habits carry a `scoring` block in the profile JSON; their 0.0–1.0 unit
+# score is stored in habit_events.amount at mark time. Emits human-readable lines
 # plus a HABIT_SCORES [...] JSON trailer for machine consumption.
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "scores" ]]; then

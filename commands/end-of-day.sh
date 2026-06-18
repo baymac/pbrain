@@ -262,7 +262,7 @@ reflection — in this exact shape:
   **Habits (scored)**
   | Habit | Score | Priority | Basis |
   |-------|-------|----------|-------|
-  | {name — from HABIT_SCORES read-back (Step 4e)} | {N/100 verbatim from HABIT_SCORES; — if null} | {priority} | {terse basis, e.g. "4 clean / 1 unclean", "bed 23:40 vs 23:30 · 7.2h", "2h10 work / 35m social", "8/12 tasks"} |
+  | {name — from HABIT_SCORES read-back (Step 4e)} | {the 0–1 score verbatim from HABIT_SCORES, e.g. 0.8; — if null} | {priority} | {terse basis, e.g. "4 clean / 1 unclean", "bed 23:40 vs 23:30 · 7.2h", "2h10 work / 35m social", "8/12 tasks"} |
 
   **Habits (other due today)**
   - {one line each: ✅/⏳/⚠️ name — used/target, from the rollup; omit if none due}
@@ -274,7 +274,7 @@ reflection — in this exact shape:
   - {Cals X / target Y (net ±Z) · P x/t · C x/t · F x/t · Fiber x/t — from the closed diet log}
 
   **Fitness**
-  - {{activity} — actual/planned volume (Train N/100) · {status}}
+  - {{activity} — actual/planned volume (Train 0.NN) · {status}}
 
   **Work**
   - {Focus N% — work Xm / social Ym / entertainment Zm · AFK Wm over Vh blocks}
@@ -436,7 +436,7 @@ without re-asking. Use the Edit tool on each file.
         bash "$HABITS_CMD" scores --date $TODAY
       Parse the line beginning with "HABIT_SCORES " and parse its JSON array.
       Use this to fill the "### Scoreboard" Habits (scored) table verbatim:
-        - Score column: "{N}/100" from the "score" field; "—" when score is null.
+        - Score column: the 0–1 "score" field verbatim (e.g. 0.8); "—" when score is null.
         - Priority column: the "priority" field verbatim.
         - Basis column: derive a terse note from what you already know:
             meal_ratio    → "X clean / Y unclean" meals

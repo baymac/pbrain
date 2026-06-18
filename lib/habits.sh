@@ -30,15 +30,17 @@
 #      the bootstrap writes it with version: 1, committed: true)
 #
 # Scored-habit evaluator (score_from_spec) — the model only CLASSIFIES raw
-# inputs; the scoring rule on the habit computes the 0–100 number deterministically.
+# inputs; the scoring rule on the habit computes a 0.0–1.0 UNIT score
+# deterministically. ALL scored habits share the 0–1 scale; only the model
+# (ratio vs ladder) differs. Ladders are written on the 0–1 scale too.
 # One line per scoring type:
-#   slip_ladder          counts → ladder index.
-#   meal_ratio    (eat-clean)  100·clean/(clean+unclean) meals; mark --good/--bad.
+#   slip_ladder          counts → ladder index (rungs 0–1, e.g. [1,0.6,0.3,0]).
+#   meal_ratio    (eat-clean)  clean/(clean+unclean) meals (0–1); mark --good/--bad.
 #   deviation     (sleep-well) slips from circular bed-time diff vs normal_time
 #                              (per unit_minutes) + hours shortfall vs normal_hours
 #                              (per unit_hours), ladder-indexed; mark
 #                              --actual-time HH:MM --actual-hours N.N.
-#   weighted_completion (work-the-plan) 100·earned/possible; per-task weight =
+#   weighted_completion (work-the-plan) earned/possible (0–1); per-task weight =
 #                              difficulty_weights[difficulty] (easy1/normal2/hard3/
 #                              nightmare5) × priority boost (1 + max(0,
 #                              priority_pivot−priority)·priority_step, pivot 3 step
@@ -47,26 +49,26 @@
 #                              denominator (overplanning costs you); pass rows as
 #                              --items '[{"priority":1,"difficulty":"hard","status":"done"},…]'.
 #   session_volume (train)     skipped→0; strength/duration with planned>0 & actual
-#                              present → 100·clamp(actual/planned,0,volume_cap) (cap
-#                              1.0); else binary 100·status_credit[status]
-#                              (completed100/partial50); pass --session
+#                              present → clamp(actual/planned,0,volume_cap) (cap
+#                              1.0); else binary status_credit[status]
+#                              (completed1/partial0.5); pass --session
 #                              '{"mode":"strength|duration|binary","status":…,"planned":N,"actual":N}'.
-#   focus_ratio   (deep-work)  100·work/(work+distraction) of *active* minutes;
+#   focus_ratio   (deep-work)  work/(work+distraction) of *active* minutes (0–1);
 #                              work_categories/distraction_categories default
 #                              ["work"]/["social","entertainment"]; neutral+afk
 #                              excluded; w+d=0 → unmarked; pass
 #                              --focus '{"work":120,"social":30,…}'.
 #   checklist                  fixed daily set of named weighted `components`;
-#                              100·sum(done weights)/sum(all weights); pass parts
+#                              sum(done weights)/sum(all weights) (0–1); pass parts
 #                              done by name or id as --done '[…]'.
 #
 # Auto-seeded default habits (idempotent; archived defaults never resurrected):
 #   committed diet profile     → "Eat clean" (meal_ratio).
 #   committed fitness profile  → "Sleep well" (deviation; normal window from it).
-#   committed plans-profile    → "Work the plan" (weighted_completion, daily, target 70).
-#   committed fitness-library  → "Train" (session_volume, target 80; union of the
+#   committed plans-profile    → "Work the plan" (weighted_completion, daily, target 0.7).
+#   committed fitness-library  → "Train" (session_volume, target 0.8; union of the
 #                                activities' fixed days; rest days never missed).
-#   tracker.db + committed plans-profile → "Deep work" (focus_ratio, target 75; on
+#   tracker.db + committed plans-profile → "Deep work" (focus_ratio, target 0.75; on
 #                                the plan's WORKDAYS = weekdays minus
 #                                typical_day.rest_days).
 #
@@ -390,14 +392,16 @@ for h in active:
     streak_val = 0
     if h["measured"]:
         # amount-based vs target. A plain measured habit (water, distance) SUMS
-        # the amount over the period. A SCORED habit stores a 0–100 score per day,
-        # so over a week/month we want the AVERAGE of those daily scores, not the
-        # sum (5 days × 75 must read 75, not 375). Daily stays today's score.
+        # the amount over the period. A SCORED habit stores a 0–1 unit score per
+        # day, so over a week/month we want the AVERAGE of those daily scores,
+        # not the sum (5 days × 0.75 must read 0.75, not 3.75). round to 2 dp to
+        # keep the unit scale (an int round would collapse it to 0/1). Daily
+        # stays today's score.
         scored = isinstance(h.get("scoring"), dict)
         if scored and st == "weekly":
-            amt = int(week_amount / week_count + 0.5) if week_count else 0
+            amt = round(week_amount / week_count, 2) if week_count else 0
         elif scored and st == "monthly":
-            amt = int(month_amount / month_count + 0.5) if month_count else 0
+            amt = round(month_amount / month_count, 2) if month_count else 0
         else:
             amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}.get(st, today_amount)
         used, target = amt, h["measure_target"]
@@ -586,11 +590,11 @@ PYEOF
 # pbrain_habits_scores [today] — read back engine-computed scores for every
 # scored habit (habits whose JSON carries a "scoring" block) for a given date.
 # Scores are stored in habit_events.amount at mark time (score_from_spec writes
-# the 0–100 float through the `amount` channel). Habits not yet marked that day
-# show as "not marked" / null.
+# the 0.0–1.0 unit float through the `amount` channel). Habits not yet marked
+# that day show as "not marked" / null.
 #
 # Output:
-#   - <name> · <N>/100 · <scoring_type> · <priority>   (one line per scored habit)
+#   - <name> · <0.NN> · <scoring_type> · <priority>   (one line per scored habit)
 #   ...
 #   HABIT_SCORES [{"name":..,"id":..,"scoring_type":..,"priority":..,"score":..},…]
 #
@@ -666,9 +670,8 @@ result = []
 for h in scored:
     raw_score = amounts.get(h["id"])
     if raw_score is not None:
-        score_int = int(raw_score + 0.5)
-        score_disp = f"{score_int}/100"
-        score_val = score_int
+        score_val = round(raw_score, 2)
+        score_disp = "%g" % score_val   # 1.0 -> "1", 0.83 -> "0.83", 0 -> "0"
     else:
         score_disp = "not marked"
         score_val = None
@@ -825,18 +828,21 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
                     items=None, session=None, focus=None, done=None):
     """Generic, deterministic habit-score evaluator. The habit's profile owns
     the rule (spec); the caller supplies only raw inputs. Returns a float
-    score, or None when the spec is unusable / no inputs were given (callers
-    fall back to their normal path on None).
+    score on a 0.0–1.0 UNIT scale (every scored habit shares this scale; only
+    the model differs), or None when the spec is unusable / no inputs were
+    given (callers fall back to their normal path on None). Ratio types round
+    half-up to 2 decimals; ladder types return the ladder rung verbatim (so
+    a profile's ladder must already be expressed on the 0–1 scale).
 
     Spec types:
 
     "slip_ladder" (the original):
       slips = given --slips, else max(bad, good_target - good)  (clamped >= 0)
-      score = ladder[min(slips, len(ladder)-1)]
+      score = ladder[min(slips, len(ladder)-1)]   (rungs are 0–1, e.g. [1,0.6,0.3,0])
       'good_target' is optional (0 = no good-count requirement -> pure bad ladder).
 
     "meal_ratio" (eat-clean): inputs good = clean MEALS, bad = unclean MEALS.
-      score = round(100 * good / (good + bad)). The score depends on the
+      score = good / (good + bad), rounded to 2 dp. The score depends on the
       NUMBER of meals — one slip out of 3 meals scores worse than one of 6.
 
     "deviation" (sleep-well): spec carries normal_time "HH:MM", normal_hours,
@@ -861,8 +867,9 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
         total = g + b
         if total <= 0:
             return None
-        # int(x + 0.5): predictable half-up (python round() is banker's rounding).
-        return float(int(100.0 * g / total + 0.5))
+        # Unit scale (0.0–1.0): share of clean meals. int(x+0.5)/100 keeps
+        # predictable half-up rounding to 2 dp (python round() is banker's).
+        return int(100.0 * g / total + 0.5) / 100.0
 
     if stype == "deviation":
         ladder = spec.get("ladder")
@@ -893,7 +900,7 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
     if stype == "checklist":
         # A fixed daily SET of named components, each with a weight; the caller
         # passes the list of components actually completed (`done`, by id OR
-        # name). score = 100 * sum(completed weights) / sum(all weights).
+        # name). score = sum(completed weights) / sum(all weights) (0–1).
         # Generalises any multi-item daily routine — e.g. a supplement stack
         # (morning ×2 + a night magnesium = 3 components, each weight 1, so a
         # morning-only day scores 67). Equal weights = a plain fraction-done.
@@ -916,8 +923,8 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
                 earned += w
         if total <= 0.0:
             return None
-        # int(x + 0.5): predictable half-up (python round() is banker's).
-        return float(int(100.0 * earned / total + 0.5))
+        # Unit scale (0.0–1.0); int(x+0.5)/100 keeps half-up rounding to 2 dp.
+        return int(100.0 * earned / total + 0.5) / 100.0
 
     if stype == "weighted_completion":
         if not isinstance(items, list) or not items:
@@ -940,12 +947,12 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
             earned += w * float(sc_map.get(status, 0.0))
         if possible <= 0.0:
             return None
-        return float(int(100.0 * earned / possible + 0.5))
+        return int(100.0 * earned / possible + 0.5) / 100.0
 
     if stype == "focus_ratio":
         # "Deep work": inputs = a dict of per-category active minutes during the
         # day's work blocks, e.g. {"work":120,"social":30,"entertainment":15,
-        # "neutral":10}. score = 100 * work / (work + distraction); neutral and
+        # "neutral":10}. score = work / (work + distraction) (0–1); neutral and
         # afk are excluded from the formula. Which categories count as work vs
         # distraction is the spec's call, not the code's.
         if not isinstance(focus, dict):
@@ -963,7 +970,7 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
         d = _sum_cats(distr_cats)
         if (w + d) <= 0.0:
             return None  # no active work-or-distraction time -> caller leaves it unmarked
-        return float(int(100.0 * w / (w + d) + 0.5))
+        return int(100.0 * w / (w + d) + 0.5) / 100.0
 
     if stype == "session_volume":
         if not isinstance(session, dict):
@@ -978,9 +985,9 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
             return 0.0
         if mode in ("strength", "duration") and planned is not None and planned > 0.0 and actual_vol is not None:
             ratio = min(max(0.0, actual_vol / planned), volume_cap)
-            return float(int(100.0 * ratio + 0.5))
+            return int(100.0 * ratio + 0.5) / 100.0
         credit = float(sc_map.get(status, 0.0))
-        return float(int(100.0 * credit + 0.5))
+        return int(100.0 * credit + 0.5) / 100.0
 
     if stype != "slip_ladder":
         return None
@@ -1827,13 +1834,13 @@ print("\n".join(out))
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today \\"
   printf '%s\n' "    --session '{\"mode\":\"strength\",\"status\":\"completed\",\"planned\":120,\"actual\":115}'"
   printf '%s\n' "For binary sessions (yoga, sport): omit planned/actual, set mode=binary;"
-  printf '%s\n' "score is status_credit x 100 (completed=100, partial=50, skipped=0)."
+  printf '%s\n' "score is status_credit on a 0–1 scale (completed=1, partial=0.5, skipped=0)."
   printf '%s\n' "Checklist scored habits (e.g. Supplements): a fixed daily set of named"
   printf '%s\n' "components, each with a weight. Pass the JSON list of components the user"
   printf '%s\n' "actually took/did today (by component name or id — see the rules below):"
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact name>\" --date $today \\"
   printf '%s\n' "    --done '[\"Morning vitamin D\", \"Magnesium (night)\"]'"
-  printf '%s\n' "score = 100 x done-weight / total-weight (e.g. 2 of 3 equal items = 67)."
+  printf '%s\n' "score = done-weight / total-weight on a 0–1 scale (e.g. 2 of 3 equal items = 0.67)."
   printf '%s\n' "List ONLY what was done; omit the rest. Never guess the score yourself."
   if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
     printf '%s\n' "Classification rules per scored habit — use EXACTLY each habit's own"
