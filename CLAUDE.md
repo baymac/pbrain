@@ -83,7 +83,8 @@ pbrain/
 ├── lib/reminders.sh             ← /remind (Apple Reminders) + /remind-blocking (overlay poller); FIRE/DEFER/MISS state machine + cron→recurrence mapping in its header
 ├── lib/pbrain-reminders.swift   ← EventKit Reminders helper source (built on demand → pbrain-reminders.app)
 ├── lib/pbrain-notify.swift      ← macOS notifier source (overlay's no-swiftc fallback)
-├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking)
+├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking); plays the lifecycle chime at notif-start / blocking-start / blocking-end (--chime / --no-chime)
+├── lib/assets/chime.mp3         ← bundled lifecycle chime; copied into pbrain-overlay.app/Contents/Resources on build (gate: PBRAIN_OVERLAY_CHIME, override: PBRAIN_CHIME_FILE)
 ├── lib/pbrain-tracker.swift     ← /laptop-tracking daemon source (resident LaunchAgent)
 ├── tests/                       ← bats tests for the shared lib/ helpers
 ├── docs/                        ← one short user-facing doc per command

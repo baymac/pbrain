@@ -204,6 +204,8 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_OVERLAY_APP` | `/remind-blocking` (cached build of pbrain's full-screen overlay app) | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | `/remind-blocking` (default overlay background colour, hex) | unset → slate |
 | `PBRAIN_OVERLAY_SNOOZE_MINUTES` | `/remind-blocking` (warning-panel Snooze push-out in minutes; `0` hides it) | unset → `5` |
+| `PBRAIN_OVERLAY_CHIME` | `/remind-blocking` (lifecycle chime at notif-start / blocking-start / blocking-end; `0`/`off` mutes) | unset → on |
+| `PBRAIN_CHIME_FILE` | `/remind-blocking` (override the chime clip with your own `afplay`-playable file) | unset → bundled `chime.mp3` |
 | `PBRAIN_TRACKER_DB_FILE` | `/laptop-tracking` (its OWN local SQLite DB — segments; never synced to the vault) | `~/.config/pbrain/tracker.db` |
 | `PBRAIN_TRACKER_APP` | `/laptop-tracking` (cached build of the resident tracker daemon app) | `~/.config/pbrain/pbrain-tracker.app` |
 | `PBRAIN_TRACKER_DIR` | `/laptop-tracking` (daily report write dir) | `$VAULT/life/laptop-tracking` |

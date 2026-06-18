@@ -326,3 +326,43 @@ EOF
   pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
   ! grep -q -- "--snooze-minutes" "$ARGLOG"
 }
+
+# ---------------------------------------------------------------------------
+# Lifecycle chime (PB-14): notif-start / blocking-start / blocking-end cues.
+# The clip ships in lib/assets/chime.mp3 and is copied into the app bundle's
+# Resources at build; the env gate is translated into --no-chime / --chime argv
+# (env doesn't survive `open -n`). Default ON relies on the bundled file, so no
+# flag is emitted in the common case.
+# ---------------------------------------------------------------------------
+
+@test "pbrain_overlay_build copies the shipped chime into the bundle Resources" {
+  # swiftc is the no-op stub, so no binary is produced — but Contents/ is created
+  # and the chime copy still runs against the real repo asset.
+  pbrain_overlay_build
+  [ -f "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3" ] && \
+    cmp -s "$REPO_ROOT/lib/assets/chime.mp3" "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3"
+}
+
+@test "chime defaults on: no chime flag is emitted (overlay uses the bundled clip)" {
+  _stub_overlay_launch
+  pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  ! grep -qE -- "--no-chime|--chime" "$ARGLOG"
+}
+
+@test "PBRAIN_OVERLAY_CHIME=0 mutes the chime via --no-chime" {
+  _stub_overlay_launch
+  PBRAIN_OVERLAY_CHIME=0 pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  grep -q -- "--no-chime" "$ARGLOG"
+}
+
+@test "PBRAIN_CHIME_FILE overrides the chime path via --chime" {
+  _stub_overlay_launch
+  PBRAIN_CHIME_FILE=/tmp/custom.mp3 pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  grep -q -- "--chime /tmp/custom.mp3" "$ARGLOG"
+}
+
+@test "the chime mute value is case-insensitive (OFF mutes)" {
+  _stub_overlay_launch
+  PBRAIN_OVERLAY_CHIME=OFF pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  grep -q -- "--no-chime" "$ARGLOG"
+}
