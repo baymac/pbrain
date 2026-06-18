@@ -394,8 +394,10 @@ PYEOF
   </dict>
   <key>StartInterval</key><integer>60</integer>
   <key>RunAtLoad</key><true/>"
+    # Bake the stable command path, not this (possibly ephemeral) workspace/dev
+    # clone — the poller must outlive the dir it was enabled from.
     pbrain_launchagent_install "com.pbrain.reminders" "$PLIST" "$LOG_FILE" "$REMIND_EXTRA" \
-      -- /bin/bash "$SELF" tick
+      -- /bin/bash "$(pbrain_stable_cmd_path "$SELF")" tick
     echo "Installed background blocking-reminders poller (fires every ~1 min)."
     if [[ -x "$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay" ]]; then
       echo "Overlay: pbrain-overlay.app built — reliable background overlays."

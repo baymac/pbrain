@@ -1,6 +1,6 @@
 ---
 description: Set up a local self-hosted Plane (makeplane) instance and wire pbrain to it. Plane is pbrain's sole project brain (Module → Issue → Sub-issue + a Linear-like UI); pbrain's /plan-my-work and /end-of-day then read ready tasks from Plane and write status back. Guided, idempotent — safe to re-run. Use when the user wants to run Plane locally as pbrain's task tracker (task planning + project progress require Plane).
-argument-hint: (none) | fetch | up | config | vhost | status
+argument-hint: (none) | fetch | up | config | vhost | github | status
 ---
 > **Note:** `/project-manager` now absorbs this wizard (`probe|fetch|up|config|vhost|status`) plus all Plane ops, and is the preferred entry point once a vault exists. `/init-plane` stays as the vault-free setup path (it needs no Obsidian vault). If the user already has pbrain set up, point them at `/project-manager`.
 
@@ -33,10 +33,32 @@ The flow:
    ```
    init-plane config --api-key <token> --workspace <slug> --project <project-id>
    ```
-   The base URL is auto-detected from Plane's `plane.env` — `http://127.0.0.1:1800` once you've run `vhost`, else `http://localhost`; pass `--base-url` only for a remote/custom instance. This writes `~/.config/pbrain/plane.json` (mode `0600`, **never** synced to the vault). Confirm `PLANE_CONFIGURED`.
+   The base URL is auto-detected from Plane's `plane.env` — `http://127.0.0.1:1800` once you've run `vhost`, else `http://localhost`; pass `--base-url` only when your self-host isn't at the default local URL (e.g. it runs on another machine or behind a custom domain). This writes `~/.config/pbrain/plane.json` (mode `0600`, **never** synced to the vault). Confirm `PLANE_CONFIGURED`.
 
 8. **Verify.** Run `/project-manager test` (should list your project's states) and `/project-manager ready` (your ready issues). If you see `PLANE_ERROR`, relay it — usually a bad token, wrong workspace/project, or Plane not fully started yet — and help fix it; don't loop.
 
 After this, `/plan-my-work` pulls ready issues from Plane into the day's blocks and `/end-of-day` writes their status back.
+
+## GitHub integration (optional, separate subcommand)
+
+`init-plane github` wires Plane's **GitHub integration** (two-way issue ↔ GitHub-issue sync, PR/commit linking) by writing the `GITHUB_*` + `SILO_BASE_URL` knobs into Plane's own `plane.env` and restarting the stack — the same `plane.env`-editing approach as `vhost`. It's **independent of the core setup** above; run it only if the user wants GitHub sync.
+
+**Two caveats to surface up front (the script also prints them):**
+1. The integration runs on Plane's **`silo`** service, which ships with Plane's **Commercial / "govern" layer** — it is **not** part of the free Community stack that `up` installs. If `silo_running: no`, the integration likely won't activate on this build. Don't promise it works on a plain Community self-host.
+2. **GitHub must be able to reach the instance** for OAuth callbacks + webhooks. A `localhost` / `127.0.0.1` URL won't work — the user needs a **public HTTPS URL** (a real domain or a tunnel like cloudflared/ngrok) passed as `--silo-base-url`.
+
+Flow:
+
+1. **Show the guide.** Run `init-plane github` (no flags) → prints `INIT_PLANE_GITHUB_GUIDE` with the exact GitHub-App settings to create, with callback/webhook URLs prefilled from the silo base URL (derived from `plane.env`'s `APP_DOMAIN`, override with `--silo-base-url`). Walk the user through creating the **GitHub App** (GitHub → Settings → Developer settings → GitHub Apps → New): homepage, both callback URLs, post-install setup URL + "Redirect on update", webhook URL, **disable "Expire user authorization tokens"**, the repo/account permissions, the event subscriptions, then generate a **client secret** + **private key (.pem)** and note **App ID / Client ID / App name**. Make the app **Public**.
+2. **Wire it in.** Run:
+   ```
+   init-plane github --app-name <name> --app-id <id> --client-id <id> \
+     --client-secret <secret> --private-key /path/to/private-key.pem \
+     --silo-base-url https://<public-host>
+   ```
+   `--private-key` takes the **.pem file path**; the script base64-encodes it into `GITHUB_PRIVATE_KEY` (it never prints the secret). All five credential flags are required; the base URL defaults to `http://<APP_DOMAIN>` if `--silo-base-url` is omitted (and warns if that's local). Confirm `INIT_PLANE_GITHUB`.
+3. **Activate in Plane.** In Plane → Workspace Settings → Integrations → GitHub → Connect, install the app on the user's repos, then connect a repo to a project.
+
+`--no-restart` edits `plane.env` without bouncing the stack; `--remove` strips only the `GITHUB_*` + `SILO_BASE_URL` keys (leaving `vhost`'s `APP_DOMAIN`/`LISTEN_HTTP_PORT` untouched) and restarts. `init-plane status` / `probe` now also report `silo_running` and `github_configured`.
 
 `init-plane status` shows Docker + Plane container state + whether pbrain is configured at any time. Everything is idempotent — re-running never double-installs or clobbers an existing config.

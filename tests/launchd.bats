@@ -123,3 +123,37 @@ build_count() { grep -c build "$TMP/build-count" 2>/dev/null || echo 0; }
   [ "$status" -eq 0 ]
   [ ! -f "$plist" ]
 }
+
+# --- pbrain_stable_cmd_path -------------------------------------------------
+# Guards against baking an ephemeral conductor-workspace / dev-clone path into a
+# persistent LaunchAgent (which dies when that dir is cleaned up). Each test pins
+# HOME to a temp tree so resolution is deterministic.
+
+@test "pbrain_stable_cmd_path prefers the ~/.claude/commands symlink over the given path" {
+  export HOME="$TMP/home"; mkdir -p "$HOME/.claude/commands"
+  printf '#!/bin/sh\n' > "$TMP/real-pm.sh"
+  ln -s "$TMP/real-pm.sh" "$HOME/.claude/commands/project-manager.sh"
+  run pbrain_stable_cmd_path "/ephemeral/ws/commands/project-manager.sh"
+  [ "$output" = "$HOME/.claude/commands/project-manager.sh" ]
+}
+
+@test "pbrain_stable_cmd_path uses the marketplace install when ~/.claude/commands is absent" {
+  export HOME="$TMP/home"
+  mkdir -p "$HOME/.claude/plugins/marketplaces/pbrain/commands"
+  printf '#!/bin/sh\n' > "$HOME/.claude/plugins/marketplaces/pbrain/commands/project-manager.sh"
+  run pbrain_stable_cmd_path "/ephemeral/ws/commands/project-manager.sh"
+  [ "$output" = "$HOME/.claude/plugins/marketplaces/pbrain/commands/project-manager.sh" ]
+}
+
+@test "pbrain_stable_cmd_path falls back to the given path when not installed anywhere" {
+  export HOME="$TMP/home"; mkdir -p "$HOME/.claude"
+  run pbrain_stable_cmd_path "/ephemeral/ws/commands/project-manager.sh"
+  [ "$output" = "/ephemeral/ws/commands/project-manager.sh" ]
+}
+
+@test "pbrain_stable_cmd_path ignores a DANGLING ~/.claude/commands symlink (falls through)" {
+  export HOME="$TMP/home"; mkdir -p "$HOME/.claude/commands"
+  ln -s "$TMP/does-not-exist.sh" "$HOME/.claude/commands/project-manager.sh"
+  run pbrain_stable_cmd_path "/ephemeral/ws/commands/project-manager.sh"
+  [ "$output" = "/ephemeral/ws/commands/project-manager.sh" ]
+}

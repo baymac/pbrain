@@ -28,7 +28,8 @@ Run `/init-plane` and follow the wizard. The underlying subcommands (also runnab
 | `/init-plane up` | Run Plane's installer menu (Install the first time, then Start). |
 | `/init-plane config --api-key <t> --workspace <slug> --project <id>` | Wire pbrain to the instance (base URL auto-detected from `plane.env` — `http://127.0.0.1:1800` after `vhost`, else `http://localhost`). |
 | `/init-plane vhost [flags]` | Move Plane off port 80 to a named vhost (default `http://plane.localhost:1800`) by editing its own `plane.env`. Run by default during setup; `--remove` reverts to `http://localhost`. |
-| `/init-plane status` | Docker + Plane container + whether pbrain is configured. |
+| `/init-plane github [flags]` | Configure Plane's GitHub integration (two-way issue/PR sync) by writing `GITHUB_*` + `SILO_BASE_URL` into `plane.env`. No flags → print the GitHub-App setup guide; `--remove` strips the keys. See below. |
+| `/init-plane status` | Docker + Plane container + whether pbrain is configured (+ `silo_running`, `github_configured`). |
 
 ## Named vhost on a non-80 port (the default)
 
@@ -49,11 +50,35 @@ Flags: `--host` (default `plane.localhost`), `--port` (default `1800`), `--plane
 
 Prefer plain `http://localhost`? Just skip the `vhost` step during setup — everything else works the same. To debug a restart issue in isolation you can also bring Plane up on `:80` first, confirm `/project-manager test`, then run `vhost`.
 
+## GitHub integration (optional)
+
+`/init-plane github` wires Plane's **GitHub integration** — two-way sync between Plane work items and GitHub issues, plus PR/commit linking. It edits Plane's own `plane.env` (the `GITHUB_*` credentials + `SILO_BASE_URL`) and restarts the stack, just like `vhost`. It's optional and independent of the main setup.
+
+Run it with no flags first to print the setup guide:
+
+```bash
+/init-plane github
+```
+
+That prints the exact **GitHub App** to create (GitHub → Settings → Developer settings → GitHub Apps → New), with the callback/webhook URLs prefilled. Then wire it in:
+
+```bash
+/init-plane github \
+  --app-name <name> --app-id <id> --client-id <id> \
+  --client-secret <secret> --private-key /path/to/private-key.pem \
+  --silo-base-url https://<public-host>
+```
+
+`--private-key` takes the **.pem path** (the script base64-encodes it into `GITHUB_PRIVATE_KEY`; the secret is never printed). Other flags: `--silo-base-url` (defaults to `http://<APP_DOMAIN>` from `plane.env`), `--plane-home`, `--no-restart`, `--remove` (strips only the GitHub keys). Finally connect the app in Plane → Workspace Settings → Integrations → GitHub.
+
+**Two caveats:**
+- The integration runs on Plane's **`silo`** service, part of Plane's **Commercial / "govern" layer** — it isn't bundled in the free Community stack `up` installs. If no `silo` container is running, it likely won't activate on that build.
+- **GitHub has to reach your instance** for OAuth + webhooks, so a `localhost` URL won't work — point `--silo-base-url` at a **public HTTPS URL** (a real domain or a tunnel like cloudflared/ngrok).
+
 ## Notes
 
 - The **token is a secret** — it lives only in `~/.config/pbrain/plane.json` (local, `0600`), never in the vault or git.
 - Plane self-host is a real Docker stack (Postgres, Redis, MinIO, app services). For a solo machine 4 GB RAM is the floor; close it down from the `setup.sh` menu when you don't need it.
-- Plane Cloud works too — skip `fetch`/`up` and just run `/project-manager setup --base-url https://api.plane.so --api-key … --workspace … --project …`.
 
 ## Overrides
 

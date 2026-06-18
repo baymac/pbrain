@@ -42,6 +42,34 @@ _pbrain_xml_escape() {
   printf '%s' "${1:-}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# pbrain_stable_cmd_path <abs_command_script_path>
+#
+# Echo the most STABLE path to a command script, for baking into a LaunchAgent
+# plist. The problem: when `enable` runs from a conductor workspace or a dev
+# clone (PBRAIN_DEV_DIR), $_SCRIPT_DIR points into that ephemeral dir — bake it
+# verbatim and the scheduled job dies the moment the workspace is cleaned up.
+# Prefer the user's canonical command location instead, which survives the
+# workspace being re-pointed (pbrain's install IS `ln -s <repo>/commands
+# ~/.claude/commands`): re-pointing one symlink recovers every agent.
+#
+# Resolution order (first that resolves wins):
+#   1. ~/.claude/commands/<name>                        (symlink install — the norm)
+#   2. ~/.claude/plugins/marketplaces/pbrain/commands/<name>  (marketplace install)
+#   3. the path passed in                               (dev-only / last resort)
+# `-e` follows symlinks, so a DANGLING ~/.claude/commands symlink correctly falls
+# through to the fallback rather than baking a broken path. Never exits non-zero.
+pbrain_stable_cmd_path() {
+  local fallback="${1:-}" name
+  name="$(basename "$fallback" 2>/dev/null)"
+  if [[ -n "$name" && -e "$HOME/.claude/commands/$name" ]]; then
+    printf '%s\n' "$HOME/.claude/commands/$name"
+  elif [[ -n "$name" && -e "$HOME/.claude/plugins/marketplaces/pbrain/commands/$name" ]]; then
+    printf '%s\n' "$HOME/.claude/plugins/marketplaces/pbrain/commands/$name"
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
 # pbrain_swift_build <app_path> <src_file> <bundle_id> [--sign] [--plist-extra "<xml>"]
 #
 # Compile <src_file> into <app_path>/Contents/MacOS/<exe>, where <exe> is the
