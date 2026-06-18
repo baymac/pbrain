@@ -12,7 +12,7 @@
 
 **Compatibility:** macOS only (Obsidian Desktop + iCloud Drive container). iOS works for read/write through the synced vault on iPhone/iPad, but the slash commands themselves run from Claude Code on macOS (or the OpenAI Codex CLI — see [Codex interoperability](#codex-interoperability)). Linux, Windows, and Android aren't supported.
 
-The pbrain slash commands work against **any** vault directory you point them at — `PBRAIN_VAULT` env var, a path written to `~/.config/pbrain/vault`, or the default iCloud Obsidian path. `/init-obsidian` handles the setup.
+The pbrain slash commands work against **any** vault directory you point them at — `PBRAIN_VAULT` env var, a path written to `~/.config/pbrain/vault`, or the default iCloud Obsidian path. `/init-obsidian` handles the setup. **Obsidian is optional** — the vault is just plain markdown. If you never configure one, the first command you run auto-creates a plain local vault at `~/pbrain-vault` and keeps going, so pbrain works on a fresh machine with zero setup (run `/init-obsidian` later to switch to an Obsidian/iCloud vault).
 
 ---
 
@@ -137,8 +137,9 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 |---|---|---|
 | `/journal` | Today's daily note | `$VAULT/life/daily-tracking/` |
 | `/gratitude-journal` | Gratitude + reflection (runs after `/journal`) | `$VAULT/life/gratitude-journal/` |
-| `/plan-my-day` | Goal-anchored daily planner | `$VAULT/life/daily-planning/` |
-| `/end-of-day` | Close-of-day completion pass (bookend to `/plan-my-day`) | fills `## How it went` (executive summary + carry-forward) in `$VAULT/life/daily-planning/<date>.md` (in place) |
+| `/plan-my-day` | Daily **life-structure** planner — anchors (calendar, fitness, meals, walk, bed, habit reminders) + **empty work blocks**. No longer assigns tasks; run `/plan-my-work` after to fill them | `$VAULT/life/daily-planning/` |
+| `/plan-my-work` | The **work layer** — runs after `/plan-my-day`, pulls real tasks from **Plane** (via `/project-manager`), packs them into the blocks, and writes a `## Work tracker`. Picks today's projects against this week's project goals (priority + % allocation), renormalizes the day's blocks across them. `task add\|remove\|list` revises it mid-day. **Requires Plane** for the auto-pull session (`task …` edits work without it) | same daily file `$VAULT/life/daily-planning/<date>.md` |
+| `/end-of-day` | Close-of-day completion pass (bookend to `/plan-my-day` + `/plan-my-work`) — reconciles the `## Work tracker`, pushes status back to Plane + detects unplanned-done issues | fills `## How it went` (executive summary + carry-forward) in `$VAULT/life/daily-planning/<date>.md` (in place) |
 | `/weekly-review` | 7-day synthesis across journal, gratitude, plan, fitness, diet; weekly goals lifecycle | `$VAULT/life/weekly-tracking/YYYY-Www.md` |
 | `/monthly-review` | Month-end synthesis across weekly reviews; monthly goals versioning; plans-profile hygiene pass | `$VAULT/life/monthly-tracking/YYYY-MM.md` |
 | `/brainstorm <topic>` | New brainstorm file | `$VAULT/agent-work/brainstorms/tbd/` |
@@ -146,6 +147,8 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/recall <topic>` | Grep-based search across vault narrative folders | (read-only — prints matches) |
 | `/loose-ends` | Surfaces stale ideas, open questions, todos, deferred seeds, focus drift | (read-only — surfacing dashboard) |
 | `/habits` | Track habits, each with its own criteria (daily / N-per-week / N-per-month, build or cap); day-to-day log in dated `life/habit-tracking/<date>.md` files (DB synced from them for analysis); progress vs each, top 20 by priority; auto-marked from your journals | `$VAULT/life/Habits Profile.md` + `$VAULT/life/habit-tracking/` + local DB |
+| `/project-manager` | The **technical commander of Plane** — pbrain's **sole** project brain. Absorbs the `/init-plane` self-host wizard plus all Plane ops: `projects` (registry), `ready`/`progress` (the daily-loop reads), `review`/`enrich` (flag thin issues, enrich on confirm), `move`/`priority`/`timeline`. One pbrain project = one Plane PROJECT (a workspace holds many). `/plan-my-work` + `/end-of-day` drive it. Task-based planning and project progress **require Plane** — without it, pbrain stays a working life-planner and these features are simply unavailable | `~/.config/pbrain/plane.json` (local, never synced) |
+| `/init-plane` | Local **Plane** self-host wizard (now **superseded by `/project-manager`** once a vault exists; stays as the vault-free setup path) — checks Docker, runs Plane's official installer, wires pbrain to it. Optional `vhost` step moves Plane off port 80 to a stable `http://plane.localhost:1800` by editing its own `plane.env` (no sidecar proxy). Idempotent | `~/.config/pbrain/plane.json` (local, never synced) |
 | `/thoughts [<text>]` | Explode and log a timestamped thought mid-day; on-demand, any time | `$VAULT/life/thought-tracking/` |
 | `/remind <text>` | Real Apple Reminders (EKReminder) — timed due date, cron-based recurrence, priority, early alarms; create/list/edit/done/cancel. Reminders + iCloud fire and sync. NOT a calendar anchor for `/plan-my-day` | Apple Reminders (no vault file, no DB) |
 | `/remind-blocking <text>` | Reminders that fire as a full-screen blocking overlay ("Take a break"; hold Control to skip / let countdown run for done); cron-flexible schedules, fires via its own background poller. 10s warning panel before the overlay drops; overlay persists across screen lock/unlock (re-appears with countdown adjusted) | local SQLite DB (no vault file) |
@@ -153,6 +156,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
+| `/clipper <platform> <url>` | Save an online video as a clean, faithful long-form transcript ("clip"). Platform subcommands — `x` (X/Twitter) and `yt` (YouTube). The script does the technical work (browser cookies → `yt-dlp` → VTT cleanup → local Parakeet v3 transcription fallback for caption-less videos); the model only reframes the captions into readable prose — keeps the speaker's words and length, drops filler/ads/plugs, adds punctuation + paragraphs. Not a summary | `$VAULT/agent-work/clips/<platform>/<slug>.md` |
 
 ### Daily flow
 
@@ -169,10 +173,11 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | Right after journaling | `/gratitude-journal` | Just run it — answers the prompts. With the head cleared, gratitude anchors the day to *enough* before agent work starts. |
 | Pre/post workout | `/fitness-journal` | Just run it — it picks today's session based on your activity rotation and asks you to log sets/reps. |
 | With meals (or end of day) | `/diet-journal` | Just run it — log what you ate, get a nutrition + plan-adherence read. Say "nothing yet" and it plans the full day from your food library. |
-| Once mind is clear | `/plan-my-day` | Just run it — goal-anchored daily plan. First run sets up your goals; subsequent runs reuse them. |
-| End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends `/plan-my-day`: what shipped, what slipped, what carries over. |
+| Once mind is clear | `/plan-my-day` | Just run it — lays out the day's life structure (anchors) + empty work blocks. First run sets up your plans profile; subsequent runs reuse it. |
+| After the day is shaped | `/plan-my-work` | Fills the empty blocks with real tasks from Plane — picks today's projects, shows a progress report, packs the tasks. |
+| End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends the day: reconciles the work tracker (back to Plane), what shipped, what slipped, what carries over. |
 
-`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
+`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/project-manager`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, `/organize-clippings`, and `/clipper <platform> <url>` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -184,7 +189,8 @@ Each command's default path is overrideable via env var. Full reference:
 | Env var | Used by | Default |
 |---|---|---|
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
-| `PBRAIN_VAULT` | all | iCloud Obsidian path |
+| `PBRAIN_VAULT` | all | iCloud Obsidian path, else auto-created `~/pbrain-vault` |
+| `PBRAIN_NO_AUTOVAULT` | all | unset — set `1` to disable the zero-config `~/pbrain-vault` fallback and hard-fail when no vault is configured |
 | `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
 | `PBRAIN_PREFS_DIR` | all commands — preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT/.pbrain` |
 | `PBRAIN_FEEDBACK_DIR` | all commands — quality-fix ROOT (`<cmd>/feedback.md`) | `$VAULT/.pbrain` |
@@ -197,12 +203,17 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_NOTIFY_IDENTITY` | `/remind-blocking` (bundle id the notifier delivers under; `""` = no impersonation) | unset → `com.apple.Terminal` |
 | `PBRAIN_OVERLAY_APP` | `/remind-blocking` (cached build of pbrain's full-screen overlay app) | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | `/remind-blocking` (default overlay background colour, hex) | unset → slate |
+| `PBRAIN_OVERLAY_SNOOZE_MINUTES` | `/remind-blocking` (warning-panel Snooze push-out in minutes; `0` hides it) | unset → `5` |
 | `PBRAIN_TRACKER_DB_FILE` | `/laptop-tracking` (its OWN local SQLite DB — segments; never synced to the vault) | `~/.config/pbrain/tracker.db` |
 | `PBRAIN_TRACKER_APP` | `/laptop-tracking` (cached build of the resident tracker daemon app) | `~/.config/pbrain/pbrain-tracker.app` |
 | `PBRAIN_TRACKER_DIR` | `/laptop-tracking` (daily report write dir) | `$VAULT/life/laptop-tracking` |
 | `PBRAIN_TRACKER_POLL` / `PBRAIN_TRACKER_IDLE` | `/laptop-tracking` (daemon poll interval / idle-away threshold, seconds) | `10` / `300` |
 | `PBRAIN_LAPTOP_CATEGORIES_FILE` | `/laptop-tracking` (domain/app → category map behind the *Deep work* focus score) | `$VAULT/life/laptop-tracking/categories.md` |
 | `PBRAIN_THOUGHTS_DIR` | `/thoughts` | `$VAULT/life/thought-tracking` |
+| `PBRAIN_CLIPPER_DIR` | `/clipper` (clips parent; `<platform>` are subdirs) | `$VAULT/agent-work/clips` |
+| `PBRAIN_CLIPPER_COOKIES_BROWSER` / `PBRAIN_CLIPPER_COOKIES_FILE` | `/clipper` (`yt-dlp` cookie source — browser jar / `cookies.txt`; `none` disables) | `brave` / unset |
+| `PBRAIN_CLIPPER_SUB_LANGS` | `/clipper` (subtitle langs to fetch) | `en,en-orig,en-US,en-GB` |
+| `PBRAIN_CLIPPER_FLUIDAUDIO_BIN` / `_DIR` / `_REF` / `_MODEL_DIR` | `/clipper` (no-caption fallback: prebuilt `fluidaudiocli` / build dir / git tag / Parakeet v3 model dir) | (unset) / `~/.config/pbrain/fluidaudio` / `v0.15.4` / FluidAudio cache |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_NOTES_DIR` | `/discuss` | `$VAULT/agent-work/notes` |
@@ -212,12 +223,15 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_FITNESS_DIR` | `/fitness-journal`, read by `/diet-journal`, `/plan-my-day` | `$VAULT/fitness/daily-tracking` |
 | `PBRAIN_GYM_PLAN_FILE` / `PBRAIN_FITNESS_PLANS_DIR` / `PBRAIN_FITNESS_ACTIVITIES_FILE` | legacy paths — read only by the one-time fitness migration (0003) | — |
 | `PBRAIN_GRATITUDE_DIR` | `/gratitude-journal` | `$VAULT/life/gratitude-journal` |
-| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
-| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, read by `/loose-ends`, `/discuss`, `/weekly-review` (explicit override) | latest committed `plans-profile.vN.md` in `$VAULT/life/daily-planning/.profile/` |
+| `PBRAIN_PLAN_DIR` | `/plan-my-day`, `/plan-my-work`, `/end-of-day`, `/weekly-review`, `/loose-ends` | `$VAULT/life/daily-planning` |
+| `PBRAIN_PLAN_PROFILE_FILE` | `/plan-my-day`, `/plan-my-work`, read by `/loose-ends`, `/discuss`, `/weekly-review` (explicit override) | latest committed `plans-profile.vN.md` in `$VAULT/life/daily-planning/.profile/` |
 | `PBRAIN_HABITS_PROFILE_FILE` | `/habits`, read by `/plan-my-day`, `/end-of-day`, `/weekly-review` (explicit override) | latest committed `habits-profile.vN.md` in `$VAULT/life/habit-tracking/.profile/` |
 | `PBRAIN_HABIT_TRACK_DIR` | `/habits` (dated tracking files), synced→DB by `/plan-my-day`, `/end-of-day`, `/weekly-review` | `$VAULT/life/habit-tracking/` |
 | `PBRAIN_HABIT_SUGGEST_FILE` | `/habits` + journaling commands (new-habit nudge suppress-list) | `~/.config/pbrain/habit-suggest-seen` |
 | `PBRAIN_HABIT_SUGGEST_TTL_DAYS` | `/habits` + journaling commands | `14` (days a suggested habit stays suppressed) |
+| `PBRAIN_PLANE_BASE_URL` / `PBRAIN_PLANE_API_KEY` / `PBRAIN_PLANE_WORKSPACE` / `PBRAIN_PLANE_PROJECT` / `PBRAIN_PLANE_DEFAULT_EST_H` | Plane backend (env overrides for `~/.config/pbrain/plane.json`; the token is local-only, never synced) | config file / `2`h |
+| `PBRAIN_PLANE_SESSION_COOKIE` / `PBRAIN_PLANE_EMAIL` / `PBRAIN_PLANE_PASSWORD` | Plane **internal-API** auth, used only to auto-fetch estimate scales (story points) the public token API can't enumerate — a session cookie, or login creds that auto-refresh. Local-only, never synced; see `/project-manager estimates` | config file / unset |
+| `PBRAIN_PLANE_HOME` | `/init-plane` — where Plane's `setup.sh` + its Docker data live | `~/.config/pbrain/plane-selfhost` |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_MONTHLY_DIR` | `/monthly-review` | `$VAULT/life/monthly-tracking` |
 | `PBRAIN_RECALL_SCOPE` | `/recall` | `life agent-work startup side-quests software-dev notes` (space-separated subdirs relative to vault) |
@@ -228,7 +242,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `CODEX_HOME` | `/codex-install` | Codex home dir to install skills + AGENTS.md into (default `~/.codex`) |
 
 
-The vault root is resolved via `PBRAIN_VAULT` → `~/.config/pbrain/vault` → default iCloud path, in that order.
+The vault root is resolved via `PBRAIN_VAULT` → `~/.config/pbrain/vault` → default iCloud path, in that order. If none of those resolves to an existing directory and nothing is explicitly configured, pbrain auto-creates a plain local vault at `~/pbrain-vault` (scaffold + config file) and continues — set `PBRAIN_NO_AUTOVAULT=1` to opt back into a hard-fail.
 
 ---
 
@@ -299,6 +313,7 @@ pbrain/
 ├── commands/                           ← .md + .sh pairs for each slash command
 ├── lib/
 │   ├── vault.sh                        ← shared VAULT_DIR resolver + entry point for helpers
+│   ├── scaffold.sh                     ← standalone vault-scaffold helpers (git init, .gitignore, CLAUDE.md, config); shared by /init-obsidian + vault.sh zero-config fallback
 │   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
 │   ├── prefs.sh                        ← per-command preference injection
 │   ├── self-improve.sh                 ← end-of-session feedback capture
@@ -307,9 +322,11 @@ pbrain/
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
 │   ├── habit_schedule.py               ← habit schedule engine (is_due, derive_schedule, spacing helpers)
 │   ├── profiles.sh                     ← versioned profile store (.profile dirs: latest/new/commit)
-│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts
+│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts (0001–0007)
 │   ├── profile_lock.py                 ← atomic read-modify-write for Habits Profile.md (flock + tempfile-rename)
 │   ├── launchd.sh                      ← shared native-helper build + LaunchAgent helpers (pbrain_swift_build, pbrain_launchagent_install)
+│   ├── plane.py                        ← Plane backend (stdlib urllib, no pip deps); READ/WRITE seams; multi-project config
+│   ├── projects.sh                     ← Plane seam layer for the daily loop; degrades gracefully when Plane is unconfigured
 │   ├── reminders.sh                    ← Apple Reminders helpers + cron→recurrence mapper (/remind); blocking overlay/tick/cron (/remind-blocking); Calendar read for plan-my-day
 │   ├── pbrain-reminders.swift          ← source for the EventKit Reminders helper app (/remind)
 │   ├── pbrain-notify.swift             ← source for pbrain's macOS notifier app

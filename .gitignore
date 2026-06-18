@@ -1,6 +1,8 @@
 .env
 .env.local
 *.log
+# Per-machine Claude Code local settings (permissions, etc.)
+.claude/settings.local.json
 .gbrain/
 .DS_Store
 .context/
@@ -16,3 +18,7 @@ promo-video/renders/
 # Python bytecode cache (lib/habit_schedule.py etc.)
 __pycache__/
 *.pyc
+
+# Local Plane self-host stack (docker-compose + plane.env with secrets);
+# created/managed by /init-plane + /project-manager, never committed.
+plane-app/

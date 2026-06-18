@@ -88,9 +88,24 @@ WR() { bash "$REPO_ROOT/commands/weekly-review.sh" "$@"; }
   [[ "$output" == *"WEEKLY GOALS"* ]]
 }
 
-@test "weekly review emits task logs section" {
+@test "weekly review emits the work-tracker rows section" {
   run WR
-  [[ "$output" == *"THIS WEEK'S TASK LOGS"* ]]
+  [[ "$output" == *"THIS WEEK'S WORK TRACKER ROWS"* ]]
+}
+
+@test "weekly review injects project registry + progress + a Work review section" {
+  run WR
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PROJECT REGISTRY (registry_json)"* ]]
+  [[ "$output" == *"PROJECT PROGRESS (progress_json"* ]]
+  [[ "$output" == *"## Work review"* ]]
+  [[ "$output" == *"Step 3w"* ]]
+}
+
+@test "weekly review goals minting uses project-level fields (plane_project + allocation_percent)" {
+  run WR
+  [[ "$output" == *"plane_project"* ]]
+  [[ "$output" == *"allocation_percent"* ]]
 }
 
 @test "weekly review emits next_iso_week in output" {

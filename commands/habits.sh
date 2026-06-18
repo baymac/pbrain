@@ -41,6 +41,9 @@ set -euo pipefail
 #                  [--actual-time HH:MM] [--actual-hours N.N]    (deviation: sleep-well)
 #                  [--items JSON] [--session JSON]               (weighted_completion / session_volume)
 #                  [--focus JSON]                                (focus_ratio: deep-work)
+#                  [--status done|skipped|missed] [--skip]       (3-state record;
+#                  --skip = --status skipped; default done. skipped/missed write a
+#                  count=0 row — recorded but not a completion)
 #                  (scored habits: pass raw inputs, the score is computed from the
 #                  habit's profile rule — see `score`)
 #   habits.sh score --name "X" (--good N --bad N | --slips N | --actual-time HH:MM --actual-hours N)
@@ -60,6 +63,9 @@ set -euo pipefail
 #   habits.sh reminders-ensure      [--date]  create today's one-shot reminders for linked habits (idempotent)
 #   habits.sh reminders-sync        [--date] [--sweep]  reconcile linked habits ↔ their one-shots, both directions
 #   habits.sh reminders-reschedule  --habit <name> --time HH:MM [--date YYYY-MM-DD]  update a pending one-shot's due time
+#   habits.sh reminders-cancel      --habit <name|id> [--date YYYY-MM-DD]  delete a pending one-shot + mark its row cancelled
+#   habits.sh fitness-reconcile     --activity "<name|slug>" [--date YYYY-MM-DD]  align fitness-habit reminders to today's chosen activity (skip the rest)
+#   habits.sh autostatus            [--date YYYY-MM-DD]  end-of-day: mark scheduled-but-undone build habits 'missed' (skipped/done left)
 #
 # A build (at_least) habit can be LINKED to Apple Reminders (/remind). The link
 # is an INTENT stored on the habit in the profile JSON as
@@ -156,6 +162,7 @@ def read_json_block(p):
         return None
 
 added = []
+linked = []   # existing habits whose `activity` field we backfilled in place
 with ProfileLock(path) as lock:
     text = lock.read()
     m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
@@ -284,6 +291,85 @@ with ProfileLock(path) as lock:
         })
         added.append("Train (scored from your fitness sessions)")
 
+    # Per-activity fitness habits — one habit per fitness-library activity, each
+    # tagged with its `activity` slug so /plan-my-day's fitness-reconcile can map
+    # the day's chosen activity → its habit reliably (not by a fragile name guess).
+    # REUSE, don't duplicate: if a non-archived habit already matches an activity
+    # (by `activity` field or case-insensitive name containment, e.g. habit
+    # "Apple Fitness" ↔ activity "Apple Fitness+ Kickboxing"), backfill its
+    # `activity` field IN PLACE instead of creating a new one. NOTE: the scored
+    # `Train` habit above stays as the cross-activity VOLUME score; these
+    # per-activity habits own occurrence + reminders + the done/skipped/missed
+    # record — the two are complementary, not duplicates.
+    if fitlibp:
+        try:
+            from habit_schedule import norm_days as _na_norm_days
+        except Exception:
+            _na_norm_days = None
+
+        def _na_norm(s):
+            return re.sub(r"[^a-z0-9]+", " ", (s or "").strip().lower()).strip()
+
+        _lib_acts = (read_json_block(fitlibp) or {}).get("activities")
+        for a in (_lib_acts if isinstance(_lib_acts, list) else []):
+          try:
+            if not isinstance(a, dict):
+                continue
+            aslug = str(a.get("id") or "").strip() or re.sub(r"[^a-z0-9]+", "-", str(a.get("name", "")).lower()).strip("-")
+            if not aslug:
+                continue
+            aname = str(a.get("name", "")).strip()
+            _ad = a.get("days")
+            adays = [str(d).strip() for d in (_ad if isinstance(_ad, list) else []) if str(d).strip()]
+            occ = a.get("occurrence")
+            if not isinstance(occ, dict):
+                occ = {}   # legacy/string occurrence ("4x/week") → no structured times
+            an = _na_norm(aname)
+            match = None
+            for h in habits:
+                if h.get("archived"):
+                    continue
+                if str(h.get("activity", "")).strip().lower() == aslug.lower():
+                    match = h
+                    break
+                hn = _na_norm(h.get("name"))
+                if hn and ((an and (hn in an or an in hn)) or hn == _na_norm(aslug)):
+                    match = h
+                    break
+            if match is not None:
+                if str(match.get("activity", "")).strip().lower() != aslug.lower():
+                    match["activity"] = aslug
+                    linked.append("%s ↔ %s" % (match.get("name", aslug), aslug))
+                continue
+            if aslug in ids:
+                continue   # id collision we couldn't name-match — never resurrect
+            if adays:
+                norm = _na_norm_days(adays) if _na_norm_days else sorted({d.lower()[:3] for d in adays})
+                nh = {"id": aslug, "name": aname or aslug.replace("-", " ").title(),
+                      "direction": "at_least", "schedule": {"type": "weekdays", "days": norm},
+                      "schedule_type": "weekly", "target_count": None, "priority": "medium",
+                      "unit": "", "measure_target": None, "archived": False, "activity": aslug,
+                      "notes": "Per-activity fitness habit (from the fitness library)."}
+            else:
+                # no fixed days → an occurrence-based count habit (never daily-missed
+                # on a fixed schedule); the engine spaces its frequency itself.
+                per = str(occ.get("per", "week")).strip().lower()
+                try:
+                    tc = int(occ.get("times")) if occ.get("times") not in (None, "") else None
+                except (TypeError, ValueError):
+                    tc = None
+                nh = {"id": aslug, "name": aname or aslug.replace("-", " ").title(),
+                      "direction": "at_least",
+                      "schedule_type": ("monthly" if per.startswith("month") else "weekly"),
+                      "target_count": tc, "priority": "medium",
+                      "unit": "", "measure_target": None, "archived": False, "activity": aslug,
+                      "notes": "Per-activity fitness habit (from the fitness library)."}
+            habits.append(nh)
+            ids.add(aslug)
+            added.append("%s (per-activity fitness habit)" % (aname or aslug))
+          except Exception:
+            continue   # a malformed activity entry never aborts the rest of seeding
+
     if tracker_present == "1" and goalsp and "deep-work" not in ids:
         # Schedule over the plan's WORKDAYS (all weekdays minus rest_days from the
         # plans profile's typical_day) so weekends/rest days aren't counted as
@@ -324,13 +410,15 @@ with ProfileLock(path) as lock:
         })
         added.append("Deep work (scored from laptop activity in your work blocks)")
 
-    if added:
+    if added or linked:
         new_json = json.dumps(data, indent=2)
         text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
         lock.write(text)
 
 for a in added:
     print(f"Added default habit: {a}")
+for l in linked:
+    print(f"Linked fitness habit ↔ activity: {l}")
 PYEOF
   return 0
 }
@@ -499,7 +587,7 @@ fi
 if [[ "$SUB" == "add" ]]; then
   shift || true
   A_NAME=""; A_TYPE=""; A_DIR="at_least"; A_TARGET=""; A_PRIO="medium"; A_NOTES=""
-  A_UNIT=""; A_MEASURE=""
+  A_UNIT=""; A_MEASURE=""; A_COMPONENTS=""
   # Schedule (axis 1): kind + its params. Frequency forms resolve to spaced days.
   A_SCHED=""; A_DAYS=""; A_TPW=""; A_START_DAY=""; A_EVERY=""; A_START_DATE=""
   A_DOM=""; A_TPM=""; A_START_DOM=""
@@ -512,6 +600,7 @@ if [[ "$SUB" == "add" ]]; then
       --priority)        A_PRIO="${2:-medium}"; shift 2 2>/dev/null || shift ;;
       --unit)            A_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
       --measure-target)  A_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --components)      A_COMPONENTS="${2:-}"; shift 2 2>/dev/null || shift ;;    # checklist scoring: "Item A; Item B=2; Item C"
       --notes)           A_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       --schedule)        A_SCHED="${2:-}"; shift 2 2>/dev/null || shift ;;         # daily|weekdays|interval|monthly
       --days)            A_DAYS="${2:-}"; shift 2 2>/dev/null || shift ;;          # weekdays: mon,wed,fri
@@ -589,7 +678,7 @@ print("\n".join(str(h.get("id","")).strip() for h in (d.get("habits") or []) if 
 
   PBH_KIND="$A_SCHED" PBH_DAYS="$A_DAYS" PBH_TPW="$A_TPW" PBH_START_DAY="$A_START_DAY" \
   PBH_EVERY="$A_EVERY" PBH_START_DATE="$A_START_DATE" PBH_DOM="$A_DOM" PBH_TPM="$A_TPM" \
-  PBH_START_DOM="$A_START_DOM" PBH_TODAY="$TODAY" PBH_TARGET="$A_TARGET" \
+  PBH_START_DOM="$A_START_DOM" PBH_TODAY="$TODAY" PBH_TARGET="$A_TARGET" PBH_COMPONENTS="$A_COMPONENTS" \
   python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$NEW_ID" "$A_NAME" "$A_DIR" "$A_PRIO" "$A_NOTES" "$A_UNIT" "$A_MEASURE" <<'PYEOF'
 import json, os, re, sys
 libdir, path, hid, name, direction, priority, notes, unit, measure = sys.argv[1:10]
@@ -597,6 +686,39 @@ sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields, schedule_label
 from profile_lock import ProfileLock
 result_line = ""
+
+def _slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", str(s).strip().lower()).strip("-")
+    return s or "item"
+
+def _parse_components(spec):
+    """'Item A; Item B=2; Item C' -> [{id,name,weight}]. Weight after '=' (default 1)."""
+    comps, seen = [], set()
+    for part in str(spec).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        w = 1.0
+        if "=" in part:
+            nm, _, wraw = part.rpartition("=")
+            nm = nm.strip()
+            try:
+                w = float(wraw.strip())
+            except ValueError:
+                nm, w = part, 1.0
+        else:
+            nm = part
+        if not nm:
+            continue
+        cid = _slug(nm)
+        base, n = cid, 2
+        while cid in seen:
+            cid = f"{base}-{n}"; n += 1
+        seen.add(cid)
+        if w <= 0:
+            w = 1.0
+        comps.append({"id": cid, "name": nm, "weight": int(w) if float(w).is_integer() else w})
+    return comps
 with ProfileLock(path) as lock:
     text = lock.read()
     m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
@@ -625,12 +747,25 @@ with ProfileLock(path) as lock:
             mv = int(mv)
     except (TypeError, ValueError):
         mv = None
-    habits.append({
+    # Checklist scoring (--components): a fixed daily set of weighted items. A
+    # scored habit must be "measured" (carry a measure_target) for its computed
+    # 0-100 score to persist into the DB — default the daily target to 100 (take
+    # the whole stack) when one wasn't given.
+    components = _parse_components(os.environ.get("PBH_COMPONENTS", ""))
+    scoring = None
+    if components:
+        scoring = {"type": "checklist", "components": components}
+        if mv is None:
+            mv = 100
+    entry = {
         "id": hid, "name": name.strip(), "direction": direction,
         "schedule": sched, "schedule_type": st, "target_count": tv,
         "priority": priority, "unit": unit.strip(), "measure_target": mv,
         "archived": False, "notes": notes.strip(),
-    })
+    }
+    if scoring is not None:
+        entry["scoring"] = scoring
+    habits.append(entry)
     new_json = json.dumps(data, indent=2)
     if m:
         text = text[:m.start()] + m.group(1) + new_json + "\n" + m.group(3) + text[m.end():]
@@ -638,7 +773,8 @@ with ProfileLock(path) as lock:
         text = text.rstrip() + f"\n\n```json\n{new_json}\n```\n"
     lock.write(text)
     measure_note = f", {mv} {unit.strip()}".rstrip() if mv is not None else ""
-    result_line = f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note})"
+    score_note = (", checklist: " + " + ".join(f"{c['name']} ×{c['weight']}" for c in components)) if components else ""
+    result_line = f"added: {name.strip()} [{hid}] ({schedule_label(sched)}, {direction}, {priority}{measure_note}{score_note})"
 print(result_line)
 PYEOF
   exit 0
@@ -650,7 +786,7 @@ fi
 if [[ "$SUB" == "edit" ]]; then
   shift || true
   E_ID=""; E_NAME="__keep__"; E_TYPE="__keep__"; E_DIR="__keep__"; E_TARGET="__keep__"; E_PRIO="__keep__"; E_NOTES="__keep__"
-  E_UNIT="__keep__"; E_MEASURE="__keep__"
+  E_UNIT="__keep__"; E_MEASURE="__keep__"; E_COMPONENTS="__keep__"
   # Schedule edit flags — passing ANY of these rebuilds the habit's schedule.
   E_SCHED=""; E_DAYS=""; E_TPW=""; E_START_DAY=""; E_EVERY=""; E_START_DATE=""
   E_DOM=""; E_TPM=""; E_START_DOM=""; E_SCHED_TOUCHED=0
@@ -664,6 +800,7 @@ if [[ "$SUB" == "edit" ]]; then
       --priority)        E_PRIO="${2:-}"; shift 2 2>/dev/null || shift ;;
       --unit)            E_UNIT="${2:-}"; shift 2 2>/dev/null || shift ;;
       --measure-target)  E_MEASURE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --components)      E_COMPONENTS="${2:-}"; shift 2 2>/dev/null || shift ;;   # checklist scoring; "" clears it
       --notes)           E_NOTES="${2:-}"; shift 2 2>/dev/null || shift ;;
       --schedule)        E_SCHED="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
       --days)            E_DAYS="${2:-}"; E_SCHED_TOUCHED=1; shift 2 2>/dev/null || shift ;;
@@ -692,14 +829,46 @@ if [[ "$SUB" == "edit" ]]; then
   PBH_TOUCHED="$E_SCHED_TOUCHED" PBH_KIND="$E_SCHED" PBH_DAYS="$E_DAYS" PBH_TPW="$E_TPW" \
   PBH_START_DAY="$E_START_DAY" PBH_EVERY="$E_EVERY" PBH_START_DATE="$E_START_DATE" \
   PBH_DOM="$E_DOM" PBH_TPM="$E_TPM" PBH_START_DOM="$E_START_DOM" PBH_TODAY="$TODAY" \
-  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" <<'PYEOF'
+  python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$E_ID" "$E_NAME" "$E_DIR" "$E_TARGET" "$E_PRIO" "$E_NOTES" "$E_UNIT" "$E_MEASURE" "$E_COMPONENTS" <<'PYEOF'
 import json, os, re, sys
-libdir, path, hid, name, direction, target, priority, notes, unit, measure = sys.argv[1:11]
+libdir, path, hid, name, direction, target, priority, notes, unit, measure, components = sys.argv[1:12]
 sys.path.insert(0, libdir)
 from habit_schedule import build_schedule, legacy_fields
 from profile_lock import ProfileLock
 KEEP = "__keep__"
 result_line = ""
+
+def _slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", str(s).strip().lower()).strip("-")
+    return s or "item"
+
+def _parse_components(spec):
+    comps, seen = [], set()
+    for part in str(spec).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        w = 1.0
+        if "=" in part:
+            nm, _, wraw = part.rpartition("=")
+            nm = nm.strip()
+            try:
+                w = float(wraw.strip())
+            except ValueError:
+                nm, w = part, 1.0
+        else:
+            nm = part
+        if not nm:
+            continue
+        cid = _slug(nm)
+        base, n = cid, 2
+        while cid in seen:
+            cid = f"{base}-{n}"; n += 1
+        seen.add(cid)
+        if w <= 0:
+            w = 1.0
+        comps.append({"id": cid, "name": nm, "weight": int(w) if float(w).is_integer() else w})
+    return comps
 with ProfileLock(path) as lock:
     text = lock.read()
     m = re.search(r"(```json\s*\n)(.*?)(```)", text, re.DOTALL)
@@ -732,6 +901,16 @@ with ProfileLock(path) as lock:
             found["measure_target"] = None
     if notes != KEEP:
         found["notes"] = notes.strip()
+    # Checklist scoring: --components "A; B=2; C" sets the spec; --components ""
+    # clears it (drops the habit back to a plain tracked habit).
+    if components != KEEP:
+        comps = _parse_components(components)
+        if comps:
+            found["scoring"] = {"type": "checklist", "components": comps}
+            if found.get("measure_target") is None:
+                found["measure_target"] = 100  # scored habit must be measured to persist
+        else:
+            found.pop("scoring", None)
     # Rebuild the schedule only when a schedule-affecting flag was passed.
     if os.environ.get("PBH_TOUCHED") == "1":
         sched = build_schedule({
@@ -972,7 +1151,7 @@ if [[ "$SUB" == "mark" ]]; then
   shift || true
   M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
   M_GOOD=""; M_BAD=""; M_SLIPS=""; M_ATIME=""; M_AHOURS=""
-  M_ITEMS=""; M_SESSION=""; M_FOCUS=""
+  M_ITEMS=""; M_SESSION=""; M_FOCUS=""; M_DONE=""; M_STATUS="done"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -987,6 +1166,9 @@ if [[ "$SUB" == "mark" ]]; then
       --items)   M_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --session) M_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
       --focus)   M_FOCUS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --done)    M_DONE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --status) M_STATUS="${2:-done}"; shift 2 2>/dev/null || shift ;;
+      --skip)   M_STATUS="skipped"; shift ;;   # sugar for --status skipped
       --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
@@ -1000,7 +1182,7 @@ if [[ "$SUB" == "mark" ]]; then
     exit 0
   fi
   pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT" \
-    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION" "$M_FOCUS"
+    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION" "$M_FOCUS" "$M_DONE" "$M_STATUS"
   exit 0
 fi
 
@@ -1013,7 +1195,7 @@ fi
 if [[ "$SUB" == "score" ]]; then
   shift || true
   SC_NAME=""; SC_GOOD=""; SC_BAD=""; SC_SLIPS=""; SC_ATIME=""; SC_AHOURS=""
-  SC_ITEMS=""; SC_SESSION=""; SC_FOCUS=""
+  SC_ITEMS=""; SC_SESSION=""; SC_FOCUS=""; SC_DONE=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) SC_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -1025,6 +1207,7 @@ if [[ "$SUB" == "score" ]]; then
       --items)   SC_ITEMS="${2:-}"; shift 2 2>/dev/null || shift ;;
       --session) SC_SESSION="${2:-}"; shift 2 2>/dev/null || shift ;;
       --focus)   SC_FOCUS="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --done)    SC_DONE="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -1036,7 +1219,7 @@ if [[ "$SUB" == "score" ]]; then
     echo "no habits profile" >&2
     exit 1
   fi
-  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS" "$SC_ATIME" "$SC_AHOURS" "$SC_ITEMS" "$SC_SESSION" "$SC_FOCUS"
+  pbrain_habit_score "$SC_NAME" "$SC_GOOD" "$SC_BAD" "$SC_SLIPS" "$SC_ATIME" "$SC_AHOURS" "$SC_ITEMS" "$SC_SESSION" "$SC_FOCUS" "$SC_DONE"
   exit 0
 fi
 
@@ -1314,10 +1497,14 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "reminders-ensure" ]]; then
   shift || true
-  RE_DATE="$TODAY"
+  RE_DATE="$TODAY"; RE_ONLY=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --date) RE_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      # --habit <id|name>: ensure JUST this habit, BYPASSING the is_due gate —
+      # used by fitness-reconcile to create a one-shot for an off-schedule chosen
+      # activity (e.g. doing Apple Fitness on a Gym-scheduled Monday).
+      --habit) RE_ONLY="${2:-}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -1331,9 +1518,10 @@ if [[ "$SUB" == "reminders-ensure" ]]; then
     echo "ENSURED 0"; exit 0
   fi
   trap "rm -rf '$_ENSURE_LOCK' 2>/dev/null || true" EXIT INT TERM
-  TODO="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RE_DATE" <<'PYEOF' 2>/dev/null || true
+  TODO="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RE_DATE" "$RE_ONLY" <<'PYEOF' 2>/dev/null || true
 import json, re, sys, sqlite3
 libdir, profile, db, date = sys.argv[1:5]
+only = (sys.argv[5] if len(sys.argv) > 5 else "").strip().lower()
 sys.path.insert(0, libdir)
 try:
     from habit_schedule import derive_schedule, is_due
@@ -1355,14 +1543,20 @@ except Exception:
 for h in (data.get("habits") or []):
     if h.get("archived"):
         continue
+    hid = str(h.get("id", "")).strip()
+    hname = str(h.get("name", "")).strip()
+    # --habit narrows to one habit (matched by id OR name) and bypasses is_due.
+    is_only = bool(only) and (hid.lower() == only or hname.lower() == only)
+    if only and not is_only:
+        continue
     rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
     if str(rem.get("state", "")).strip().lower() != "linked" or not str(rem.get("time", "")).strip():
         continue
-    if str(h.get("id", "")).strip() in have:
+    if hid in have:
         continue
-    if not is_due(derive_schedule(h), date):
-        continue   # not scheduled on this date → no one-shot
-    print("%s\t%s\t%s" % (str(h.get("id", "")).strip(), str(h.get("name", "")).strip(), str(rem.get("time")).strip()))
+    if not is_only and not is_due(derive_schedule(h), date):
+        continue   # not scheduled on this date → no one-shot (skipped for --habit)
+    print("%s\t%s\t%s" % (hid, hname, str(rem.get("time")).strip()))
 PYEOF
 )"
   if [[ -z "${TODO//[[:space:]]/}" ]]; then echo "ENSURED 0"; exit 0; fi
@@ -1373,18 +1567,31 @@ PYEOF
     case "$RES" in
       ADDED\ *)
         rid="${RES#ADDED }"; rid="${rid%% *}"
-        python3 - "$PBRAIN_DB_FILE" "$hid" "$RE_DATE" "$rid" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+        # Record the tracking row, then CONFIRM it points at this rid. If the
+        # write failed (transient DB lock) or a row for (habit,date) already
+        # exists with a different rid, this reminder is untracked → an orphan the
+        # end-of-day sweep could never resolve. Delete it rather than leave it.
+        INS="$(python3 - "$PBRAIN_DB_FILE" "$hid" "$RE_DATE" "$rid" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
 import sqlite3, sys
 db, hid, date, rid, now = sys.argv[1:6]
 try:
     con = sqlite3.connect(db, timeout=5)
     con.execute("INSERT OR IGNORE INTO habit_reminders (habit_id, occurred_on, reminder_id, status, created_at) VALUES (?,?,?,?,?)",
                 (hid, date, rid, 'pending', now))
-    con.commit(); con.close()
+    con.commit()
+    row = con.execute("SELECT reminder_id FROM habit_reminders WHERE habit_id=? AND occurred_on=?", (hid, date)).fetchone()
+    con.close()
+    if row and row[0] == rid:
+        print("OK")
 except Exception:
     pass
 PYEOF
-        CREATED=$((CREATED + 1)) ;;
+)"
+        if [[ "${INS:-}" == OK ]]; then
+          CREATED=$((CREATED + 1))
+        else
+          pbrain_reminders_run delete --id "$rid" >/dev/null 2>&1 || true
+        fi ;;
       ACCESS_DENIED) echo "ACCESS_DENIED"; exit 0 ;;
       UNAVAILABLE)   echo "UNAVAILABLE"; exit 0 ;;
       *) : ;;  # transient error — leave it, retry next run
@@ -1408,6 +1615,13 @@ fi
 #         doesn't linger as an overdue notification. Gated behind --sweep so the
 #         morning plan-my-day sync never deletes the day's not-yet-done reminders;
 #         end-of-day passes --sweep.
+#   ORPHAN sweep (also --sweep only): the three steps above are DB-row-driven, so
+#         a habit reminder that exists in the Reminders app but has NO tracking
+#         row (a create-without-recorded-row orphan — e.g. a transient DB lock
+#         during plan-my-day's ensure) is invisible to them and lingers overdue.
+#         So after the row sweep, list the app's pbrain reminders for <date> and
+#         delete any whose title matches a known habit name AND has no tracking
+#         row. The title+date match keeps /remind reminders and other days safe.
 # PULL runs first so PUSH never double-handles a row. Degrades silently without
 # Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
 # "SYNCED pulled=<n> pushed=<n> swept=<n>". Run by plan-my-day (morning, no sweep)
@@ -1481,24 +1695,54 @@ PYEOF
     esac
   done <<< "$PEND"
 
-  # PUSH: habit → reminder
+  # PUSH: habit → reminder. Pass the status JSON via argv, NOT a pipe: a pipe into
+  # `python3 - <<HEREDOC` collides on stdin (the heredoc wins), so json.load(stdin)
+  # would always read empty — pushed would silently stay 0.
   PUSHED=0
-  PUSH="$(pbrain_habits_status "$RS_DATE" | python3 - "$PBRAIN_DB_FILE" "$RS_DATE" <<'PYEOF' 2>/dev/null || true
-import json, sys, sqlite3
-db, date = sys.argv[1:3]
+  PUSH_STATUS="$(pbrain_habits_status "$RS_DATE" 2>/dev/null || true)"
+  PUSH="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" "$PUSH_STATUS" "$PROFILE_FILE" "$TODAY" "$(date '+%H:%M')" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+db, date, status_json, profile, today, now_hm = sys.argv[1:7]
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(status_json) if status_json.strip() else {}
 except Exception:
     sys.exit(0)
 done_ids = set()
 for h in d.get("habits") or []:
     if (h.get("today_count") or 0) > 0 or (h.get("today_amount") or 0) > 0:
         done_ids.add(h.get("id"))
+# Per-habit reminder clock time, so a one-shot whose nudge has NOT fired yet is
+# left pending instead of being auto-completed the moment the habit is marked.
+# Marking is often anticipatory (planned/partial); completing a future reminder
+# would silently delete a nudge the user still needs. Only guards the CURRENT
+# day — past-day pendings are always safe to complete.
+rtimes = {}
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    pdata = json.loads(m.group(1)) if m else {}
+    for h in (pdata.get("habits") or []):
+        rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+        t = str(rem.get("time", "")).strip()
+        if t:
+            rtimes[str(h.get("id", "")).strip()] = t
+except Exception:
+    pass
+def _mins(s):
+    try:
+        p = str(s).split(":"); return int(p[0]) * 60 + int(p[1])
+    except Exception:
+        return None
+now_m = _mins(now_hm) if date == today else None
 try:
     con = sqlite3.connect(db, timeout=5)
     for hid, rid in con.execute("SELECT habit_id, reminder_id FROM habit_reminders WHERE occurred_on=? AND status='pending'", (date,)).fetchall():
-        if hid in done_ids:
-            print("%s\t%s" % (hid, rid))
+        if hid not in done_ids:
+            continue
+        if now_m is not None:
+            rt = _mins(rtimes.get(hid))
+            if rt is not None and rt > now_m:
+                continue   # nudge has not fired yet — keep it pending
+        print("%s\t%s" % (hid, rid))
     con.close()
 except Exception:
     pass
@@ -1532,6 +1776,51 @@ PYEOF
       _hr_set_status "$hid" "$RS_DATE" cancelled
       SWEPT=$((SWEPT + 1))
     done <<< "$SWP"
+
+    # ORPHAN sweep: app reminders pbrain created for a habit but never recorded a
+    # row for. Match on (due date == RS_DATE) AND (title == a known habit name) so
+    # /remind reminders and other days are never touched; skip anything already
+    # tracked (handled above). Best-effort — silent if the helper is unavailable.
+    APP_LIST="$(pbrain_reminders_run list 2>/dev/null || true)"
+    if [[ -n "${APP_LIST//[[:space:]]/}" ]]; then
+      ORPHANS="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RS_DATE" "$APP_LIST" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+profile, db, date, app_list = sys.argv[1:5]
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+names = {str(h.get("name", "")).strip().lower() for h in (data.get("habits") or []) if str(h.get("name", "")).strip()}
+tracked = set()
+try:
+    con = sqlite3.connect(db, timeout=5)
+    for (rid,) in con.execute("SELECT reminder_id FROM habit_reminders WHERE occurred_on=?", (date,)).fetchall():
+        if rid:
+            tracked.add(rid.strip())
+    con.close()
+except Exception:
+    pass
+for line in app_list.splitlines():
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 2:
+        continue
+    rid, due, title = parts[0].strip(), parts[1].strip(), parts[-1].strip()
+    if not rid or rid in tracked:
+        continue
+    if not due.startswith(date):
+        continue   # other day / no due date — never touch
+    if title.lower() not in names:
+        continue   # not a habit reminder (e.g. a /remind item) — never touch
+    print(rid)
+PYEOF
+)"
+      while IFS= read -r orid; do
+        [[ -n "${orid//[[:space:]]/}" ]] || continue
+        pbrain_reminders_run delete --id "$orid" >/dev/null 2>&1 || true
+        SWEPT=$((SWEPT + 1))
+      done <<< "$ORPHANS"
+    fi
   fi
 
   echo "SYNCED pulled=$PULLED pushed=$PUSHED swept=$SWEPT"
@@ -1604,6 +1893,450 @@ PYEOF
     NOT_FOUND*)  echo "NOT_FOUND" ;;
     *)           echo "${RES:-UNAVAILABLE}" ;;
   esac
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-cancel --habit <name|id> [--date YYYY-MM-DD]
+# Cancel a habit's PENDING one-shot Apple Reminder for <date> (default today):
+# delete the Apple Reminder and mark the habit_reminders row cancelled. The
+# primitive /plan-my-day uses to suppress an off-activity reminder (e.g. the
+# scheduled Gym 12:30 when the user actually did Apple Fitness). Resolves the
+# habit by name OR id; works regardless of the habit's link state.
+# Echoes: CANCELLED <name> | NOT_LINKED | NOT_FOUND | UNAVAILABLE
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-cancel" ]]; then
+  shift || true
+  RC_DATE="$TODAY"; RC_NAME=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --habit|--name|--id) RC_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date)              RC_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "${RC_NAME//[[:space:]]/}" ]] || { echo "ERROR:--habit required"; exit 0; }
+  [[ "$RC_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$RC_DATE'"; exit 0; }
+  [[ -f "$PROFILE_FILE" ]] || { echo "NOT_FOUND"; exit 0; }
+
+  # Resolve the habit (name OR id) → its pending one-shot reminder_id for <date>.
+  # NOT_FOUND if the habit doesn't exist or has no pending one-shot to cancel.
+  RC_OUT="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RC_NAME" "$RC_DATE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+profile, db, ref, date = sys.argv[1:5]
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    print("NOT_FOUND"); sys.exit(0)
+ref_l = ref.strip().lower()
+hid = name = None
+for h in (data.get("habits") or []):
+    if str(h.get("id", "")).strip().lower() == ref_l or str(h.get("name", "")).strip().lower() == ref_l:
+        hid = str(h.get("id", "")).strip()
+        name = str(h.get("name", "")).strip()
+        break
+if not hid:
+    print("NOT_FOUND"); sys.exit(0)
+try:
+    con = sqlite3.connect(db, timeout=5)
+    row = con.execute(
+        "SELECT reminder_id FROM habit_reminders WHERE habit_id=? AND occurred_on=? AND status='pending'",
+        (hid, date)).fetchone()
+    con.close()
+except Exception:
+    row = None
+if not row:
+    print("NOT_FOUND\t%s\t%s" % (hid, name)); sys.exit(0)
+print("OK\t%s\t%s\t%s" % (hid, name, row[0]))
+PYEOF
+)"
+  RC_KIND="${RC_OUT%%$'\t'*}"
+  if [[ "$RC_KIND" != "OK" ]]; then echo "NOT_FOUND"; exit 0; fi
+  IFS=$'\t' read -r _k RC_HID RC_DNAME RC_RID <<< "$RC_OUT"
+  [[ -n "${RC_RID//[[:space:]]/}" ]] || { echo "NOT_FOUND"; exit 0; }
+
+  RES="$(pbrain_reminders_run delete --id "$RC_RID" 2>/dev/null || true)"
+  case "${RES:-}" in
+    UNAVAILABLE|ACCESS_DENIED) echo "UNAVAILABLE"; exit 0 ;;
+    *) : ;;  # DELETED / MISSING (already gone) / transient — close the row regardless
+  esac
+  # Mark the habit_reminders row cancelled so reminders-ensure won't re-create it.
+  python3 - "$PBRAIN_DB_FILE" "$RC_HID" "$RC_DATE" "$(date '+%Y-%m-%d %H:%M')" <<'PYEOF' 2>/dev/null || true
+import sqlite3, sys
+db, hid, date, now = sys.argv[1:5]
+try:
+    con = sqlite3.connect(db, timeout=5)
+    con.execute("UPDATE habit_reminders SET status='cancelled', resolved_at=? WHERE habit_id=? AND occurred_on=?",
+                (now, hid, date))
+    con.commit(); con.close()
+except Exception:
+    pass
+PYEOF
+  echo "CANCELLED ${RC_DNAME:-$RC_NAME}"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# fitness-reconcile --activity "<name|slug>" [--date YYYY-MM-DD]
+# The deterministic "dumb" path /plan-my-day uses once it knows the day's chosen
+# fitness activity (from today's /fitness-journal `focus:` field). It maps the
+# chosen activity → the matching habit and:
+#   - CHOSEN activity's habit (if linked): ensure its one-shot for <date>
+#     (BYPASSING is_due — the activity can happen off its usual schedule), then
+#     align the reminder to the activity's typical_time.
+#   - every OTHER fitness habit with an EXPLICIT schedule due today that is NOT
+#     the chosen one: reminders-cancel + mark --status skipped (no reminder +
+#     auto-skip — the "explicitly cancelled" case).
+#   - chosen activity with NO matching habit → nothing (no reminder), per the
+#     user's rule. Unresolvable activity → nothing.
+# Activity↔habit link = the optional `activity` field, else case-insensitive name
+# containment between the habit name and a fitness-library activity name (so habit
+# "Apple Fitness" ↔ activity "Apple Fitness+ Kickboxing"). Only habits with a
+# FIXED schedule are ever auto-skipped (so floating habits like Meditation/Yoga,
+# which co-occur with a workout, are never suppressed). Best-effort + silent.
+# Echoes: RECONCILED chosen=<slug|—> ensured=<0|1> skipped=<n> | NO_MATCH <text>
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "fitness-reconcile" ]]; then
+  shift || true
+  FR_DATE="$TODAY"; FR_ACT=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --activity) FR_ACT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date)     FR_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -f "$PROFILE_FILE" ]] || { echo "NO_MATCH ${FR_ACT}"; exit 0; }
+  [[ -n "${FR_ACT//[[:space:]]/}" ]] || { echo "NO_MATCH"; exit 0; }
+  [[ "$FR_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$FR_DATE'"; exit 0; }
+
+  # Resolve the committed fitness-library (the activity registry).
+  FR_FITSTORE="$(pbrain_profile_store "${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}" 2>/dev/null || true)"
+  FR_FITLIB="$(pbrain_profile_latest "$FR_FITSTORE" fitness-library 2>/dev/null || true)"
+
+  FR_PLAN="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$PBRAIN_DB_FILE" "${FR_FITLIB:-}" "$FR_ACT" "$FR_DATE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+libdir, profile, db, fitlibp, activity, date = sys.argv[1:7]
+sys.path.insert(0, libdir)
+try:
+    from habit_schedule import derive_schedule, is_due
+except Exception:
+    def derive_schedule(h): return {"type": "daily"}
+    def is_due(s, d): return True
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").strip().lower()).strip()
+
+def read_block(p):
+    if not p:
+        return {}
+    try:
+        m = re.search(r"```json\s*\n(.*?)```", open(p).read(), re.DOTALL)
+        return json.loads(m.group(1)) if m else {}
+    except Exception:
+        return {}
+
+data = read_block(profile)
+habits = [h for h in (data.get("habits") or []) if not h.get("archived")]
+
+acts = []
+for a in (read_block(fitlibp).get("activities") or []):
+    slug = str(a.get("id") or "").strip() or re.sub(r"[^a-z0-9]+", "-", str(a.get("name", "")).lower()).strip("-")
+    acts.append({"slug": slug, "name": str(a.get("name", "")).strip(),
+                 "time": str(a.get("typical_time") or "").strip()})
+
+# Resolve the chosen activity from --activity (a slug, or the raw focus text).
+act_in = activity.strip()
+act_l = norm(act_in)
+chosen = None
+for a in acts:
+    if a["slug"] and a["slug"].lower() == act_in.lower():
+        chosen = a
+        break
+if chosen is None:
+    best = None
+    for a in acts:
+        an = norm(a["name"])
+        if an and (an in act_l or act_l in an):
+            if best is None or len(an) > len(norm(best["name"])):
+                best = a
+    chosen = best
+
+def hmatch(h, a):
+    if a["slug"] and str(h.get("activity", "")).strip().lower() == a["slug"].lower():
+        return True
+    hn, an = norm(h.get("name")), norm(a["name"])
+    if hn and an and (hn in an or an in hn):
+        return True
+    if hn and hn == norm(a["slug"]):
+        return True
+    return False
+
+def is_fitness_habit(h):
+    if str(h.get("activity", "")).strip():
+        return True
+    return any(hmatch(h, a) for a in acts)
+
+chosen_habit = None
+if chosen:
+    for h in habits:
+        if hmatch(h, chosen):
+            chosen_habit = h
+            break
+
+out = []
+if chosen and chosen_habit:
+    out.append("CHOSEN\t%s\t%s\t%s" % (str(chosen_habit.get("id", "")).strip(),
+                                       str(chosen_habit.get("name", "")).strip(), chosen.get("time", "")))
+elif chosen:
+    out.append("CHOSEN_NOHABIT\t%s" % chosen["slug"])
+else:
+    out.append("NO_MATCH\t%s" % act_in)
+
+chosen_id = str(chosen_habit.get("id", "")).strip() if chosen_habit else ""
+for h in habits:
+    hid = str(h.get("id", "")).strip()
+    if hid == chosen_id or not is_fitness_habit(h):
+        continue
+    sched = h.get("schedule")
+    if not (isinstance(sched, dict) and sched.get("type")):
+        continue   # only an EXPLICIT fixed schedule makes it "scheduled today"
+    if not is_due(derive_schedule(h), date):
+        continue
+    out.append("SKIP\t%s\t%s" % (hid, str(h.get("name", "")).strip()))
+print("\n".join(out))
+PYEOF
+)"
+
+  FR_CHOSEN="—"; FR_ENSURED=0; FR_SKIPPED=0
+  while IFS=$'\t' read -r kind a b c; do
+    case "$kind" in
+      CHOSEN)
+        FR_CHOSEN="$b"
+        # ensure the chosen activity's one-shot (off-schedule bypass), then align.
+        bash "$_SCRIPT_DIR/habits.sh" reminders-ensure --habit "$a" --date "$FR_DATE" >/dev/null 2>&1 || true
+        FR_ENSURED=1
+        if [[ -n "${c//[[:space:]]/}" ]]; then
+          bash "$_SCRIPT_DIR/habits.sh" reminders-reschedule --habit "$b" --time "$c" --date "$FR_DATE" >/dev/null 2>&1 || true
+        fi
+        ;;
+      SKIP)
+        bash "$_SCRIPT_DIR/habits.sh" reminders-cancel --habit "$a" --date "$FR_DATE" >/dev/null 2>&1 || true
+        bash "$_SCRIPT_DIR/habits.sh" mark --name "$b" --date "$FR_DATE" --status skipped >/dev/null 2>&1 || true
+        FR_SKIPPED=$((FR_SKIPPED + 1))
+        ;;
+      NO_MATCH) echo "NO_MATCH ${b:-$a}"; exit 0 ;;
+      CHOSEN_NOHABIT) FR_CHOSEN="$a" ;;
+      *) : ;;
+    esac
+  done <<< "$FR_PLAN"
+  echo "RECONCILED chosen=${FR_CHOSEN} ensured=${FR_ENSURED} skipped=${FR_SKIPPED}"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# autostatus [--date YYYY-MM-DD] — end-of-day pass so scheduled habits stop
+# silently vanishing. For every non-archived habit, using the day's md tracker
+# as the source of truth:
+#   - is_due today AND already done OR missed   → leave
+#   - is_due today AND already skipped          → leave (counted, for surfacing)
+#   - is_due today AND a BUILD (at_least) habit with no mark → mark --status missed
+#   - not is_due today                          → leave (off day)
+# Limit (at_most) habits are never auto-missed — NOT doing them is success.
+#
+# FLEXIBLE COUNT habits ("N times per week/month" — schedule_type weekly/monthly
+# with target_count, or an explicit schedule carrying times_per_week/month) have
+# NO specific required day: only the weekly/monthly COUNT matters. They are
+# judged over the WHOLE period, never auto-missed on an individual day. autostatus
+# only records a miss for them on the LAST day of the period (Sunday / month-end)
+# and only when the period's completed count is still below target. On any other
+# day they are left untouched (an unmarked day is just "not yet", pruned by
+# consolidate) — so doing one on Tuesday no longer makes Monday a false miss.
+#
+# Run by /end-of-day BEFORE reminders-sync --sweep + consolidate.
+# Echoes: AUTOSTATUS missed=<n> skipped=<n>
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "autostatus" ]]; then
+  shift || true
+  AS_DATE="$TODAY"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --date) AS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -f "$PROFILE_FILE" ]] || { echo "AUTOSTATUS missed=0 skipped=0"; exit 0; }
+  [[ "$AS_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$AS_DATE'"; exit 0; }
+  AS_FILE="$(pbrain_habit_track_file "$AS_DATE")"
+  AS_PLAN="$(python3 - "$_SCRIPT_DIR/../lib" "$PROFILE_FILE" "$AS_FILE" "$AS_DATE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, os, datetime, calendar
+libdir, profile, trackfile, date = sys.argv[1:5]
+sys.path.insert(0, libdir)
+try:
+    from habit_schedule import derive_schedule, is_due, norm_days
+except Exception:
+    def derive_schedule(h): return {"type": "daily"}
+    def is_due(s, d): return True
+    def norm_days(x): return [str(t).strip().lower() for t in (x or [])]
+
+DONE_TRUE = {"x", "yes", "y", "done", "true", "1", "✅", "✓"}
+SKIP_TOK  = {"skip", "skipped", "⊘"}
+MISS_TOK  = {"miss", "missed", "✗"}
+def day_status(v):
+    t = (v or "").strip().lower()
+    if t in DONE_TRUE: return "done"
+    if t in SKIP_TOK:  return "skipped"
+    if t in MISS_TOK:  return "missed"
+    return ""
+
+# A dated md tracker is the source of truth for that day. Parse name → state.
+_file_cache = {}
+def file_statuses(fp):
+    if fp in _file_cache:
+        return _file_cache[fp]
+    out = {}
+    try:
+        lines = open(fp).read().splitlines()
+    except Exception:
+        lines = []
+    hi = None
+    for i, l in enumerate(lines):
+        if re.match(r"\s*\|\s*Habit\s*\|", l):
+            hi = i
+            break
+    if hi is not None:
+        j = hi + 2
+        while j < len(lines) and lines[j].strip().startswith("|"):
+            cells = [c.strip() for c in lines[j].strip().strip("|").split("|")]
+            while len(cells) < 6:
+                cells.append("")
+            out[cells[0].strip().lower()] = day_status(cells[3])
+            j += 1
+    _file_cache[fp] = out
+    return out
+
+status_by_name = file_statuses(trackfile)
+TRACK_DIR = os.path.dirname(trackfile)
+
+def flexible_target(h):
+    # A frequency-based ("N times per week/month") habit has no fixed required
+    # day — only a weekly/monthly COUNT target. Returns (target, period) for such
+    # habits, else None (daily / interval / explicit fixed-day schedules).
+    s = h.get("schedule")
+    if isinstance(s, dict) and s.get("type"):
+        for k, per in (("times_per_week", "week"), ("times_per_month", "month")):
+            if s.get(k):
+                try:
+                    return (max(1, int(s[k])), per)
+                except (TypeError, ValueError):
+                    return (1, per)
+        return None
+    rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+    if norm_days(rem.get("days")):
+        return None
+    st = str(h.get("schedule_type", "") or "").strip().lower()
+    if st in ("weekly", "monthly"):
+        try:
+            t = max(1, int(h.get("target_count")))
+        except (TypeError, ValueError):
+            t = 1
+        return (t, "week" if st == "weekly" else "month")
+    return None
+
+def is_period_end(period, date_iso):
+    try:
+        d = datetime.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return False
+    if period == "week":
+        return d.weekday() == 6          # Sunday closes the ISO week
+    if period == "month":
+        return d.day == calendar.monthrange(d.year, d.month)[1]
+    return False
+
+def done_in_period(period, date_iso, name):
+    # Count done marks for this habit across the whole period up to date_iso,
+    # reading each dated tracker file (sibling of trackfile).
+    try:
+        d = datetime.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return 0
+    if period == "week":
+        start = d - datetime.timedelta(days=d.weekday())
+        days = [start + datetime.timedelta(days=i) for i in range(7)]
+    elif period == "month":
+        last = calendar.monthrange(d.year, d.month)[1]
+        days = [datetime.date(d.year, d.month, k) for k in range(1, last + 1)]
+    else:
+        days = [d]
+    cnt = 0
+    key = name.strip().lower()
+    for dd in days:
+        if dd > d:
+            break
+        fp = os.path.join(TRACK_DIR, dd.isoformat() + ".md")
+        if file_statuses(fp).get(key) == "done":
+            cnt += 1
+    return cnt
+
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+
+skipped = 0
+miss = []
+for h in (data.get("habits") or []):
+    if h.get("archived"):
+        continue
+    direction = str(h.get("direction", "")).strip().lower()
+    if direction not in ("at_least", "at_most"):
+        direction = "at_most" if str(h.get("kind", "")).strip().lower() == "limit" else "at_least"
+    nm = str(h.get("name", "")).strip()
+    if not nm:
+        continue
+    flex = flexible_target(h)
+    # A flexible-count habit has no fixed due-day, so treat it as "in play" every
+    # day for skipped-counting; its miss is decided over the whole period below.
+    due = True if flex is not None else is_due(derive_schedule(h), date)
+    cur = status_by_name.get(nm.lower(), "")
+    if cur == "skipped":
+        if due:
+            skipped += 1
+        continue
+    if cur in ("done", "missed"):
+        continue
+    if direction != "at_least":
+        continue   # not doing a limit habit is success, not a miss
+    if flex is not None:
+        target, period = flex
+        # Only a real miss once the period closes and the count fell short —
+        # never per-day. Mid-period unmarked days stay "not yet" (pruned).
+        if is_period_end(period, date) and done_in_period(period, date, nm) < target:
+            miss.append(nm)
+        continue
+    if not due:
+        continue
+    miss.append(nm)
+print("SKIPPED\t%d" % skipped)
+for nm in miss:
+    print("MISS\t%s" % nm)
+PYEOF
+)"
+  AS_MISS=0; AS_SKIP=0
+  while IFS=$'\t' read -r kind val; do
+    case "$kind" in
+      SKIPPED) AS_SKIP="${val:-0}" ;;
+      MISS)
+        [[ -n "${val//[[:space:]]/}" ]] || continue
+        bash "$_SCRIPT_DIR/habits.sh" mark --name "$val" --date "$AS_DATE" --status missed >/dev/null 2>&1 || true
+        AS_MISS=$((AS_MISS + 1)) ;;
+      *) : ;;
+    esac
+  done <<< "$AS_PLAN"
+  echo "AUTOSTATUS missed=$AS_MISS skipped=$AS_SKIP"
   exit 0
 fi
 

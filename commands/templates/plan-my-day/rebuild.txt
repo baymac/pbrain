@@ -1,0 +1,91 @@
+
+---
+INSTRUCTIONS — let's rebuild your planning foundation. Do not plan any day yet.
+Tell the user: "Let's (re)build your plan — I'll carry your existing data across
+and set up a plans profile (what you're focused on, your working style), a work
+library (project cards), and a goals library (non-work goals). We'll also lock
+in this month's and this week's focus while we're here."
+
+Part A — Overall plans profile. Walk PART BY PART (not all at once):
+
+  1. Working style. Confirm what the old profile has, then ask for anything
+     missing:
+     - preferred work-session length (minutes)
+     - break preference: how long between sessions, what break activities they
+       actually like (the rotation the plan uses)
+     - total work hours per day they realistically want
+     - their important focus hours (e.g. "9-12, 15-17")
+     - the LAST block time of day — when the final work block must end
+     - energy peak (morning/afternoon/night/mixed), day wreckers, and any other
+       /plan-my-day preferences (e.g. "always surface carry-forward tasks first")
+     Then confirm a short planning_guidelines paragraph — "Here's how I'll plan
+     your day: [block sizing, anchor philosophy, what it optimises for]."
+
+  2. current_focus. Walk each old goal PART BY PART — quote it back, confirm /
+     update / drop. For each kept item:
+     - classify as work (lib: "work") or life (lib: "goals")
+     - track: professional | personal
+     - horizon: short (3–6 months) | long (6+ months)
+     - priority (1 = most important), deadline (YYYY-MM or "ongoing")
+     - success_looks_like (short phrase)
+     - context (working-notes paragraph — what it is, where it stands, what kind
+       of effort it needs)
+     Write the item into plans-profile current_focus AND register a short library
+     card in work-library or goals-library:
+       work-library card: id, name, shortcut (suggest a 2-3-letter alias,
+         e.g. "lt" → Lettuce), category: "work", one-line summary, stable
+         metadata (repo, stack, links), timeline: null
+       goals-library card: id, name, shortcut, category (health|creative|
+         relationships|financial|personal), one-line summary, timeline: null
+     Old "current_focus" this-week-move entries are NOT carried (now weekly
+     focus, Part C).
+
+  3. Typical day. "Let's flesh your flat anchors into full padded workday +
+     rest-day timelines." Walk the user through an average WORKDAY wake→bed,
+     every activity with its time (wake/prep, workout, each meal, work blocks,
+     walk, wind-down, bed), being GENEROUS with each block so real days leave
+     slack to do EXTRA, never a deficit. Capture each segment as
+     {slot, start, end, duration_min, category, flex} where category ∈
+     wake|fitness|meal|work|movement|rest|bed and flex ∈ fixed (meals/wake/bed)
+     | flex (work, walk, wind-down) | skippable (fitness). These are CEILINGS
+     the planner may compress, never expand. Read it back; then repeat for a
+     typical REST/weekend day. Ask which weekdays are rest days →
+     typical_day.rest_days. Set typical_day.padded: true. DERIVE daily_anchors
+     from the workday segments (wake←wake.start, workout←fitness.start,
+     lunch/dinner←meal slots, walk←movement.start, bed_target←bed.start) — no
+     separate anchors question. Then capture variation_rules once: use
+     activity_buffers for known activities (football, Apple Fitness) — do NOT ask
+     for buffer/commute time for those; late wake-ups → shift the whole timeline
+     but keep ≥30 min wake→first work block; and the invariants — keep meal COUNT,
+     protect meals + fitness, WORK is the flex variable, and only *suggest*
+     skipping fitness when meals run late AND recent days were already active
+     (priority_order events_and_nonnegotiables > meals_and_fitness > work).
+  4. anti_patterns + personal_anchors: confirm, prune anything stale.
+
+Part B — Monthly focus. Mint this month's monthly goals:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile new monthly-goals
+  Set "period": "$MONTH_YEAR", then derive from current_focus (priority only;
+  one item at a time: "Include '[name]' in $MONTH_YEAR goals? If yes — what's
+  the one-month milestone?"). Commit when confirmed:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit monthly-goals
+
+Part C — Weekly focus. Mint this ISO week's weekly goals:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile new weekly-goals
+  Set "period": "$ISO_WEEK", derive from the monthly focus (priority +
+  difficulty, one at a time). Commit when confirmed:
+  bash "$_SCRIPT_DIR/plan-my-day.sh" profile commit weekly-goals
+
+Write THREE profile files into $STORE (mkdir -p first), all committed v1.
+See templates/plan-my-day/profile-schema.txt for the exact JSON shape to use.
+
+Park the old profile so nothing is lost (do NOT delete):
+  mkdir -p "$VAULT_DIR/.pbrain/backup"
+  mv "$OLD_PROFILE" "$VAULT_DIR/.pbrain/backup/" 2>/dev/null
+  (Leave $OLD_JSON in place if it exists — superseded, not harmful.)
+
+Record so this never re-runs:
+  bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0002_plans_profile_rebuild
+
+Confirm: "Plans profile rebuilt → $STORE (plans profile + work library +
+goals library + this month's + this week's focus). Re-run /plan-my-day
+to plan today." Stop here.

@@ -18,6 +18,10 @@ A weekly cadence is the missing layer between daily journaling (too noisy) and q
 - Quotes you back to yourself in the synthesis — your language, not the agent's.
 - No productivity-system prescriptions. The user is reviewing their own life, not buying a course.
 
+**Work review:**
+
+The review adds a **`## Work review`** section — a per-project read of the week's work built from the week's `## Work tracker` rows plus the Plane project progress (`/project-manager progress`). Per project in play: planned vs done, Plane pct + delta, allocation % vs where the time actually went (an estimate-calibration signal), and pile-up flags. When it mints **next week's goals**, they're now **project-level** — each goal carries an `allocation_percent` (balanced to sum to 100 across active goals) and, when Plane is configured, a `plane_project` picked from the project registry. (Without Plane the section degrades gracefully — it reads "No project work tracked," and goals are minted as a focus-area + `allocation_percent` only, with no `plane_project` link.)
+
 **Improvements (Step 4):**
 
 After the synthesis and the three questions, the review builds a **per-command improvement list** from the week's evidence — one list each for `/plan-my-day` (plans profile + work/goals libraries), `/diet-journal` (diet profile), `/fitness-journal` (fitness profile, library, activity profiles), and `/habits` (the habit set). Each improvement is one evidence-tied line — "you skipped legs twice", "protein landed under target 5/7 days", "the Lettuce goal wasn't touched in any plan". It proposes nothing when the week gives no clear signal.

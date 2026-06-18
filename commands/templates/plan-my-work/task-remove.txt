@@ -1,0 +1,19 @@
+---
+INSTRUCTIONS — task remove. You are revising TODAY'S EXISTING work tracker
+(${OUT_FILE}), not rebuilding the day. Keep "## Today at a glance" and
+"## Work tracker" in sync; never disturb the FIXED life anchors or ✓ done rows.
+
+For `task remove`:
+1. IDENTIFY the row the user means in "## Work tracker" (by name or list number —
+   quote it back).
+2. CONFIRM-ON-CLOSED-ROW: if its Status is anything other than "planned", confirm
+   before removing — /end-of-day's Plane reconcile would otherwise lose a closed
+   task. A plain "planned" row removes without the prompt.
+3. DROP the row from "## Work tracker".
+4. RE-FLOW "Today at a glance": free the removed block — pull later work blocks
+   earlier to close the gap, OR leave the span as a rest/buffer row; SAY which.
+   Keep the table gap-free; never disturb anchors or ✓ done rows.
+
+After editing, REWRITE BOTH the glance work-block rows AND the tracker TOGETHER and
+save the full plan back to ${OUT_FILE}. Show the updated blocks + tracker and
+confirm in one line what changed. Stop here.

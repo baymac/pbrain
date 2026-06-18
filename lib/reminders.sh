@@ -1,20 +1,55 @@
 #!/usr/bin/env bash
 # pbrain reminders helper — sourced by lib/vault.sh (after db.sh).
 #
-# Blocking-overlay reminders live in the shared SQLite DB (lib/db.sh), split into
-# reminder_schedules (recurring series) + reminders (per-occurrence instances).
-# /remind-blocking owns create / list / cancel / tick / install. /remind is Apple
-# Calendar-only and never touches the DB; its Calendar helpers also live here.
+# TWO reminder backends live here:
+#   * /remind          — Apple **Reminders** (EKReminder) via the bundled helper
+#                        (pbrain-reminders.app). Reminders + iCloud own firing +
+#                        cross-device sync; there is NO pbrain DB row and NO poller
+#                        for /remind. The cron→Apple-recurrence mapper lives here too.
+#   * /remind-blocking — full-screen blocking-overlay reminders, the SOLE owner of
+#                        the SQLite store (lib/db.sh), split into reminder_schedules
+#                        (recurring series) + reminders (per-occurrence instances).
+#                        Owns create / list / cancel / tick / install.
+# pbrain_calendar_today (real Calendar EVENTS, for /plan-my-day anchors) also lives
+# here — separate from /remind's Reminders layer.
+#
+# THREE behaviors worth knowing at a glance (each fully documented at its fn):
+#
+# 1. FIRE / DEFER / MISS state machine + grace window (pbrain_reminders_tick, the
+#    /remind-blocking poller, ~60s). For each due occurrence:
+#      * FIRE  — within the grace window (PBRAIN_REMIND_GRACE_SECONDS, default 600)
+#                and unlocked: launch the overlay.
+#      * DEFER — locked-within-grace OR an overlay is already up (pgrep): leave
+#                pending + untouched so a later tick handles it.
+#      * MISS  — overdue past grace (asleep/off/locked-too-long): status=missed,
+#                no overlay.
+#    Both FIRE and MISS then ADVANCE the series (cron_next → insert next instance,
+#    bump next_due_at) — advancing on *processing* not *display* keeps a series
+#    alive across missed/locked/asleep fires; only cancelling stops it.
+#
+# 2. Overlay resolution paths (pbrain_overlay_show; degrades to a notification when
+#    swiftc is absent). Hold **Control** → skipped; countdown elapses → done (the
+#    ONLY path to done, no mark-done gesture); sleep/lock self-dismiss → missed. At
+#    most ONE overlay on screen at a time.
+#
+# 3. cron→Apple-recurrence mapping (pbrain_cron_to_rrules, for /remind EKReminder
+#    recurrence). Apple recurrence is daily/weekly/monthly/yearly only, so sub-daily
+#    cron is REJECTED (→ /remind-blocking); multiple times-of-day SPLIT into one
+#    reminder each; dom+dow (cron OR) SPLIT into two; nth/last weekday via dow#n /
+#    dowL; true every-N intervals (cron can't express) use --repeat tokens via
+#    pbrain_calendar_rrule.
 #
 # Defines:
 #   pbrain_notify <title> <message>     fire a macOS notification, injection-safe, best-effort
 #                                       (only the overlay's no-swiftc degradation path uses it)
 #   pbrain_notify_build                 compile pbrain-notify.app from lib/pbrain-notify.swift (idempotent)
 #   pbrain_overlay_build / _show        compile + launch the full-screen blocking overlay
-#   pbrain_reminders_cmd                echo abs path to commands/remind.sh (Calendar /remind)
-#   pbrain_reminders_tick               fire/defer/reconcile due blocking occurrences (poller only)
+#   pbrain_reminders_app_build / _run   compile + drive the EKReminder helper (/remind)
+#   pbrain_cron_to_rrules               cron → Apple EKRecurrenceRule(s) (/remind)
+#   pbrain_reminders_cmd                echo abs path to commands/remind.sh (/remind)
+#   pbrain_reminders_tick               fire/defer/miss due blocking occurrences (poller only)
 #   pbrain_cron_next                    next datetime matching a 5-field cron expr
-#   pbrain_calendar_*                   Apple Calendar layer for /remind
+#   pbrain_calendar_*                   Apple Calendar EVENTS layer (/plan-my-day anchors)
 #
 # Like the other lib/ helpers, this NEVER exits non-zero — it is sourced into
 # commands under `set -euo pipefail`.
@@ -108,11 +143,14 @@ pbrain_overlay_build() {
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
 # interpolated into an interpreted string — so arbitrary message text is inert.
-#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<mark_done>] [<warning_seconds>]
+#   pbrain_overlay_show <message> <seconds> [<hold>] [<bg-hex>] [<id>] [<db>] [<mark_done>] [<warning_seconds>] [<snooze_minutes>]
 # <seconds> 0 = no countdown (stays until a gesture resolves it).
 # <mark_done> 1 = enable Option-hold-to-done mode (no countdown needed).
 # <warning_seconds> seconds for the pre-overlay warning panel (default "" = use overlay default of 10s;
 #   pass "0" to skip the warning entirely, e.g. for the test command).
+# <snooze_minutes> warning-panel "Snooze" button push-out (default "" = use overlay default of 5;
+#   pass "0" to hide it). Env PBRAIN_OVERLAY_SNOOZE_MINUTES sets the fallback. Only shown when <id>+<db>
+#   are passed (there's a row to reschedule).
 # Launched with `open -n` so it runs in a proper Launch Services / GUI context
 # (works from the launchd poller's gui session); falls back to a notification if
 # the app can't be built (no swiftc).
@@ -122,6 +160,7 @@ pbrain_overlay_build() {
 pbrain_overlay_show() {
   local msg="${1:-Take a break}" secs="${2:-0}" hold="${3:-3}" bg="${4:-${PBRAIN_OVERLAY_BG:-}}"
   local rid="${5:-}" db="${6:-}" mark_done="${7:-0}" warning="${8:-}"
+  local snooze="${9:-${PBRAIN_OVERLAY_SNOOZE_MINUTES:-}}"
   pbrain_overlay_build
   local bin="$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
   if [[ -x "$bin" ]]; then
@@ -131,6 +170,7 @@ pbrain_overlay_show() {
     [[ -n "$db" ]]            && args+=(--db "$db")
     [[ "$mark_done" == "1" ]] && args+=(--mark-done)
     [[ -n "$warning" ]]       && args+=(--warning-seconds "$warning")
+    [[ -n "$snooze" ]]        && args+=(--snooze-minutes "$snooze")
     if command -v open >/dev/null 2>&1; then
       open -n "$PBRAIN_OVERLAY_APP" --args "${args[@]}" >/dev/null 2>&1 && return 0
     fi

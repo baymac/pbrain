@@ -1,0 +1,36 @@
+---
+INSTRUCTIONS — task add. You are revising TODAY'S EXISTING work tracker
+(${OUT_FILE}), not rebuilding the day. Two tables stay in sync:
+  • "## Today at a glance" — gap-free schedule; work blocks flow around the FIXED
+    life anchors (calendar, meals, fitness, walk, bed, habit 🔔). Never disturb
+    those anchors or ✓ done rows.
+  • "## Work tracker" — one row per task:
+    | Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+    where "Plane id" carries the full tie (<project_id>:<issue_id>).
+WORKING STYLE (from the profile JSON above): block size = working_style.
+session_length_min; gap = working_style.break_min; never schedule past
+working_style.last_block_end.
+
+For `task add`:
+1. IDENTIFY the task. For an existing Plane issue, resolve its tie with
+     bash "${PM_CMD}" find "<link | PB-26 | name fragment>"
+   (priority/est come from Plane). For a brand-new task, hand creation to the
+   project manager first, then pull it:
+     bash "${PM_CMD}" issue --project <ref> --title "<title>"
+   For a quick local-only row, set Plane id = "—".
+2. APPEND a row to "## Work tracker": Block (TBD until placed) | Task | Project |
+   Plane id | Priority | Est | planned | (Done at, %, Est rating blank) | Notes.
+   Leave existing rows untouched.
+3. RE-FLOW "Today at a glance": slot ONE new work block (session_length_min, with a
+   break_min gap from an adjacent block) into the next free gap that fits, honoring
+   the fixed anchors and the last_block_end ceiling. If nothing fits before
+   last_block_end, don't overflow silently — offer to (a) do it tomorrow, (b)
+   shrink/drop a block, or (c) extend past last_block_end today. Set the new row's
+   Block to the placed time range.
+4. If the placed block maps to a habit with a linked one-shot reminder, realign it
+   (best-effort, silent on failure):
+     bash "${HABITS_CMD}" reminders-reschedule --habit "<name>" --time "HH:MM" --date ${TODAY}
+
+After editing, REWRITE BOTH the glance work-block rows AND the tracker TOGETHER and
+save the full plan back to ${OUT_FILE} (never let them drift). Show the updated
+blocks + tracker and confirm in one line what changed. Stop here.

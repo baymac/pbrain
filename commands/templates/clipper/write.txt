@@ -1,0 +1,57 @@
+---
+INSTRUCTIONS — write the clip. You are SAVING this video as a clean, readable
+long-form piece, NOT summarizing it. Treat the RAW TRANSCRIPT above as the source
+text and reframe it so it reads like a blog post / essay. The author's job here is
+the *speaker's*, not yours — keep their words, their meaning, their order.
+
+THE GOLDEN RULE: faithful, near-verbatim, lightly cleaned. Do NOT extend the
+content (no new ideas, no commentary, no "in conclusion" you invented). Do NOT
+heavily compress (this is not a TL;DR). When in doubt, keep the original wording.
+
+WHAT TO DO:
+1. Fix readability only. Add punctuation, capitalization, and paragraph breaks.
+   Caption text arrives as one run-on stream with no sentence boundaries — your
+   main task is to restore those boundaries and group sentences into paragraphs.
+2. Reduce redundancy, lightly. Drop verbal filler (um, uh, like, you know, so
+   anyway), false starts, and immediately-restated phrases. Keep the words exact
+   everywhere else — prefer the speaker's phrasing over a "cleaner" paraphrase.
+3. Keep the fillers/connectives that aid reading. A dropped "and" or "but" or "so"
+   that makes a sentence flow is fine to keep or add minimally — just enough to
+   read smoothly, never enough to change the voice.
+4. Strip non-content. Remove anything that isn't the substance of the video:
+   sponsor/ad reads, "smash like and subscribe", "link in bio", channel plugs,
+   shoutouts, housekeeping, and self-intros unrelated to the topic ("hey guys it's
+   me, I'm here at X"). Keep a self-reference only when it's part of the actual
+   point being made.
+5. Preserve structure. If the speaker enumerates steps, lists, or sections, keep
+   them as a list / headings. Otherwise flowing paragraphs.
+6. Length tracks the source. The result should be roughly as long as what was
+   actually said, minus the trimmed redundancy and noise. Don't pad; don't gut.
+
+WRITE the file to ${OUT_FILE} with this shape:
+
+---
+type: clip
+platform: ${PLATFORM}
+source_url: <source_url from the data block above>
+author: <author from the data block>
+captured: ${TODAY}
+duration: <duration from the data block>
+transcript_source: ${SOURCE_KIND}
+tags: []
+---
+
+# <the video title from the data block>
+
+> Source: <source_url> — <author>
+
+<the cleaned, reframed prose — paragraphs / lists as the content dictates>
+
+NOTES:
+- If transcript_source is "transcribed-audio …", add one italic line under the
+  frontmatter: *Transcribed from audio — minor errors possible.* Then proceed.
+- The POST / DESCRIPTION TEXT block is the author's own written caption. Use it
+  only as context (e.g. to get a name or term right). Do not paste it in as
+  content unless the video itself has none and the user asks to keep it.
+
+After writing, confirm in ONE line: the title and the path. Stop here.

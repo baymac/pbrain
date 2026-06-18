@@ -2,6 +2,36 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [0.23.0] — 2026-06-15
+
+### Added — Plane project management integration + vault zero-config fallback
+
+- **`/project-manager`** — the Plane commander: connect pbrain to a self-hosted or Cloud Plane instance (`setup`/`use`/`status`/`probe` subcommands), then manage projects across the entire daily loop (`ready`, `progress`, `review`, `enrich`, `move`, `priority`, `timeline`, `completed`). Works without Plane configured (emits `PM_NOT_CONFIGURED` so commands degrade gracefully). Absorbs the `/init-plane` setup path.
+- **`/init-plane`** — vault-free wizard to wire pbrain to a local Plane self-host before a vault exists; superseded by `/project-manager` once a vault is configured, kept as the no-vault setup path.
+- **`/plan-my-work`** — the WORK layer for the daily planning loop (run after `/plan-my-day`). Pulls ready Plane tasks into the empty work blocks of today's plan file (`## Work tracker`). Block/time math is embedded so tasks fill the day optimally. `task add|remove|list` edits the work tracker without needing Plane. Emits `PLAN_MY_WORK_NO_PLANE` when Plane is unconfigured.
+- **`lib/plane.py`** — the sole Plane backend (stdlib `urllib`, no pip deps). Two seams: READ (list ready work-items by active state group) and WRITE (PATCH state + `completed_at`). Supports multi-project configs (`projects: [{id, name, shortcut}]`) with back-compat for single-project configs.
+- **`vhost` subcommand** (`/project-manager vhost`, mirrored on `/init-plane vhost`) — moves Plane off port 80 to a stable `http://plane.localhost:1800` by editing Plane's own `plane.env` (`APP_DOMAIN` + `LISTEN_HTTP_PORT`, which Plane substitutes into `WEB_URL`/`CORS_ALLOWED_ORIGINS`). No sidecar proxy, no Node, no `/etc/hosts` — Plane's built-in Caddy serves both the vanity URL (browser, free `*.localhost` resolution via RFC 6761) and `http://127.0.0.1:1800` (pbrain's `base_url`). Idempotent: backs `plane.env` up on first apply; `--remove` reverts. Flags: `--host`, `--port`, `--plane-home`, `--no-restart`, `--remove`.
+- **`lib/projects.sh`** — shared Plane seam layer sourced by the daily-loop commands (`/plan-my-day`, `/plan-my-work`, `/end-of-day`, `/weekly-review`). Degrades to `[]`/`{}` when Plane is unconfigured; never exits non-zero so commands always complete.
+- **`lib/scaffold.sh`** — standalone vault-scaffold helpers (git init, `.gitignore`, `CLAUDE.md`, config write). Extracted from `/init-obsidian` so both `/init-obsidian` (pre-vault path) and `lib/vault.sh` (zero-config fallback) share one implementation.
+- **Vault zero-config fallback.** When no vault is configured and the default iCloud path doesn't exist, `lib/vault.sh` auto-creates a plain local vault at `~/pbrain-vault` (git + `.gitignore` + `CLAUDE.md` + config). Commands never hard-fail on a fresh machine. `PBRAIN_NO_AUTOVAULT=1` restores the strict behavior.
+- **Migration 0007 (`goals_project_reframe`, STAGED).** Reframes weekly/monthly goal items from task-level (`tie`, `priority`) to project-level (`plane_project`, `allocation_percent`). Applicable when a goals file lacks `allocation_percent`. Driven interactively by `/plan-my-day`; recorded after rebuild. Committed old-format files remain readable.
+- **`/clipper`** — save an online video as a clean, faithful long-form transcript ("clip") in the vault. Platform subcommands `x` (X / Twitter) and `yt` (YouTube); the `.sh` owns the whole technical path (browser cookies, `yt-dlp` metadata + subtitle download, VTT cleanup, and — when there's no caption track — an audio-transcription fallback via FluidAudio's Parakeet TDT v3), handing the model a de-duplicated transcript to reframe into faithful prose (not a summary). Writes `agent-work/clips/<platform>/<slug>.md`; `transcriber install|status` builds/checks the local Parakeet CLI.
+
+### Changed
+
+- **`/project-manager`** — now the **sole writer** of Plane via a natural-language router: any plain-language instruction (or `route <words>`) resolves the target issue (`find` by link / `PB-26` / fuzzy name) and edits ANY field through one verb catalogue — `move`/`priority`/`timeline`/`tag`/`assign` (by name/email)/`comment`/`reparent`/`cycle`/`module`/`description`/relations/sub-issues — with `update --edits '[{tie,field,value}]'` as the batched form. Dual-mode (executor when `/plan-my-work` calls it via `PBRAIN_PM_CALLER`, goal-aware when invoked directly); label auto-create is capped per run, people/projects are never auto-created, and a manual-UI fallback covers the ~10% the API can't reach. Adds project **estimates** (`PM_ESTIMATES`): estimate scales fetched live via the internal cookie-auth endpoint (held in memory, never cached to disk), `estimates --create/--from-browser/--session-cookie/--import-json`, with points scales feeding `/plan-my-work` block-packing.
+- **`/plan-my-work`** — grooming/triage is now **delegated to `/project-manager`** (executor mode) instead of done inline; the data block is leaner (working_style + day shape only, no current_focus/anti-patterns) and the instructions move to `commands/templates/plan-my-work/session.txt`, leaving the `.sh` a thin dispatcher. `/project-manager`'s instructions likewise extract to `commands/templates/project-manager/`.
+- **`/plan-my-day`** — now injects the project registry, per-project weekly allocations (`allocation_percent`), and block-filling math so the work block scaffold matches the day's project mix. The `weekly_goals_file` path now comes from the versioned plans-profile store.
+- **`/end-of-day`** — Plane sync and unplanned detection: on close, compares the day's work tracker against Plane's `completed-today` list and emits the reconcile context so the LLM can push status updates and surface tasks done outside pbrain.
+- **`/weekly-review`** — injects project registry, per-project progress summary, and a Work review section that walks each active project's status and suggests weekly-goal minting with `plane_project` + `allocation_percent` fields.
+- **`/habits`** — `autostatus` now auto-skips scheduled-but-not-chosen activities when a fitness `focus:` is set, and marks due build habits as `missed` before end-of-day consolidate.
+- **`/remind-blocking`** — overlay Swift source refactor (multi-action button layout, dynamic `--snooze-minutes` wiring via default-value env var `PBRAIN_OVERLAY_SNOOZE_MINUTES`).
+
+### Fixed
+
+- **`lib/habits.sh`** — `fitness-reconcile` correctly resolves the chosen activity from the fitness profile and auto-skips off-activity habits with `status=skipped` rather than leaving them unmarked.
+- **`lib/reminders.sh`** — locked-screen deferral no longer fires an overlay; within-grace one-shots defer cleanly and fire on next tick after unlock.
+
 ## [0.22.0] — 2026-06-13
 
 ### Added — habit scores read-back, clippings in weekly review, end-of-day Scoreboard

@@ -1,0 +1,25 @@
+INSTRUCTIONS — UPDATE today's existing day plan (it's already written). This is a
+light revise-in-place pass, NOT a re-plan. The full plan is shown above; the plans
+profile current_focus + this week's/month's goals are there for re-tying rows.
+
+1. Show the user today's "## Today at a glance" table (concise) and ask what they
+   want to change: update the "## How it went" section, add/move/drop a row, re-split
+   blocks, or adjust an anchor time.
+2. Apply only what they ask. Keep the LIFE-ANCHORS-FIRST shape: calendar events and
+   explicit user-stated times are fixed; meals/fitness/walk/wind-down/bed stay within
+   their normal variance; work blocks remain GENERIC PLACEHOLDERS ("Block N — focus
+   work") — /plan-my-work owns task assignment, you never name tasks here.
+3. If they add or move a timed row, keep the table gap-free and overlap-free (wake →
+   bed). Re-tie any changed row's Tie column to a current_focus item, a category, or
+   "—". If a row maps to a current_focus goal, set/refresh `focus_today` in the
+   frontmatter accordingly.
+4. Re-show the updated table, confirm, then write the whole file back to the same
+   output_file in place. Do NOT create a second file.
+
+Notes:
+- For end-of-day reconciliation (actual vs plan, Plane sync, scoring), point them to
+  /end-of-day — that is NOT this command's job.
+- Habit marking + reminder alignment run automatically at the end of this session:
+  if you track habits, a HABIT SCAN block appears below — follow it silently. No
+  block = no habits set up (nothing to do); a "NOTE: habit reconcile unavailable"
+  block means the helper failed to load — flag it so it can be fixed.

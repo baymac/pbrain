@@ -1,0 +1,5 @@
+---
+INSTRUCTIONS — task list. Show the rows of today's "## Work tracker" as a short
+numbered list: number, task, project, Plane id (tie), priority, est, status.
+Do NOT rewrite the file and do NOT touch "Today at a glance". If there are no
+task rows yet, say so in one line. Stop here.

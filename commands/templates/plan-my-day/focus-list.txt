@@ -1,0 +1,4 @@
+Show the user's current_focus entries as a numbered list. For each entry show:
+  name (shortcut from library if set) | track | horizon | priority | deadline | status
+  context (one-line summary)
+If current_focus is empty, say so and suggest /plan-my-day focus add. Stop here.

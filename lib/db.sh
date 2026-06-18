@@ -64,8 +64,9 @@ try:
         habit_id    TEXT,                          -- stable slug; the real key
         habit       TEXT NOT NULL,                 -- display-name snapshot at log time
         occurred_on TEXT NOT NULL,                 -- YYYY-MM-DD (local)
-        count       INTEGER NOT NULL DEFAULT 1,    -- occurrence count (times done that day)
+        count       INTEGER NOT NULL DEFAULT 1,    -- occurrence count (times done that day); 0 for skipped/missed
         amount      REAL,                          -- measured value for that day (e.g. 2.5 L); NULL = unmeasured habit
+        status      TEXT NOT NULL DEFAULT 'done',  -- done | skipped | missed (skipped/missed carry count=0)
         source      TEXT NOT NULL DEFAULT '',      -- command that logged it
         note        TEXT,
         created_at  TEXT NOT NULL
@@ -185,6 +186,17 @@ try:
     # check so it's a no-op on fresh and already-migrated DBs.
     if cols and "amount" not in cols:
         con.execute("ALTER TABLE habit_events ADD COLUMN amount REAL")
+
+    # --- habit_events migration: add the 3-state `status` column ----------
+    # A habit-day used to be binary: a row meant "done", no row meant "not
+    # done". The new model records an explicit per-day status so skipped (the
+    # user deliberately cancelled it today) is distinguishable from missed
+    # (scheduled but never done) and from done. Existing rows only ever
+    # recorded completions, so they backfill to 'done'. Skipped/missed rows
+    # are written with count=0 so they never inflate done-counts. Guarded by
+    # the same table_info check → no-op on fresh and already-migrated DBs.
+    if cols and "status" not in cols:
+        con.execute("ALTER TABLE habit_events ADD COLUMN status TEXT NOT NULL DEFAULT 'done'")
 
     # --- reminders redesign migration: conflated row → schedule + instances ---
     # The old `reminders` table conflated the recurrence definition and the

@@ -126,6 +126,24 @@ if [[ -n "${PBRAIN_TRACKER_DB_FILE:-}" && -f "$PBRAIN_TRACKER_DB_FILE" && -f "$L
   [[ -n "$_lt_out" ]] && LAPTOP_REPORT_FILE="${_lt_out#Wrote }"
 fi
 
+# Plane reconcile context: this week's goal-project ids + the issues Plane shows
+# completed TODAY (for unplanned-row detection). Degrades to []/empty so an
+# unconfigured Plane (or an unreachable one) costs nothing.
+PLANE_CONFIGURED="$(pbrain_plane_configured && echo yes || echo no)"
+WEEKLY_PIDS=""
+if [[ -n "$WEEKLY_GOALS_FILE" ]]; then
+  WEEKLY_PIDS="$(pbrain_profile_json "$WEEKLY_GOALS_FILE" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || true)"
+fi
+COMPLETED_TODAY_JSON="[]"
+if [[ "$PLANE_CONFIGURED" == "yes" ]]; then
+  COMPLETED_TODAY_JSON="$(pbrain_projects_completed_today_json "$WEEKLY_PIDS" "$TODAY" 2>/dev/null || echo '[]')"
+fi
+PM_CMD="$(pbrain_projects_manager_cmd 2>/dev/null || true)"
+
 cat <<PROMPT
 END_OF_DAY_SESSION
 date: $TODAY ($DOW)
@@ -135,6 +153,10 @@ week_end: $WEEK_END
 month_end: $MONTH_END
 plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"), already_closed: $CLOSED)
 weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}
+plane_configured: $PLANE_CONFIGURED
+weekly_pids: ${WEEKLY_PIDS:-(none)}
+project_manager_cmd: ${PM_CMD:-(unavailable)}
+completed_in_plane_today: $COMPLETED_TODAY_JSON
 journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
 gratitude_file: $GRATITUDE_FILE (exists: $(exists "$GRATITUDE_FILE"))
 thoughts_file: $THOUGHTS_FILE (exists: $(exists "$THOUGHTS_FILE"))
@@ -179,8 +201,8 @@ Step 0 — Preflight:
     Wait for direction.
 
 Step 1 — PHASE A: reconcile silently, then recap. Skim every section above and
-pull what's already known WITHOUT asking — task-log rows already resolved (Status
-!= planned), backfilled "✓" rows in "## Today at a glance", diet rows already
+pull what's already known WITHOUT asking — work-tracker rows already resolved
+(Status != planned), backfilled "✓" rows in "## Today at a glance", diet rows already
 "eaten", the fitness session status, habit marks already in the rollup, the
 laptop report, and anything in the journal/thoughts. Print ONE compact recap —
 "Here's your day so far: …" (a few lines, no table dump) — so the user can just
@@ -189,7 +211,7 @@ confirm by exception. Then ask only the gaps in Phase B.
 Step 2 — PHASE B: ask ONLY the gaps, ONE domain per message, waiting for each
 answer. Every question is SPECIFIC — list the actual unresolved items. Do NOT
 ask open-ended reflection questions.
-  Q1) DAILY PLANNING — from "## Today at a glance" + "## Task log", take every
+  Q1) DAILY PLANNING — from "## Today at a glance" + "## Work tracker", take every
      already-resolved row as-is. For the REST, list them by name and ask in ONE
      message: "Still open from today's plan — {task / block names}: which got
      done, partial, not started, or n/a?" If every row is already resolved, skip
@@ -244,6 +266,9 @@ reflection — in this exact shape:
 
   **Habits (other due today)**
   - {one line each: ✅/⏳/⚠️ name — used/target, from the rollup; omit if none due}
+  - {if autostatus reported missed>0 or skipped>0, ONE summary line:
+     "Today: N missed · M skipped" — from the "AUTOSTATUS missed=N skipped=M"
+     output in Step 4e. Omit when both are 0.}
 
   **Diet**
   - {Cals X / target Y (net ±Z) · P x/t · C x/t · F x/t · Fiber x/t — from the closed diet log}
@@ -266,23 +291,28 @@ reflection — in this exact shape:
   - {auto-derived in Step 3c — leave the bullets for that step to fill}
 
 Step 3b — Fill BOTH tables. Use the Edit tool on $PLAN_FILE in place.
-  - "## Task log": fill the \`Done at\` and \`Status\` columns for each row from
-    Q1 (and the already-resolved rows from Phase A):
-      Task completed → Done at: HH:MM, Status: done
-      Task partially done → Status: partial
+  - "## Work tracker": fill the \`Status\`, \`Done at\`, \`% complete\`, and
+    \`Est rating\` columns for each row from Q1 (and the already-resolved rows
+    from Phase A):
+      Task completed → Done at: HH:MM, Status: done, % complete: 100
+      Task partially done → Status: partial, % complete: {rough %}
       Task not touched → Status: not started
       Task not applicable today → Status: n/a
+    \`Est rating\` = a terse calibration note on whether the Est held (e.g.
+    "held", "under by ~1h", "over by ~2h") — fill it when you can judge from the
+    Done at / % complete, else leave blank.
   - "## Today at a glance": prefix each block that actually happened with "✓ "
     in the Action cell (the table's existing done-row convention). Leave blocks
     that didn't happen unprefixed.
-  Skip either silently if that section isn't in the plan.
+  Skip either silently if that section isn't in the plan. (Legacy plans may carry
+  a "## Task log" instead — treat it as the work tracker for reconcile.)
 
-Step 3c — CARRY-FORWARD. From the filled "## Task log", collect every row with
+Step 3c — CARRY-FORWARD. From the filled "## Work tracker", collect every row with
 Status "not started" or "partial". Write them as the bullets of the
 "### Carry-forward" subsection (from Step 3) — one bullet per carried task,
 phrased as a ready-to-schedule task ("{task} (carried from $TODAY)"). This is
 auto-derived — do NOT ask the user for a "tomorrow seed". If no task slipped,
-write a single "- (nothing carried)" bullet. /plan-my-day reads this next day.
+write a single "- (nothing carried)" bullet. /plan-my-work reads this next day.
 
 Step 4 — Propagate the close into the cross-ref files. This is bookkeeping
 the user expects to be automatic — do all of these whenever the inputs apply,
@@ -343,10 +373,10 @@ without re-asking. Use the Edit tool on each file.
       /diet-journal or /fitness-journal already marked it, re-marking just
       reflects the closed value. Only mark a default that is actually a tracked
       [scored] habit AND has its input data:
-      • "Work the plan" (weighted_completion) — if the plan has a "## Task log"
-        table, build the --items JSON from EVERY row (priority, difficulty,
-        status as filled in 3b) and mark it per the HABIT EXTRACTION block. No
-        task log → skip.
+      • "Work the plan" (weighted_completion) — if the plan has a "## Work tracker"
+        table (or a legacy "## Task log"), build the --items JSON from EVERY row
+        (priority, difficulty, status as filled in 3b) and mark it per the HABIT
+        EXTRACTION block. No tracker → skip.
       • "Train" (session_volume) — if a fitness session was logged or closed
         today (4b), build the --session JSON (mode/status/planned/actual from
         the session log vs the activity plan) and mark it per the session_volume
@@ -380,13 +410,29 @@ without re-asking. Use the Edit tool on each file.
                --focus '{"work":N,"social":N,"entertainment":N,"neutral":N}'
            The evaluator computes work / (work + distraction); AFK is neutral.
            If work+distraction is 0 (no classifiable active time), skip the mark.
+      THEN run the auto-status pass so scheduled-but-undone habits are RECORDED
+      (not silently dropped) — this must run AFTER all the marking above and
+      BEFORE reminders-sync/consolidate:
+        bash "$HABITS_CMD" autostatus --date $TODAY
+      For every build habit due today with no mark, it writes status=missed; a
+      habit already marked done/skipped is left as-is; limit habits and off-day
+      (not-due) habits are never touched. It prints "AUTOSTATUS missed=<n>
+      skipped=<n>" — keep those two numbers for the Scoreboard line below.
+      THEN reconcile the linked Apple Reminders BEFORE consolidating (so a habit
+      completed only by ticking its Apple Reminder is pulled into today's marks
+      and lands in the consolidated file + the scores below — not left out):
+        bash "$HABITS_CMD" reminders-sync --date $TODAY --sweep
+      See 4f for what this does + the one line to surface. No-op (and silent)
+      when no habits profile / no linked reminders exist.
       THEN consolidate:
         bash "$HABITS_CMD" consolidate --date $TODAY
       Consolidate syncs today's tracking file ($HABITS_TRACK_FILE) into the
-      analysis DB and prunes the habits you didn't do from the day's entry, so
-      weekly/monthly reviews have accurate data. Run it once, after marking.
-      THEN run the scores read-back (AFTER marking + consolidate so the DB is
-      current):
+      analysis DB and keeps the day's done / skipped / missed rows (only the
+      untouched "not yet" rows are pruned), so weekly/monthly reviews have
+      accurate data. Run it once, after autostatus + marking + the reminders
+      pull above.
+      THEN run the scores read-back (AFTER marking + reminders-sync + consolidate
+      so the DB is current):
         bash "$HABITS_CMD" scores --date $TODAY
       Parse the line beginning with "HABIT_SCORES " and parse its JSON array.
       Use this to fill the "### Scoreboard" Habits (scored) table verbatim:
@@ -395,7 +441,7 @@ without re-asking. Use the Edit tool on each file.
         - Basis column: derive a terse note from what you already know:
             meal_ratio    → "X clean / Y unclean" meals
             deviation     → "bed HH:MM vs HH:MM · N.Nh" (from fitness frontmatter)
-            weighted_completion → "N/M tasks" or "X/Y pts" (from the task log)
+            weighted_completion → "N/M tasks" or "X/Y pts" (from the work tracker)
             session_volume      → "Nkg / Mkg planned" or "completed / skipped"
             focus_ratio         → "Xm work / Ym social" (from focus-breakdown)
           For any habit with score: null → write "— (not marked)" in Basis.
@@ -408,9 +454,10 @@ without re-asking. Use the Edit tool on each file.
 
 4f) REMINDERS — a daily build habit can be LINKED to a per-day Apple Reminder
     that pbrain keeps in TWO-WAY sync (the reminder is just a notification +
-    checkbox; pbrain owns the data). Run this AFTER 4e's consolidate. No-op when
-    no habits profile exists — don't mention reminders then.
-    SYNC (silent bookkeeping — do NOT ask): run
+    checkbox; pbrain owns the data). The sync itself runs in 4e (BEFORE
+    consolidate) — this section just explains it + the one line to surface. No-op
+    when no habits profile exists — don't mention reminders then.
+    SYNC (silent bookkeeping — do NOT ask; the command was already issued in 4e):
          bash "$HABITS_CMD" reminders-sync --date $TODAY --sweep
        It reconciles today's linked habits with their one-shot reminders both
        ways: a reminder you ticked off in the Apple Reminders app marks the habit
@@ -430,16 +477,39 @@ without re-asking. Use the Edit tool on each file.
     calendar items here.
 
 4h) WEEKLY-GOAL ROLLUP — if \`weekly_goals_file\` is a real path (not "(not set up)"),
-    update the weekly-goals draft in place based on today's task-log actuals:
-    - For each task-log row with Status = done: find the matching goal in the
-      weekly-goals JSON (match by "tie" or by goal text similarity) and set its
-      "status" to "in_progress" (if not already "done" for the period — a weekly
-      goal may take multiple days). If ALL tasks tied to a goal are done, set
-      "status": "done".
-    - For tasks with Status = partial: set "status": "in_progress" if it was "active".
-    - Leave goals with no matching done task unchanged.
+    update the weekly-goals draft in place based on today's work-tracker actuals.
+    Goals are now PROJECT-level: match each work-tracker row to a goal by its
+    PROJECT, not by task text — the "Plane id" column carries "<project_id>:<iid>",
+    so its project_id matches the goal's "plane_project".
+    - For each work-tracker row with Status = done whose project matches a goal's
+      plane_project: set that goal's "status" to "in_progress" (if not already
+      "done" for the period — a weekly project goal spans many days).
+    - For rows with Status = partial: set "status": "in_progress" if it was "active".
+    - Leave goals with no matching done row unchanged. (Legacy task-level goals
+      with a "tie" but no "plane_project": fall back to matching by tie/text.)
     Use the Edit tool to update the JSON block in $WEEKLY_GOALS_FILE in place.
     Only edit if weekly_goals_file is a real path. Skip silently otherwise.
+
+4k) PLANE SYNC + UNPLANNED DETECTION — push today's work-tracker statuses back to
+    Plane and pull in anything you finished in Plane but never planned. Run ONLY
+    IF \`plane_configured\` == yes (skip silently otherwise). All writes are
+    idempotent (set-not-append), so re-running a close is safe.
+    1. PUSH: collect every "## Work tracker" row whose "Plane id" is a real tie
+       (contains ":") and whose Status was filled in 3b. Map work-tracker Status →
+       Plane status: done→done · partial/in-progress→doing · not started→todo ·
+       n/a/dropped→dropped. Push each row with the project manager (idempotent —
+       skip rows whose Plane status already matches, so you don't thrash):
+         bash "${PM_CMD:-/project-manager}" move "<pid>:<iid>" --to <status>
+       (for a done row, the manager stamps completed_at automatically.) Relay a
+       one-line summary of how many were pushed.
+    2. UNPLANNED: read \`completed_in_plane_today\` (JSON array of issues Plane
+       marked done TODAY). For each whose tie is NOT already a row in the work
+       tracker, APPEND an "unplanned" row: Block "—" | {title} | {project} |
+       {tie} | (priority/est from Plane if known, else —) | done | {completion
+       time or —} | 100 | | "unplanned (done in Plane)". Dedupe against existing
+       ties so re-running never double-adds. These unplanned-done rows also count
+       toward "Work the plan" — re-run that mark in 4e if you added any.
+    Surface ONE line: "Synced N tasks to Plane; M unplanned done pulled in."
 
 4g) LAPTOP USAGE — if \`laptop_report_file\` is a path (not "(none)"), today's
     laptop-usage report was already rendered to that file. Read it and weave ONE

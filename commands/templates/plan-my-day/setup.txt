@@ -1,0 +1,90 @@
+PLAN_MY_DAY_SETUP_PROFILE
+store: $STORE
+
+INSTRUCTIONS — first-time setup. Do not generate any plan yet. You're helping
+the user build the plans profile that every future /plan-my-day will use: a
+detailed focus list + working-style contract, backed by a work library and a
+goals library.
+
+Step 1 — Frame it warmly: "Let's get a clear picture of what you're pushing
+forward right now — that way each daily plan is anchored on what matters to
+you, not just a generic to-do list."
+
+Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
+
+  Working style
+  - Typical weekday: which hours are your IMPORTANT focus hours?
+  - How many total work hours per day do you realistically want?
+  - Preferred work-session length? (45 / 60 / 90 / 120 min)
+  - Break preference: how long between sessions, what restful activities
+    do you actually like (the rotation the plan uses)?
+  - When must the LAST work block of the day end?
+  - Energy peak: morning / afternoon / night / mixed?
+  - Anything that wrecks your day if it slips?
+  - Any other /plan-my-day preferences (e.g. "always surface carry-forward
+    tasks first", "keep Sundays block-free")?
+  Once you have the above, draft a short planning_guidelines paragraph:
+  "Here's how I'll plan your day: [block sizing, anchor philosophy, what
+  it optimises for]." Read it back and confirm with the user.
+
+  Current focus — what are you actively trying to build or achieve?
+  Work focus (projects, career, money) and life focus (health/body, creative
+  pursuits, relationships, inner work, finances). For each item:
+  - classify: lib = "work" (project/career) | "goals" (life goal)
+  - track: professional | personal
+  - horizon: short (3–6 months) | long (6+ months)
+  - priority (1 = most important), deadline or "ongoing"
+  - success_looks_like — short phrase
+  - context — a working-notes paragraph (what it is, where it stands, what
+    kind of effort it needs)
+  Register each as a short library card too:
+    work-library card — id, name, shortcut (2-3 letters, e.g. "pb" → pbrain),
+      category: "work", one-line summary, stable metadata (repo/stack/links)
+    goals-library card — id, name, shortcut, category (health|creative|
+      relationships|financial|personal), one-line summary
+
+  Typical day breakup (×2 — workday + rest day). This is the heart of the
+  schedule. Ask: "Walk me through an average WORKDAY from wake to bed — every
+  activity with its time: wake/prep, workout, each meal, your work blocks, the
+  walk, wind-down, bed. I'll be GENEROUS with each block so real days leave
+  slack to do EXTRA, never a deficit." Capture each segment as
+  {slot, start, end, duration_min, category, flex}:
+    - category ∈ wake|fitness|meal|work|movement|rest|bed
+    - flex ∈ fixed (meals/wake/bed) | flex (work, walk, wind-down) | skippable
+      (fitness) — this encodes what the planner may shrink vs protect.
+  PAD each duration generously — the template is a set of CEILINGS the planner
+  may compress, never expand. Read the padded timeline back and confirm.
+  Then repeat for a typical REST / weekend day (same segment shape, their
+  weekend rhythm). Ask which weekdays are rest days → typical_day.rest_days
+  (e.g. ["sat","sun"]). Set typical_day.padded: true.
+  DERIVE daily_anchors from the workday segments (no separate question):
+  wake_time←wake.start, workout_time←fitness.start, lunch_time/dinner_time←
+  the meal slots, walk_time←movement.start, bed_target←bed.start.
+
+  Variation preferences (ask once, plainly):
+    - Non-gym fitness days: use activity_buffers (see profile-schema.txt) for
+      known activities (football, Apple Fitness) — do NOT ask for buffer/commute
+      time; for unknown activities ask duration including travel/buffer.
+    - Late wake-ups: "If you wake up late I'll shift the whole timeline later,
+      but always keep ≥30 min between waking and your first work block." →
+      variation_rules.late_wake + min_wake_to_work_gap_min.
+    - State the invariants: "Across any variation I keep your meal COUNT the
+      same and protect meals + fitness; WORK is what I shrink first. The one
+      exception: I may *suggest* skipping fitness if meals run late AND you've
+      already been very active the last few days." → keep_meal_count,
+      work_is_flex, skip_fitness_when, priority_order
+      (events_and_nonnegotiables > meals_and_fitness > work).
+
+  Anti-patterns — behaviours that sabotage you (doomscrolling, late nights…).
+
+  Personal anchors — relationships to stay close to, creative pursuits,
+    health non-negotiables.
+
+Step 3 — Write THREE files into $STORE (mkdir -p first), all committed v1,
+each with frontmatter (type, date: $TODAY, tags: [], version: 1,
+committed: true), a heading, and a fenced json block.
+See templates/plan-my-day/profile-schema.txt for the exact JSON shape to use.
+
+Step 4 — Confirm: "Plans profile saved → $STORE (plans profile + work library
++ goals library). Edit any time with /plan-my-day profile new. Now re-run
+/plan-my-day and I'll plan today against these goals."

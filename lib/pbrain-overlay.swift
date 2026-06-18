@@ -15,6 +15,11 @@
 // things ends the overlay:
 //   • Hold CONTROL   → SKIPPED (a deliberate hold, so it can't be hit by accident)
 //   • Countdown ends → DONE    (you waited out the full break)
+// A "Snooze" button appears BOTH on the pre-roll WARNING panel (alongside "Skip")
+// AND on the full kiosk overlay: it does NOT resolve the occurrence terminally — it
+// pushes this same instance's due_at out by N minutes and clears fired_at, leaving
+// it pending, so the poller re-fires it later. (Only shown when --id + --db are
+// passed, since with no row to reschedule there is nothing to snooze.)
 // The countdown is WALL-CLOCK, so locking the screen OR sleeping the Mac (the Touch
 // ID / power button sleeps rather than locks) does not pause or cancel the break —
 // stepping away genuinely spends the time. App Nap is disabled so the timer keeps
@@ -64,6 +69,7 @@
 //                  [--subtext "..."]        # optional smaller line under the message
 //                  [--mark-done]            # enable Option-hold + "Mark Done" button (no countdown)
 //                  [--warning-seconds 10]   # show a small non-kiosk warning panel first (default 10, 0 = skip)
+//                  [--snooze-minutes 5]     # warning-panel "Snooze" button push-out (default 5, 0 = hide; needs --id/--db)
 //                  [--id <instance_id>] [--db <path>]
 //
 // Build: `swiftc -suppress-warnings pbrain-overlay.swift`
@@ -89,6 +95,7 @@ let totalSeconds = max(0, Int(argValue("--seconds") ?? "0") ?? 0)   // 0 = no co
 let holdSeconds  = max(0.5, Double(argValue("--hold") ?? "3") ?? 3.0)
 let markDone     = CommandLine.arguments.contains("--mark-done")
 let warningSeconds = max(0, Int(argValue("--warning-seconds") ?? "10") ?? 10)
+let snoozeMinutes  = max(0, Int(argValue("--snooze-minutes") ?? "5") ?? 5)   // 0 = no Snooze button
 
 let reminderID: Int32?   = argValue("--id").flatMap { Int32($0) }
 let dbPath: String?      = { let p = argValue("--db"); return (p?.isEmpty == false) ? p : nil }()
@@ -122,12 +129,13 @@ func screenIsCurrentlyLocked() -> Bool {
 // first-writer-wins: whichever of skip / countdown / sleep-lock fires first
 // resolves the row, and the rest are inert.
 // ---------------------------------------------------------------------------
-func isoNow() -> String {
+func isoTime(_ date: Date = Date()) -> String {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd HH:mm"
-    return f.string(from: Date())
+    return f.string(from: date)
 }
+func isoNow() -> String { isoTime() }
 
 func setReminderStatus(_ status: String) {
     guard canWrite, let db = dbPath, let rid = reminderID else { return }
@@ -146,6 +154,34 @@ func setReminderStatus(_ status: String) {
             sqlite3_step(stmt)
         }
     }
+}
+
+// SNOOZE — push THIS occurrence's due_at out by `minutes` and clear fired_at,
+// leaving status='pending' so the poller re-fires the same instance later. Unlike
+// setReminderStatus this is NON-terminal: nothing is resolved, the row just moves
+// forward in time. Guarded on status='pending' (so it can't revive a row another
+// gesture already resolved) and reports whether a row actually moved — a false
+// return (no --id/--db, DB error, or a UNIQUE(schedule_id,due_at) clash with an
+// already-materialised next occurrence) lets the caller fall back to a plain skip.
+func snoozeReminder(minutes: Int) -> Bool {
+    guard canWrite, minutes > 0, let db = dbPath, let rid = reminderID else { return false }
+    var conn: OpaquePointer?
+    guard sqlite3_open(db, &conn) == SQLITE_OK else { return false }
+    defer { sqlite3_close(conn) }
+    let newDue = isoTime(Date().addingTimeInterval(Double(minutes) * 60))
+    let sql = "UPDATE reminders SET due_at=?, fired_at=NULL, resolved_at=NULL WHERE id=? AND status='pending'"
+    var stmt: OpaquePointer?
+    guard sqlite3_prepare_v2(conn, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+    defer { sqlite3_finalize(stmt) }
+    var ok = false
+    newDue.withCString { d in
+        sqlite3_bind_text(stmt, 1, d, -1, nil)
+        sqlite3_bind_int(stmt, 2, rid)
+        if sqlite3_step(stmt) == SQLITE_DONE {
+            ok = sqlite3_changes(conn) > 0
+        }
+    }
+    return ok
 }
 
 // A borderless window won't accept key input unless it says it can.
@@ -213,17 +249,17 @@ final class HoldBar: NSView {
 }
 
 // ---------------------------------------------------------------------------
-// DoneButtonView — liquid-glass "Mark Done" button shown in --mark-done mode
-// as an alternative to the Option-hold gesture. Uses NSVisualEffectView
-// (withinWindow blending) for the frosted backdrop, a thin white border, and
-// a pointer cursor on hover.
+// GlassButtonView — liquid-glass titled button. Used for the "Mark Done" action
+// in --mark-done mode (an alternative to the Option-hold gesture) and for the
+// "Snooze" action on the overlay. Uses NSVisualEffectView (withinWindow blending)
+// for the frosted backdrop, a thin white border, and a pointer cursor on hover.
 // ---------------------------------------------------------------------------
-final class DoneButtonView: NSView {
+final class GlassButtonView: NSView {
     var action: (() -> Void)?
     private let tintLayer = CALayer()
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    init(title: String) {
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 14
         layer?.masksToBounds = true
@@ -244,7 +280,7 @@ final class DoneButtonView: NSView {
         tintLayer.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
         layer?.addSublayer(tintLayer)
 
-        let lbl = NSTextField(labelWithString: "Mark Done")
+        let lbl = NSTextField(labelWithString: title)
         lbl.font = NSFont.systemFont(ofSize: 18, weight: .semibold)
         lbl.textColor = .white
         lbl.alignment = .center
@@ -316,6 +352,7 @@ final class Controller: NSObject {
 
     // Warning phase (shown before the full kiosk overlay)
     private let warningSeconds: Int
+    private let snoozeMinutes: Int          // warning-panel "Snooze" push-out (0 = no button)
     private var warningWindow: NSWindow?
     private var warningCountdownLabel: NSTextField?
     private var warningTimer: Timer?
@@ -330,11 +367,12 @@ final class Controller: NSObject {
     private let skipColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.45, alpha: 0.95)
     private let doneColor = NSColor(calibratedRed: 0.3,  green: 0.85, blue: 0.45, alpha: 0.95)
 
-    init(seconds: Int, hold: Double, markDone: Bool, warning: Int) {
+    init(seconds: Int, hold: Double, markDone: Bool, warning: Int, snooze: Int) {
         self.totalSeconds = seconds
         self.holdSeconds = hold
         self.markDone = markDone
         self.warningSeconds = warning
+        self.snoozeMinutes = snooze
     }
 
     private func mmss(_ s: Int) -> String { String(format: "%d:%02d", s / 60, s % 60) }
@@ -381,15 +419,23 @@ final class Controller: NSObject {
 
         let hintSkip = label("Hold ⌃ Control to skip", size: 17, weight: .regular, alpha: 0.55)
 
-        let bottomViews: [NSView]
+        // Snooze is offered on the overlay (not just the warning panel) whenever
+        // there's an occurrence row to reschedule. A single click — snooze isn't an
+        // escape, it just defers the same break by a few minutes.
+        let showSnooze = canWrite && snoozeMinutes > 0
+        var bottomViews: [NSView] = [status, holdBar]
         if markDone {
-            let doneBtn = DoneButtonView()
+            let doneBtn = GlassButtonView(title: "Mark Done")
             doneBtn.action = { [weak self] in self?.resolve("done") }
-            let hintDone = label("Hold ⌥ Option to mark done", size: 17, weight: .regular, alpha: 0.55)
-            bottomViews = [status, holdBar, doneBtn, hintDone, hintSkip]
-        } else {
-            bottomViews = [status, holdBar, hintSkip]
+            bottomViews.append(doneBtn)
+            bottomViews.append(label("Hold ⌥ Option to mark done", size: 17, weight: .regular, alpha: 0.55))
         }
+        if showSnooze {
+            let snoozeBtn = GlassButtonView(title: "Snooze \(snoozeMinutes)m")
+            snoozeBtn.action = { [weak self] in self?.snoozeFromOverlay() }
+            bottomViews.append(snoozeBtn)
+        }
+        bottomViews.append(hintSkip)
         let bottom = NSStackView(views: bottomViews)
         bottom.orientation = .vertical
         bottom.alignment = .centerX
@@ -582,6 +628,19 @@ final class Controller: NSObject {
         dismiss()
     }
 
+    // Snooze from the live overlay: reschedule this occurrence forward and tear
+    // down WITHOUT resolving it (it stays pending for the poller to re-fire). Same
+    // reschedule the warning-panel button uses. If it didn't take (no DB row, or a
+    // UNIQUE clash with an already-materialised next occurrence), fall back to a
+    // skip so the screen still clears instead of hanging.
+    private func snoozeFromOverlay() {
+        if snoozeReminder(minutes: snoozeMinutes) {
+            dismiss()
+        } else {
+            resolve("skipped")
+        }
+    }
+
     private func dismiss() {
         // Idempotent: sleep, lock, countdown-end, and the skip gesture can all
         // race to dismiss. Running the teardown twice would call
@@ -650,7 +709,9 @@ final class Controller: NSObject {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             enterFullOverlay(); return
         }
-        let ww: CGFloat = 460, wh: CGFloat = 64
+        // Snooze sits next to Skip; only offered when there's a row to reschedule.
+        let showSnooze = canWrite && snoozeMinutes > 0
+        let ww: CGFloat = showSnooze ? 560 : 460, wh: CGFloat = 64
         let ox = screen.visibleFrame.maxX - ww - 24
         let oy = screen.visibleFrame.maxY - wh - 24
         let wnd = NSPanel(
@@ -712,6 +773,20 @@ final class Controller: NSObject {
             skipBtn.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -14),
             skipBtn.centerYAnchor.constraint(equalTo: v.centerYAnchor),
         ])
+
+        // Snooze button — sits just left of Skip, pushes this occurrence out N min.
+        if showSnooze {
+            let snoozeBtn = NSButton(title: "Snooze \(snoozeMinutes)m", target: self, action: #selector(snoozeWarning))
+            snoozeBtn.bezelStyle = .rounded
+            snoozeBtn.font = NSFont.systemFont(ofSize: 13)
+            snoozeBtn.translatesAutoresizingMaskIntoConstraints = false
+            v.addSubview(snoozeBtn)
+            NSLayoutConstraint.activate([
+                snoozeBtn.trailingAnchor.constraint(equalTo: skipBtn.leadingAnchor, constant: -8),
+                snoozeBtn.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+                snoozeBtn.leadingAnchor.constraint(greaterThanOrEqualTo: cdLbl.trailingAnchor, constant: 12),
+            ])
+        }
         wnd.contentView = v
 
         wnd.orderFrontRegardless()
@@ -746,6 +821,10 @@ final class Controller: NSObject {
     }
 
     @objc private func skipWarning() { resolve("skipped") }
+
+    // Warning-panel Snooze button (target/action needs @objc) — same behaviour as
+    // the overlay's Snooze: reschedule forward and dismiss without resolving.
+    @objc private func snoozeWarning() { snoozeFromOverlay() }
 
     // Transition from warning phase to full kiosk overlay.
     func enterFullOverlay() {
@@ -797,7 +876,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // no Dock icon; still shows windows + takes key events
-let controller = Controller(seconds: totalSeconds, hold: holdSeconds, markDone: markDone, warning: warningSeconds)
+let controller = Controller(seconds: totalSeconds, hold: holdSeconds, markDone: markDone, warning: warningSeconds, snooze: snoozeMinutes)
 let delegate = AppDelegate(controller)
 app.delegate = delegate
 app.run()

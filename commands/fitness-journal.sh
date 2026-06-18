@@ -803,6 +803,7 @@ Step 5A — IF INTENT = GYM:
   week: {N}
   block: {N}
   day: {letter}
+  activity: gym
   focus: {muscle groups matching the gym profile day}
   bodyweight: {kg or leave blank if skipped}
   sleep_bed: {HH:MM from Step 1}
@@ -969,6 +970,19 @@ Step 6B — "Train" scored habit. If "Train" is a tracked [scored] habit (it
   Use status completed | partial | skipped. If the session is only PLANNED (no
   actuals yet), do NOT mark — /end-of-day marks Train when the day closes. The
   mark is idempotent (one cell/day), so an end-of-day re-mark just updates it.
+
+Step 6C — Reconcile fitness-habit reminders to today's chosen activity (silent,
+  best-effort, idempotent). This is the moment the day's activity is actually
+  decided, so it must run HERE — not only in /plan-my-day, which can run before
+  the activity is chosen or before a later swap. UNLESS today is a REST day,
+  after writing the file run, with the activity name you put in the file's
+  \`focus:\` field:
+    bash "$_SCRIPT_DIR/habits.sh" fitness-reconcile --activity "<focus value>" --date $TODAY
+  It sets the CHOSEN activity's habit reminder (even off its usual schedule) and
+  cancels + auto-skips any scheduled-but-not-chosen fitness habit — e.g. logging
+  Apple Fitness on a Gym day drops the stale Gym 12:30 reminder and marks Gym
+  skipped (not missed). No matching habit / unresolvable activity → no-op. Skip
+  this step entirely on a rest day.
 PROMPT
 
 # Habit extraction (silent if no habits profile) + self-improvement capture.

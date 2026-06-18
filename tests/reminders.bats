@@ -285,3 +285,44 @@ EOF
   pbrain_notify_build
   [ -x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" ]
 }
+
+# ---------------------------------------------------------------------------
+# Snooze arg threading (warning-panel "Snooze" button). pbrain_overlay_show
+# passes --snooze-minutes through to the overlay binary; assert the launch argv
+# via a fake `open`. The fake overlay bin survives pbrain_swift_build (the no-op
+# swiftc never produces a temp to rename over it), so the launch path is taken.
+# ---------------------------------------------------------------------------
+
+# Make the overlay look "built" and capture its launch argv into $ARGLOG.
+_stub_overlay_launch() {
+  mkdir -p "$PBRAIN_OVERLAY_APP/Contents/MacOS"
+  : > "$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
+  chmod +x "$PBRAIN_OVERLAY_APP/Contents/MacOS/pbrain-overlay"
+  ARGLOG="$TMP/open.args"
+  cat > "$TMP/bin/open" <<EOF
+#!/bin/sh
+echo "\$@" > "$ARGLOG"
+exit 0
+EOF
+  chmod +x "$TMP/bin/open"
+}
+
+@test "pbrain_overlay_show threads an explicit --snooze-minutes plus the id/db" {
+  _stub_overlay_launch
+  pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE" 0 10 5
+  grep -q -- "--snooze-minutes 5" "$ARGLOG"
+  grep -q -- "--warning-seconds 10" "$ARGLOG"
+  grep -q -- "--id 7" "$ARGLOG"
+}
+
+@test "PBRAIN_OVERLAY_SNOOZE_MINUTES supplies the snooze fallback when the arg is empty" {
+  _stub_overlay_launch
+  PBRAIN_OVERLAY_SNOOZE_MINUTES=8 pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  grep -q -- "--snooze-minutes 8" "$ARGLOG"
+}
+
+@test "no --snooze-minutes flag is emitted when neither arg nor env is set (overlay defaults internally)" {
+  _stub_overlay_launch
+  pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
+  ! grep -q -- "--snooze-minutes" "$ARGLOG"
+}

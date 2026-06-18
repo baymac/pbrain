@@ -1,0 +1,6 @@
+The user named an item to restore (id or shortcut). Find it in the work-library
+or goals-library (a card with a non-null timeline), quote it back to confirm:
+1. Clear its timeline: set "timeline": null in the library file.
+2. Ask the user for updated context + any field changes (priority, deadline).
+3. APPEND a new entry to current_focus in the profile with status: "active".
+4. Confirm: "Restored '[name]' to current_focus."

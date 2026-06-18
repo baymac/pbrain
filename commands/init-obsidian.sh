@@ -33,138 +33,10 @@ CONFIG_FILE="$CONFIG_DIR/vault"
 ICLOUD_OBSIDIAN_BASE="$HOME/Library/Mobile Documents/iCloud~md~obsidian"
 ICLOUD_DEFAULT_VAULT="$ICLOUD_OBSIDIAN_BASE/Documents/vault"
 
-# Scaffold a vault at $1: mkdir, git init, .gitignore, vault-level CLAUDE.md,
-# initial commit. Idempotent — re-running on an existing vault leaves it alone.
-_pbrain_scaffold_vault() {
-  local vault="$1"
-  echo "Vault dir: $vault"
-  mkdir -p "$vault"
-  (
-    cd "$vault"
-
-    if [[ ! -d .git ]]; then
-      git init -q
-      echo "  ✓ git initialized"
-    else
-      echo "  · git already initialized"
-    fi
-
-    if [[ ! -f .gitignore ]]; then
-      cat > .gitignore <<'GI'
-.gbrain/
-.DS_Store
-private.nosync/
-GI
-      echo "  ✓ .gitignore written"
-    else
-      echo "  · .gitignore exists (leaving as-is)"
-    fi
-
-    if [[ ! -f CLAUDE.md ]]; then
-      cat > CLAUDE.md <<'CMD'
-# vault — Your Brain
-
-This is the vault. Write notes here. The pbrain tooling repo lives elsewhere — scripts and slash commands belong there, not here.
-
-Use Obsidian to browse and edit. Everything is plain markdown — readable in any editor.
-
----
-
-## Where notes live
-
-**User-curated** (you own these — agents don't write here without asking):
-
-| Content | Directory |
-|---|---|
-| Daily journal | `life/daily-tracking/YYYY-MM-DD.md` |
-| Topical notes | `life/`, `fitness/`, `startup/`, `side-quests/`, `software-dev/`, ... |
-| Concepts, ideas, sources | Co-located inside the relevant topical folder |
-
-**Agent-generated** (Claude writes here):
-
-| Content | Directory |
-|---|---|
-| `/brainstorm` outputs | `agent-work/brainstorms/tbd/` (move to `backlog/` to park, `done/` when actioned) |
-| Chat takeaways | `agent-work/chat-history/` |
-| Drafts | `agent-work/drafts/` |
-| Misc agent notes | `agent-work/notes/` |
-| Research summaries | `agent-work/research/` |
-| People pages | `agent-work/people/` |
-
----
-
-## Frontmatter
-
-Optional but useful — gbrain uses it for typed retrieval.
-
-```yaml
----
-type: idea           # idea | concept | source | person | daily | chat
-title: "Human-readable title"
-tags: []
-created: YYYY-MM-DD
----
-```
-
----
-
-## Wikilinks
-
-Use `[[slug]]` (filename without `.md`) to reference other notes. gbrain builds a graph from these.
-
----
-
-## Slash commands
-
-Defined in the pbrain repo's `commands/` (Claude plugin). Work from a CC session opened inside the vault.
-
-| Command | What it does |
-|---|---|
-| `/journal` | Create or open today's daily entry in `life/daily-tracking/` |
-| `/brainstorm <topic>` | Create a brainstorming file in `agent-work/brainstorms/tbd/`. Move to `backlog/` (parked) or `done/` (actioned) manually. |
-
----
-
-## Morning sequence (journal → gratitude → everything else)
-
-Before any other slash command or personal-reflection task, check daily files in order:
-
-1. If `life/daily-tracking/YYYY-MM-DD.md` is missing, suggest `/journal` first. The raw dump clears the head and surfaces what's on your mind.
-2. If the journal exists but `life/gratitude-journal/YYYY-MM-DD.md` is missing, suggest `/gratitude-journal` next. With the head cleared, gratitude anchors baseline to *enough*.
-3. Otherwise proceed.
-
-Suggest once, never block. `/init-obsidian`, `/journal`, and `/gratitude-journal` are exempt. If a standing preference (in the injected USER PREFERENCES block — global or per-command) says to skip this nudge, don't make it. Any built-in suggestion yields to a standing preference that turns it off.
-
----
-
-## gbrain
-
-gbrain indexes every `.md` here. Brain lives globally at `~/.gbrain/brain.pglite/`. Sync runs every 30 min via launchd.
-
----
-
-## Private notes
-
-Anything in `private.nosync/` stays off iCloud and off git.
-CMD
-      echo "  ✓ CLAUDE.md written"
-    else
-      echo "  · CLAUDE.md exists (leaving as-is)"
-    fi
-
-    if ! git rev-parse HEAD >/dev/null 2>&1; then
-      git -c user.name="$(git config --global user.name || echo 'pbrain')" \
-          -c user.email="$(git config --global user.email || echo 'pbrain@local')" \
-          add .gitignore CLAUDE.md
-      git -c user.name="$(git config --global user.name || echo 'pbrain')" \
-          -c user.email="$(git config --global user.email || echo 'pbrain@local')" \
-          commit -q -m "init: pbrain vault structure"
-      echo "  ✓ initial commit"
-    else
-      echo "  · vault already has commits"
-    fi
-  )
-}
+# Shared vault-scaffold helpers (pbrain_scaffold_vault, pbrain_write_vault_config).
+# Sourced standalone — scaffold.sh has no lib/vault.sh dependency, so it's safe
+# here in this deliberately pre-vault command.
+source "$_SCRIPT_DIR/../lib/scaffold.sh"
 
 _expand_tilde() {
   local p="$1"
@@ -221,10 +93,8 @@ case "$cmd" in
   bootstrap)
     [[ $# -ge 2 ]] || { echo "bootstrap requires <path>" >&2; exit 2; }
     target="$(_expand_tilde "$2")"
-    _pbrain_scaffold_vault "$target"
-    mkdir -p "$CONFIG_DIR"
-    printf '%s\n' "$target" > "$CONFIG_FILE"
-    echo "  ✓ wrote $CONFIG_FILE → $target"
+    pbrain_scaffold_vault "$target"
+    pbrain_write_vault_config "$target"
     ;;
 
   migrate)
@@ -303,9 +173,7 @@ PRV
   write-config)
     [[ $# -ge 2 ]] || { echo "write-config requires <path>" >&2; exit 2; }
     path="$(_expand_tilde "$2")"
-    mkdir -p "$CONFIG_DIR"
-    printf '%s\n' "$path" > "$CONFIG_FILE"
-    echo "  ✓ wrote $CONFIG_FILE → $path"
+    pbrain_write_vault_config "$path"
     ;;
 
   setup-git)
