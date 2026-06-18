@@ -1297,7 +1297,7 @@ def explode_context(cfg, client, ref, project_ref=None):
         issue = client.get_work_item(pid, iid)
     except PlaneError as e:
         return {"status": "error", "error": str(e), "candidates": cards}
-    scale = estimate_scale(cfg, pid) if ensure_estimate_scale(cfg, client, pid) else None
+    scale = ensure_estimate_scale(cfg, client, pid)   # the live/imported scale, or None
 
     # get_work_item returns `state` as a bare id (unlike list_work_items, which
     # expands it). Resolve ids → names via the project's state list so neither the
@@ -1313,8 +1313,14 @@ def explode_context(cfg, client, ref, project_ref=None):
             return st.get("name")
         return names_by_state.get(st, st)
 
+    # Best-effort, like the get_work_item/list_states reads above — a failed
+    # sub-issue fetch degrades to "no known children", never a crashed context.
+    try:
+        raw_subs = client.list_sub_issues(pid, iid) or []
+    except PlaneError:
+        raw_subs = []
     subs = []
-    for s in (client.list_sub_issues(pid, iid) or []):
+    for s in raw_subs:
         subs.append({"id": s.get("id"), "title": s.get("name", ""),
                      "state": _state_name(s)})
 
