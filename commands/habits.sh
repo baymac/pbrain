@@ -1700,9 +1700,9 @@ PYEOF
   # would always read empty — pushed would silently stay 0.
   PUSHED=0
   PUSH_STATUS="$(pbrain_habits_status "$RS_DATE" 2>/dev/null || true)"
-  PUSH="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" "$PUSH_STATUS" <<'PYEOF' 2>/dev/null || true
-import json, sys, sqlite3
-db, date, status_json = sys.argv[1:4]
+  PUSH="$(python3 - "$PBRAIN_DB_FILE" "$RS_DATE" "$PUSH_STATUS" "$PROFILE_FILE" "$TODAY" "$(date '+%H:%M')" <<'PYEOF' 2>/dev/null || true
+import json, re, sys, sqlite3
+db, date, status_json, profile, today, now_hm = sys.argv[1:7]
 try:
     d = json.loads(status_json) if status_json.strip() else {}
 except Exception:
@@ -1711,11 +1711,38 @@ done_ids = set()
 for h in d.get("habits") or []:
     if (h.get("today_count") or 0) > 0 or (h.get("today_amount") or 0) > 0:
         done_ids.add(h.get("id"))
+# Per-habit reminder clock time, so a one-shot whose nudge has NOT fired yet is
+# left pending instead of being auto-completed the moment the habit is marked.
+# Marking is often anticipatory (planned/partial); completing a future reminder
+# would silently delete a nudge the user still needs. Only guards the CURRENT
+# day — past-day pendings are always safe to complete.
+rtimes = {}
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    pdata = json.loads(m.group(1)) if m else {}
+    for h in (pdata.get("habits") or []):
+        rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+        t = str(rem.get("time", "")).strip()
+        if t:
+            rtimes[str(h.get("id", "")).strip()] = t
+except Exception:
+    pass
+def _mins(s):
+    try:
+        p = str(s).split(":"); return int(p[0]) * 60 + int(p[1])
+    except Exception:
+        return None
+now_m = _mins(now_hm) if date == today else None
 try:
     con = sqlite3.connect(db, timeout=5)
     for hid, rid in con.execute("SELECT habit_id, reminder_id FROM habit_reminders WHERE occurred_on=? AND status='pending'", (date,)).fetchall():
-        if hid in done_ids:
-            print("%s\t%s" % (hid, rid))
+        if hid not in done_ids:
+            continue
+        if now_m is not None:
+            rt = _mins(rtimes.get(hid))
+            if rt is not None and rt > now_m:
+                continue   # nudge has not fired yet — keep it pending
+        print("%s\t%s" % (hid, rid))
     con.close()
 except Exception:
     pass

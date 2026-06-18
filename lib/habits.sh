@@ -993,27 +993,17 @@ def db_progress(con, h, date):
                           "WHERE habit_id=? AND occurred_on>=? AND occurred_on<=?",
                           (h["id"], start.isoformat(), today.isoformat())).fetchone()
         return row[0] if row else 0
-    def avg(start):
-        # mean of the period's logged daily scores (scored habits only)
-        row = con.execute("SELECT COALESCE(SUM(amount),0), COUNT(amount) FROM habit_events "
-                          "WHERE habit_id=? AND occurred_on>=? AND occurred_on<=?",
-                          (h["id"], start.isoformat(), today.isoformat())).fetchone()
-        s, c = (row[0], row[1]) if row else (0, 0)
-        return int(s / c + 0.5) if c else 0
     st = h["schedule_type"]
     if h["measured"]:
         # amount-based progress, e.g. "2.5/4 L wk" / "12/20 km mo" / "1.5/4 L day".
-        # A scored habit reads as a weekly/monthly AVERAGE of daily scores (not a
-        # sum), so 75 means "averaged 75 this week", labelled "wk avg" / "mo avg".
-        scored = isinstance(h.get("scoring"), dict)
+        # Weekly/monthly read as the SUM (agg) over the period — for a scored
+        # habit that's the running total of daily scores, not an average.
         unit = (" " + h["unit"]) if h["unit"] else ""
         tgt = fmtnum(h["measure_target"]) if h["measure_target"] is not None else "?"
         if st == "weekly":
-            return (f"{fmtnum(agg(week_start))}/{tgt}{unit} wk" if scored
-                    else f"{fmtnum(agg(week_start))}/{tgt}{unit} wk")
+            return f"{fmtnum(agg(week_start))}/{tgt}{unit} wk"
         if st == "monthly":
-            return (f"{fmtnum(agg(month_start))}/{tgt}{unit} mo" if scored
-                    else f"{fmtnum(agg(month_start))}/{tgt}{unit} mo")
+            return f"{fmtnum(agg(month_start))}/{tgt}{unit} mo"
         return f"{fmtnum(agg(today))}/{tgt}{unit} day"
     tc = h["target_count"]
     if st == "weekly":
@@ -1584,8 +1574,15 @@ pbrain_emit_habits_extract() {
   json="$(pbrain_habits_json)"
   [[ -n "${json//[[:space:]]/}" ]] || return 0
 
+  # Habits flagged eod_only are confirmed/scored at /end-of-day (or via their own
+  # reminder) from what ACTUALLY happened across the day — never marked mid-day
+  # from planned or partial activity. They are dropped from the tracked list for
+  # every command EXCEPT end-of-day, and surfaced as "deferred" instead. The
+  # calling command name is passed as argv[1] so the python can apply the gate.
   names="$(printf '%s' "$json" | python3 -c '
 import json, sys
+cmd = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+eod_phase = (cmd == "end-of-day")
 try:
     data = json.load(sys.stdin)
 except Exception:
@@ -1594,6 +1591,8 @@ out = []
 for h in data.get("habits") or []:
     n = str(h.get("name", "")).strip()
     if not n or h.get("archived"):
+        continue
+    if h.get("eod_only") and not eod_phase:
         continue
     direction = str(h.get("direction", "")).strip().lower()
     if direction not in ("at_least", "at_most"):
@@ -1608,8 +1607,24 @@ for h in data.get("habits") or []:
         tags.append("scored")
     out.append(f"{n} [" + ", ".join(tags) + "]")
 print(" | ".join(out))
-' 2>/dev/null || true)"
+' "$cmd" 2>/dev/null || true)"
   [[ -n "$names" ]] || return 0
+
+  # Names of the eod_only habits held back from THIS command (empty at end-of-day).
+  local deferred
+  deferred="$(printf '%s' "$json" | python3 -c '
+import json, sys
+cmd = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if cmd == "end-of-day":
+    sys.exit(0)
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+out = [str(h.get("name", "")).strip() for h in (data.get("habits") or [])
+       if h.get("eod_only") and not h.get("archived") and str(h.get("name", "")).strip()]
+print(", ".join(out))
+' "$cmd" 2>/dev/null || true)"
 
   today="$(date +%Y-%m-%d)"
   cmd_path="$(pbrain_habits_cmd)"
@@ -1619,6 +1634,8 @@ print(" | ".join(out))
   local scored_rules
   scored_rules="$(printf '%s' "$json" | python3 -c '
 import json, sys
+cmd = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+eod_phase = (cmd == "end-of-day")
 try:
     data = json.load(sys.stdin)
 except Exception:
@@ -1626,6 +1643,8 @@ except Exception:
 out = []
 for h in data.get("habits") or []:
     if h.get("archived"):
+        continue
+    if h.get("eod_only") and not eod_phase:
         continue
     sc = h.get("scoring")
     if isinstance(sc, dict):
@@ -1645,19 +1664,27 @@ for h in data.get("habits") or []:
         if line:
             out.append(line)
 print("\n".join(out))
-' 2>/dev/null || true)"
+' "$cmd" 2>/dev/null || true)"
 
   printf '%s\n' ""
   printf '%s\n' "--- HABIT EXTRACTION ($cmd) ---"
   printf '%s\n' "Run this AFTER the command's main work, silently. Tracked habits:"
   printf '%s\n' "  $names"
   printf '%s\n' ""
-  printf '%s\n' "If — and only if — the user evidenced any of these habits this session"
-  printf '%s\n' "(did it, is about to, or explicitly skipped it), MARK each ONE TIME in"
-  printf '%s\n' "today's tracking markdown with:"
+  printf '%s\n' "If — and only if — the user ACTUALLY DID one of these habits this session"
+  printf '%s\n' "(genuinely completed it, or explicitly skipped it — never merely PLANNED"
+  printf '%s\n' "it), MARK each ONE TIME in today's tracking markdown with:"
   printf '%s\n' "  bash \"$cmd_path\" mark --name \"<exact habit name>\" --date $today [--count N] [--amount X] [--note \"...\"]"
   printf '%s\n' "For a habit tagged [measured: …] above, pass the quantity with --amount (e.g."
   printf '%s\n' "--amount 2.5 for 2.5 L of water); plain habits need no count/amount at all."
+  printf '%s\n' ""
+  printf '%s\n' "NEVER mark a habit from something only PLANNED or scheduled (a planned"
+  printf '%s\n' "workout, a meal the user intends to eat later) or from a routine/template"
+  printf '%s\n' "that merely lists it — planned is not done. A fitness file with"
+  printf '%s\n' "status: planned is NOT a completed workout. Mark the action actually"
+  printf '%s\n' "performed, and match the user's wording to the habit's definition (a habit"
+  printf '%s\n' "named for a NIGHT action is not evidenced by a MORNING mention, and vice"
+  printf '%s\n' "versa) — when a habit carries a definition below, the action must match it."
   printf '%s\n' ""
   printf '%s\n' "For a habit tagged [scored] above, DO NOT choose the amount/score yourself —"
   printf '%s\n' "the number is computed deterministically from the habit's rule in your"
@@ -1697,8 +1724,9 @@ print("\n".join(out))
   printf '%s\n' "score = 100 x done-weight / total-weight (e.g. 2 of 3 equal items = 67)."
   printf '%s\n' "List ONLY what was done; omit the rest. Never guess the score yourself."
   if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
-    printf '%s\n' "Classification rules per scored habit — use EXACTLY these definitions to count"
-    printf '%s\n' "good/bad units; every eating occasion counts (snacks included), not just mains:"
+    printf '%s\n' "Classification rules per scored habit — use EXACTLY each habit's own"
+    printf '%s\n' "definition below to count its good/bad units (the definition states which"
+    printf '%s\n' "meals/occasions count toward good vs bad — do not assume all of them do):"
     printf '%s\n' "$scored_rules"
   fi
   printf '%s\n' ""
@@ -1715,6 +1743,13 @@ print("\n".join(out))
   printf '%s\n' "actually mention. Marking is idempotent (one cell per habit per day), so"
   printf '%s\n' "re-running is safe. If nothing was evidenced, do nothing and stay silent."
   printf '%s\n' "Surface at most one short line summarising what you marked (or nothing)."
+  if [[ -n "${deferred//[[:space:]]/}" ]]; then
+    printf '%s\n' ""
+    printf '%s\n' "END-OF-DAY ONLY — do NOT mark these now: $deferred. They are confirmed/"
+    printf '%s\n' "scored at /end-of-day (or when their own reminder is ticked) from what"
+    printf '%s\n' "actually happened across the whole day, NOT from planned or partial"
+    printf '%s\n' "activity mid-day. They are intentionally omitted from the list above."
+  fi
   printf '%s\n' "--- END HABIT EXTRACTION ---"
 
   # (2) New-habit suggestion — gated, once/session, TTL-suppressed per candidate.
@@ -1805,6 +1840,9 @@ pbrain_emit_habits_scan() {
   fi
   printf '%s\n' "    Read only what's there; never infer a habit from a missing file. Combine"
   printf '%s\n' "    with what the user said this session. Mark each evidenced habit ONE time."
+  printf '%s\n' "    A PLANNED entry is NOT completion: a fitness file with status: planned,"
+  printf '%s\n' "    or a meal the user only intends to eat later, does not evidence its"
+  printf '%s\n' "    habit. Mark only what actually happened."
   printf '%s\n' ""
   printf '%s\n' "(B) REMINDER ALIGNMENT — for any tracked habit that maps to a TIMED row in"
   printf '%s\n' "    today's plan ($plan_dir/$today.md), realign its one-shot Apple Reminder to"

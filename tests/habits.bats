@@ -80,6 +80,27 @@ type: habits-profile
 EOF
 }
 
+# Profile with an eod_only scored habit alongside a normal one — for the
+# end-of-day gating tests.
+_write_eod_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+
+# Habits profile
+
+```json
+{
+  "habits": [
+    { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily", "direction": "at_least", "target_count": 1, "priority": "high" },
+    { "id": "eat-clean", "name": "Eat clean", "schedule_type": "daily", "direction": "at_least", "priority": "high", "eod_only": true, "scoring": { "type": "slip_ladder", "good_target": 3, "ladder": [1.0, 0.6, 0.3, 0] }, "notes": "TEST-EOD-SCORED-NOTE" }
+  ]
+}
+```
+EOF
+}
+
 _log_event() {  # _log_event <display-name> <date> [count]
   python3 - "$PBRAIN_DB_FILE" "$1" "$2" "${3:-1}" <<'PY'
 import sqlite3, sys, re
@@ -355,6 +376,72 @@ assert "long-run" not in ids, ids
   [[ "$output" == *"HABIT EXTRACTION (journal)"* ]]
   [[ "$output" == *"Brush at night"* ]]
   [[ "$output" == *"mark --name"* ]]
+}
+
+@test "emit_habits_extract holds eod_only habits back from mid-day commands" {
+  _write_eod_profile
+  run pbrain_emit_habits_extract journal
+  [ "$status" -eq 0 ]
+  # Eat clean appears ONLY in the deferral note (not the tracked list / scored
+  # rules), the normal habit is tracked, and the scored note is suppressed.
+  [[ "$output" == *"Brush at night"* && "$output" == *"END-OF-DAY ONLY"* && "$output" == *"Eat clean"* && "$output" != *"TEST-EOD-SCORED-NOTE"* ]]
+}
+
+@test "emit_habits_extract includes eod_only habits at end-of-day with no deferral" {
+  _write_eod_profile
+  run pbrain_emit_habits_extract end-of-day
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TEST-EOD-SCORED-NOTE"* && "$output" != *"END-OF-DAY ONLY — do NOT mark"* ]]
+}
+
+@test "emit_habits_extract forbids marking from planned/anticipated activity" {
+  _write_profile
+  run pbrain_emit_habits_extract fitness-journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"planned is not done"* && "$output" == *"status: planned is NOT a completed workout"* ]]
+}
+
+@test "reminders-sync keeps a not-yet-fired one-shot pending even when the habit is marked" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+
+# Habits profile
+
+```json
+{
+  "habits": [
+    { "id": "future-habit", "name": "Future habit", "schedule_type": "daily", "direction": "at_least", "target_count": 1, "priority": "high", "reminder": { "state": "linked", "time": "23:59" } },
+    { "id": "past-habit", "name": "Past habit", "schedule_type": "daily", "direction": "at_least", "target_count": 1, "priority": "high", "reminder": { "state": "linked", "time": "00:01" } }
+  ]
+}
+```
+EOF
+  local today; today="$(date +%Y-%m-%d)"
+  HABITS mark --name "Future habit" --date "$today" >/dev/null
+  HABITS mark --name "Past habit"   --date "$today" >/dev/null
+  python3 - "$PBRAIN_DB_FILE" "$today" <<'PY'
+import sqlite3, sys
+db, today = sys.argv[1:3]
+c = sqlite3.connect(db)
+for hid, rid in (("future-habit", "RID-F"), ("past-habit", "RID-P")):
+    c.execute("insert into habit_reminders(habit_id,occurred_on,reminder_id,status,created_at) "
+              "values(?,?,?,'pending','t')", (hid, today, rid))
+c.commit()
+PY
+  HABITS reminders-sync --date "$today" >/dev/null
+  # Future one-shot stays pending (nudge not fired yet); past one is completed.
+  run python3 - "$PBRAIN_DB_FILE" "$today" <<'PY'
+import sqlite3, sys
+db, today = sys.argv[1:3]
+c = sqlite3.connect(db)
+f = c.execute("select status from habit_reminders where habit_id='future-habit' and occurred_on=?", (today,)).fetchone()[0]
+p = c.execute("select status from habit_reminders where habit_id='past-habit'   and occurred_on=?", (today,)).fetchone()[0]
+print(f"{f}|{p}")
+PY
+  [ "$status" -eq 0 ]
+  [[ "$output" == "pending|done" ]]
 }
 
 @test "emit_habits_scan is silent without a profile" {
@@ -2341,15 +2428,15 @@ PEOF
   [[ "$output" == *"9/28 L this week"* ]]
 }
 
-@test "tracker Progress column labels a weekly scored habit as 'wk avg'" {
+@test "tracker Progress column sums a weekly scored habit's scores (agg, not avg)" {
   _write_weekly_scored_profile
   HABITS mark --name "Deep work" --date 2026-06-15 --focus '{"work":60,"social":40}' >/dev/null
   HABITS mark --name "Deep work" --date 2026-06-17 --focus '{"work":100}' >/dev/null
   HABITS track --date 2026-06-17 >/dev/null
   run grep "Deep work" "$PBRAIN_HABIT_TRACK_DIR/2026-06-17.md"
   [ "$status" -eq 0 ]
-  # (60 + 100) / 2 = 80
-  [[ "$output" == *"80/75 wk avg"* ]]
+  # weekly = running SUM over the period: 60 + 100 = 160, labelled "wk"
+  [[ "$output" == *"160/75 wk"* ]]
 }
 
 # ═════════════════════════════════════════════════════════════════════════
