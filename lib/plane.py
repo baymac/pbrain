@@ -69,6 +69,57 @@ class PlaneError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Secret redaction shield (PB-16)
+# ---------------------------------------------------------------------------
+# A defensive, code-path-independent guarantee: the Plane access token — and the
+# internal-API session cookie / password used only to read estimate scales — must
+# NEVER appear verbatim in this script's stdout/stderr. Secrets are registered as
+# they become known (config load, client construction, live cookie refresh) and
+# both streams are wrapped so any occurrence is scrubbed before it reaches the
+# terminal. This backstops every present and future leak path (error messages,
+# tracebacks, accidental dumps) rather than auditing each call site by hand.
+_SECRETS = set()
+_REDACTION = "***REDACTED***"
+
+
+def register_secret(value):
+    """Mark a string as a secret to scrub from all output. Short/empty values are
+    ignored so we never redact incidental substrings."""
+    if isinstance(value, str) and len(value) >= 8:
+        _SECRETS.add(value)
+
+
+def redact(text):
+    if not _SECRETS or not isinstance(text, str):
+        return text
+    # Longest-first so a secret that contains another is fully masked.
+    for s in sorted(_SECRETS, key=len, reverse=True):
+        if s in text:
+            text = text.replace(s, _REDACTION)
+    return text
+
+
+class _RedactingStream:
+    """Stream proxy that scrubs registered secrets from every write()."""
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def write(self, text):
+        return self._wrapped.write(redact(text))
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+def install_redaction_shield():
+    """Wrap stdout/stderr once so registered secrets can never be emitted."""
+    if not isinstance(sys.stdout, _RedactingStream):
+        sys.stdout = _RedactingStream(sys.stdout)
+    if not isinstance(sys.stderr, _RedactingStream):
+        sys.stderr = _RedactingStream(sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 def config_path():
@@ -107,6 +158,9 @@ def load_config():
         cfg["default_est_h"] = float(cfg.get("default_est_h") or 2)
     except (TypeError, ValueError):
         cfg["default_est_h"] = 2.0
+    # Shield every secret the config carries (PB-16) so it can't be echoed.
+    for _k in ("api_key", "internal_session_cookie", "internal_password"):
+        register_secret(cfg.get(_k))
     return cfg
 
 
@@ -507,6 +561,9 @@ class PlaneClient:
         self.base = base_url.rstrip("/")
         self.api_key = api_key
         self.workspace = workspace
+        register_secret(api_key)
+        register_secret(session_cookie)
+        register_secret(password)
         self._opener = opener or urllib.request.build_opener()
         # Internal-API (cookie-auth) surface — used ONLY to read estimate points,
         # which the public token API can't enumerate. Auth is a stored session
@@ -712,6 +769,7 @@ class PlaneClient:
         if self._cookie_refresher:
             fresh = self._cookie_refresher()
             if fresh:
+                register_secret(fresh)
                 if fresh != self._session_cookie:
                     self._session_cookie = fresh
                     if self._on_cookie_refreshed:
@@ -2160,6 +2218,7 @@ def build_parser():
 
 
 def main(argv=None):
+    install_redaction_shield()   # secrets registered below can never be echoed
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

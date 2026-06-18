@@ -2,6 +2,12 @@
 
 All notable changes to pbrain are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- **Plane access token is never echoed (PB-16).** `lib/plane.py` now installs a redaction shield over stdout/stderr: every secret it knows — the Personal Access Token plus the internal-API session cookie / password used only to read estimate scales — is registered as it's loaded (config, client construction, live cookie refresh) and scrubbed to `***REDACTED***` before any write reaches the terminal. This backstops all present and future leak paths (error messages, tracebacks, accidental dumps) rather than relying on per-call-site discipline. No behavior change for normal output; covered by `tests/plane.bats`.
+
 ## [0.23.0] — 2026-06-15
 
 ### Added — Plane project management integration + vault zero-config fallback
