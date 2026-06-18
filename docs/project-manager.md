@@ -63,10 +63,40 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 
 A **tie** is `<project_id>:<issue_id>` — the handle that flows through the daily loop (the `## Work tracker` carries it, `/end-of-day` resolves it back).
 
+## Backups (PB-17)
+
+A self-hosted Plane keeps all its data in two Docker volumes — Postgres (issues, projects, comments) and MinIO (file attachments). `backup` snapshots both into a single dated, self-describing tarball and can run on a daily schedule.
+
+```
+/project-manager backup estimate        # how big is a snapshot? (measured, not guessed)
+/project-manager backup now             # take one right now
+/project-manager backup enable          # daily snapshot at 03:30, kept 14 days
+/project-manager backup status          # schedule, destination, latest snapshot
+/project-manager backup restore latest --yes   # DESTRUCTIVE: roll the DB + uploads back
+```
+
+| Subcommand | What it does |
+|---|---|
+| `backup estimate` | Measure the current snapshot size (DB via `pg_dump -Fc` + uploads tar) and the projected retention footprint. |
+| `backup now [--dir <path>]` | Take a snapshot immediately into the configured destination (or a one-off `--dir`). |
+| `backup enable [--time HH:MM] [--dest local\|external\|vps] [--dir <p>] [--keep N] [--vps-host …] [--vps-path …] [--vps-port …] [--ssh-key …]` | Save the settings and install a daily LaunchAgent. |
+| `backup disable` | Stop the schedule (existing snapshots are kept). |
+| `backup config …` | Change settings; refreshes a live schedule in place. |
+| `backup status` / `backup list` | Schedule + destination + Time-Machine coverage + snapshots; the list with sizes. |
+| `backup restore <file\|latest> --yes` | Restore a snapshot (`pg_restore --clean` + rewrite uploads). Destructive — needs `--yes`. Restart Plane workers afterward. |
+
+**Where it lands.** Three destinations:
+
+- **local** (default) — `~/.config/pbrain/plane-backups`, which **Time Machine backs up by default** (status warns if that path is excluded).
+- **external** — a mounted volume, e.g. `--dest external --dir /Volumes/Backup/plane`. Won't write if the volume isn't mounted.
+- **vps** — `rsync`/`scp` over ssh, e.g. `--dest vps --vps-host deploy@host --vps-path ~/plane-backups` (optionally a non-default `--vps-port` / `--ssh-key`). Uploads run non-interactively, so set up key auth.
+
+A snapshot is `plane-YYYYMMDD-HHMMSS.tar.gz` containing `db.dump` (logical `pg_dump`, ~6× smaller than the raw volume), `uploads.tar.gz`, and a `manifest.json` (sizes + sha256). It operates on Docker directly, so it works even before Plane is wired to pbrain. Redis and RabbitMQ are ephemeral and not backed up. Config: `~/.config/pbrain/plane-backup.json` (mode `0600`); the scheduled run logs to `~/.config/pbrain/plane-backup.log`.
+
 ## The review walk (dual-mode)
 
 `review` proposes nothing on its own — it scans, then follows the enrichment-walk instructions. **Invoked directly**, it walks the flagged issues **one at a time**, suggests a concrete enrichment per issue, and writes **only on an explicit yes** — never auto-committing a flag you declined. **Invoked by `/plan-my-work`** (executor mode), it grooms fast — infers sensible values as a PM would (description, priority, assignee, relations, sub-tasks, backlog→todo) and applies them in batches without interrogating you, so the morning planner just gets ready work.
 
 ## Environment
 
-`PBRAIN_PLANE_HOME` (self-host dir), `PBRAIN_PLANE_BASE_URL` / `_API_KEY` / `_WORKSPACE` / `_PROJECT` / `_DEFAULT_EST_H`. Plus: `PBRAIN_PLANE_MAX_CREATES` (cap on auto-created labels per run, default 5), `PBRAIN_PM_CALLER` (set to `plan-my-work` by the daily loop to put the router in executor mode). Config lives at `~/.config/pbrain/plane.json` (mode `0600`, never synced to the vault).
+`PBRAIN_PLANE_HOME` (self-host dir), `PBRAIN_PLANE_BASE_URL` / `_API_KEY` / `_WORKSPACE` / `_PROJECT` / `_DEFAULT_EST_H`. Plus: `PBRAIN_PLANE_MAX_CREATES` (cap on auto-created labels per run, default 5), `PBRAIN_PM_CALLER` (set to `plan-my-work` by the daily loop to put the router in executor mode). Config lives at `~/.config/pbrain/plane.json` (mode `0600`, never synced to the vault); backup settings live alongside it at `~/.config/pbrain/plane-backup.json`.

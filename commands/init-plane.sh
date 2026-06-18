@@ -29,6 +29,20 @@
 #                         `vhost --remove` reverts to plain http://localhost.
 #                         Flags: --host (default plane.localhost), --port
 #                         (default 1800), --plane-home, --no-restart, --remove.
+#   github [flags]        Configure Plane's GitHub integration (two-way issue /
+#                         PR sync) by writing the GITHUB_* + SILO_BASE_URL knobs
+#                         into Plane's own plane.env and restarting the stack.
+#                         No flags → print the GitHub-App setup guide (App
+#                         settings + callback/webhook URLs to paste into GitHub)
+#                         plus current state. With credential flags → apply them.
+#                         NOTE: the integration runs on Plane's `silo` service
+#                         (the Commercial / "govern" layer) — it is NOT part of
+#                         the free Community stack `up` installs; and GitHub must
+#                         be able to REACH your instance, so plain localhost won't
+#                         work without a public URL / tunnel (set --silo-base-url
+#                         to it). Flags: --app-name, --app-id, --client-id,
+#                         --client-secret, --private-key <pem path>,
+#                         --silo-base-url, --plane-home, --no-restart, --remove.
 #   status                Show Docker + Plane container + pbrain backend state.
 #   help
 #
@@ -68,6 +82,29 @@ _plane_running() {
   _docker_running || return 1
   docker ps --format '{{.Names}}' 2>/dev/null | grep -qiE 'plane' && return 0
   return 1
+}
+
+# True (0) if Plane's `silo` integrations service container is running. Silo is
+# the backend that drives the GitHub/GitLab/Slack integrations (OAuth + webhooks)
+# — it ships with Plane's Commercial / "govern" layer, NOT the free Community
+# stack `up` installs, so this is how /init-plane github tells the user whether
+# the integration even has a backend to talk to.
+_silo_running() {
+  _docker_running || return 1
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qiE 'silo' && return 0
+  return 1
+}
+
+# yes (0) when Plane's plane.env already carries the GitHub-App credentials
+# (keyed off GITHUB_APP_ID). Echoes yes/no; never fails.
+_github_configured() {
+  local envf="${1:-}"
+  [[ -z "$envf" ]] && envf="$(_vhost_envfile 2>/dev/null || true)"
+  if [[ -n "$envf" && -f "$envf" ]] && grep -q '^GITHUB_APP_ID=..*$' "$envf"; then
+    echo yes
+  else
+    echo no
+  fi
 }
 
 # Locate Plane's plane.env. Order: explicit --plane-home flag → PBRAIN_PLANE_HOME
@@ -130,6 +167,7 @@ case "$SUB" in
     echo "setup_sh: $( [[ -f "$SETUP_SH" ]] && echo present || echo absent )"
     echo "plane_config: $( [[ -f "$PLANE_CONFIG" ]] && echo present || echo absent )"
     echo "plane_running: $(_plane_running && echo yes || echo no)"
+    echo "silo_running: $(_silo_running && echo yes || echo no)"
     echo "configured: $(_plane_configured)"
     echo "default_url: $DEFAULT_URL"
     echo "setup_url: $SETUP_URL"
@@ -140,8 +178,10 @@ case "$SUB" in
       echo "plane_env: $vhost_env"
       echo "vhost_port: ${vh_port:-80}"
       echo "vhost_domain: ${vh_dom:-localhost}"
+      echo "github_configured: $(_github_configured "$vhost_env")"
     else
       echo "plane_env: absent"
+      echo "github_configured: no"
     fi
     ;;
 
@@ -296,6 +336,197 @@ PYEOF
     echo "  3) revert any time:                 /init-plane vhost --remove"
     ;;
 
+  github)
+    # Wire Plane's GitHub integration (two-way issue/PR sync) by upserting the
+    # GITHUB_* + SILO_BASE_URL knobs into Plane's OWN plane.env, then restarting
+    # the stack — same plane.env-editing approach as `vhost`. We do NOT touch
+    # vhost's plane.env.pbrain-bak (it owns that): apply upserts our keys in
+    # place, and `--remove` surgically deletes only the keys we set. No flags →
+    # print the GitHub-App setup guide (the URLs/permissions to paste into
+    # GitHub) plus current state, so the user can stage the GitHub side first.
+    APP_NAME=""; APP_ID=""; CLIENT_ID=""; CLIENT_SECRET=""; PRIVATE_KEY_PEM=""
+    SILO_BASE_URL=""; PLANE_HOME_OVERRIDE=""; NO_RESTART=no; DO_REMOVE=no
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --app-name)      APP_NAME="${2:?--app-name needs a value}"; shift 2;;
+        --app-id)        APP_ID="${2:?--app-id needs a value}"; shift 2;;
+        --client-id)     CLIENT_ID="${2:?--client-id needs a value}"; shift 2;;
+        --client-secret) CLIENT_SECRET="${2:?--client-secret needs a value}"; shift 2;;
+        --private-key)   PRIVATE_KEY_PEM="${2:?--private-key needs a path}"; shift 2;;
+        --silo-base-url) SILO_BASE_URL="${2:?--silo-base-url needs a value}"; shift 2;;
+        --plane-home)    PLANE_HOME_OVERRIDE="${2:?--plane-home needs a value}"; shift 2;;
+        --no-restart)    NO_RESTART=yes; shift;;
+        --remove)        DO_REMOVE=yes; shift;;
+        *) echo "pbrain: unknown flag for /init-plane github: $1" >&2; exit 1;;
+      esac
+    done
+
+    ENVFILE="$(_vhost_envfile "$PLANE_HOME_OVERRIDE")"
+    if [[ -z "$ENVFILE" || ! -f "$ENVFILE" ]]; then
+      echo "INIT_PLANE_GITHUB_NO_ENV"
+      echo "Couldn't find Plane's plane.env. Bring Plane up via /init-plane fetch + up,"
+      echo "or set PBRAIN_PLANE_HOME to the directory containing plane.env."
+      exit 0
+    fi
+    PLANE_DIR="$(dirname "$ENVFILE")"
+
+    # Derive the silo base URL (the public origin GitHub will call back to) from
+    # plane.env's APP_DOMAIN when the caller didn't pass one.
+    _derive_silo_base() {
+      local dom
+      dom="$(awk -F= '/^APP_DOMAIN=/{print $2}' "$ENVFILE" | tail -1)"
+      [[ -z "$dom" ]] && dom="localhost"
+      echo "http://$dom"
+    }
+    SILO_BASE_EFFECTIVE="${SILO_BASE_URL:-$(_derive_silo_base)}"
+
+    # --remove: strip only the keys we manage (leave the rest of plane.env, incl.
+    # vhost's APP_DOMAIN/LISTEN_HTTP_PORT, untouched), then restart.
+    if [[ "$DO_REMOVE" == yes ]]; then
+      echo "INIT_PLANE_GITHUB_REMOVE"
+      python3 - "$ENVFILE" <<'PYEOF'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1]); t = p.read_text()
+KEYS = ("GITHUB_CLIENT_ID","GITHUB_CLIENT_SECRET","GITHUB_APP_NAME",
+        "GITHUB_APP_ID","GITHUB_PRIVATE_KEY","SILO_BASE_URL")
+lines = [ln for ln in t.splitlines()
+         if not any(ln.startswith(k + "=") for k in KEYS)]
+p.write_text("\n".join(lines).rstrip() + "\n")
+PYEOF
+      echo "stripped GITHUB_* + SILO_BASE_URL from $ENVFILE"
+      if [[ "$NO_RESTART" == no ]] && _docker_running; then
+        ( cd "$PLANE_DIR" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
+        echo "restarted Plane stack"
+      else
+        echo "skipped restart — apply with: cd \"$PLANE_DIR\" && docker compose --env-file plane.env up -d"
+      fi
+      echo "(disconnect the app in GitHub too: its Settings → Developer settings → GitHub Apps)"
+      exit 0
+    fi
+
+    # No credential flags → guide mode. Print exactly what to create on GitHub's
+    # side, with the callback/webhook URLs prefilled from the silo base URL, plus
+    # current state. This is the read-only "what do I paste into GitHub" step.
+    _any_cred="${APP_NAME}${APP_ID}${CLIENT_ID}${CLIENT_SECRET}${PRIVATE_KEY_PEM}"
+    if [[ -z "$_any_cred" ]]; then
+      echo "INIT_PLANE_GITHUB_GUIDE"
+      echo "silo_running: $(_silo_running && echo yes || echo no)"
+      echo "github_configured: $(_github_configured "$ENVFILE")"
+      echo "silo_base_url: $SILO_BASE_EFFECTIVE"
+      echo
+      echo "CAVEATS (read first):"
+      echo "  • The GitHub integration runs on Plane's 'silo' service — part of the"
+      echo "    Commercial/'govern' layer, NOT the free Community stack 'up' installs."
+      if ! _silo_running; then
+        echo "    No 'silo' container is running here, so this likely won't activate"
+        echo "    until you're on a Plane build that ships it."
+      fi
+      echo "  • GitHub must be able to REACH your instance for OAuth + webhooks."
+      echo "    $SILO_BASE_EFFECTIVE is local — give --silo-base-url a public HTTPS URL"
+      echo "    (a real domain, or a tunnel like cloudflared/ngrok) or it won't work."
+      echo
+      echo "1) GitHub → Settings → Developer settings → GitHub Apps → New GitHub App"
+      echo "2) Basic info:"
+      echo "     Homepage URL:   $SILO_BASE_EFFECTIVE"
+      echo "     Callback URLs (add BOTH):"
+      echo "       $SILO_BASE_EFFECTIVE/silo/api/github/auth/callback"
+      echo "       $SILO_BASE_EFFECTIVE/silo/api/github/auth/user/callback"
+      echo "     Post installation → Setup URL: $SILO_BASE_EFFECTIVE/silo/api/github/auth/callback"
+      echo "       and enable 'Redirect on update'."
+      echo "     Webhook URL:    $SILO_BASE_EFFECTIVE/silo/api/github/github-webhook"
+      echo "     Optional features → DISABLE 'Expire user authorization tokens'."
+      echo "3) Repository permissions: Issues = R/W, Pull requests = R/W, Metadata = RO."
+      echo "   Account permissions:    Email addresses = RO, Profile = R/W."
+      echo "4) Subscribe to events: Installation target, Meta, Issue comment, Issues,"
+      echo "   Pull request, Pull request review, Pull request review comment,"
+      echo "   Pull request review thread, Push, Repository (sub issues)."
+      echo "5) Create the app, then: generate a client secret, generate a private key"
+      echo "   (.pem download), and note the App ID, Client ID, App name."
+      echo "6) Make the app Public so it can be installed on your repos."
+      echo
+      echo "Then wire it into Plane:"
+      echo "  /init-plane github \\"
+      echo "    --app-name <name> --app-id <id> --client-id <id> \\"
+      echo "    --client-secret <secret> --private-key /path/to/private-key.pem \\"
+      echo "    --silo-base-url https://<public-host>"
+      echo
+      echo "(--private-key takes the .pem PATH; pbrain base64-encodes it for plane.env.)"
+      echo "Revert any time: /init-plane github --remove"
+      exit 0
+    fi
+
+    # Apply mode — require the full credential set (a partial config is useless).
+    missing=()
+    [[ -z "$APP_NAME" ]]       && missing+=("--app-name")
+    [[ -z "$APP_ID" ]]        && missing+=("--app-id")
+    [[ -z "$CLIENT_ID" ]]     && missing+=("--client-id")
+    [[ -z "$CLIENT_SECRET" ]] && missing+=("--client-secret")
+    [[ -z "$PRIVATE_KEY_PEM" ]] && missing+=("--private-key")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      echo "INIT_PLANE_GITHUB_INCOMPLETE missing: ${missing[*]}" >&2
+      echo "Run /init-plane github with no flags to see the full setup guide." >&2
+      exit 1
+    fi
+    if [[ ! -f "$PRIVATE_KEY_PEM" ]]; then
+      echo "INIT_PLANE_GITHUB_ERROR private key file not found: $PRIVATE_KEY_PEM" >&2; exit 1
+    fi
+
+    # base64-encode the .pem (no newlines) — done in Python for portability
+    # (GNU `base64 -w0` vs BSD `base64 -b0` differ across macOS/Linux).
+    PRIVATE_KEY_B64="$(python3 - "$PRIVATE_KEY_PEM" <<'PYEOF'
+import base64, sys, pathlib
+sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())
+PYEOF
+)"
+    if [[ -z "$PRIVATE_KEY_B64" ]]; then
+      echo "INIT_PLANE_GITHUB_ERROR could not read/encode $PRIVATE_KEY_PEM" >&2; exit 1
+    fi
+
+    python3 - "$ENVFILE" "$CLIENT_ID" "$CLIENT_SECRET" "$APP_NAME" "$APP_ID" "$PRIVATE_KEY_B64" "$SILO_BASE_EFFECTIVE" <<'PYEOF'
+import re, sys, pathlib
+envfile = sys.argv[1]
+vals = {
+    "GITHUB_CLIENT_ID":     sys.argv[2],
+    "GITHUB_CLIENT_SECRET": sys.argv[3],
+    "GITHUB_APP_NAME":      sys.argv[4],
+    "GITHUB_APP_ID":        sys.argv[5],
+    "GITHUB_PRIVATE_KEY":   sys.argv[6],
+    "SILO_BASE_URL":        sys.argv[7],
+}
+p = pathlib.Path(envfile); t = p.read_text()
+def upsert(t, k, v):
+    pat = re.compile(rf"(?m)^{re.escape(k)}=.*$")
+    return pat.sub(lambda _: f"{k}={v}", t) if pat.search(t) else t.rstrip() + f"\n{k}={v}\n"
+for k, v in vals.items():
+    t = upsert(t, k, v)
+p.write_text(t)
+PYEOF
+    echo "INIT_PLANE_GITHUB"
+    echo "wrote GitHub-App credentials + SILO_BASE_URL=$SILO_BASE_EFFECTIVE into $ENVFILE"
+    echo "  (GITHUB_PRIVATE_KEY stored base64-encoded; the secret is never printed)"
+    if [[ "$NO_RESTART" == yes ]]; then
+      echo "skipped restart (--no-restart) — apply with: cd \"$PLANE_DIR\" && docker compose --env-file plane.env up -d"
+    elif _docker_running; then
+      ( cd "$PLANE_DIR" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
+      echo "restarted Plane stack"
+    else
+      echo "Docker isn't running — restart Plane to apply: cd \"$PLANE_DIR\" && docker compose --env-file plane.env up -d"
+    fi
+    if ! _silo_running; then
+      echo "INIT_PLANE_GITHUB_WARN no 'silo' container detected — the integration backend"
+      echo "  isn't part of the Community stack, so activation may not be available on this build."
+    fi
+    case "$SILO_BASE_EFFECTIVE" in
+      *localhost*|*127.0.0.1*)
+        echo "INIT_PLANE_GITHUB_WARN SILO_BASE_URL is local ($SILO_BASE_EFFECTIVE) — GitHub can't"
+        echo "  reach it for OAuth/webhooks. Re-run with --silo-base-url <public https URL>.";;
+    esac
+    echo "next steps:"
+    echo "  1) Plane → Workspace Settings → Integrations → GitHub → Connect, then install the app on your repos."
+    echo "  2) In a project, connect a repo to enable two-way issue/PR sync."
+    echo "  3) revert any time: /init-plane github --remove"
+    ;;
+
   status)
     echo "INIT_PLANE_STATUS"
     echo "docker_running: $(_docker_running && echo yes || echo no)"
@@ -303,6 +534,8 @@ PYEOF
     if _plane_running; then
       docker ps --format '  {{.Names}}\t{{.Status}}' 2>/dev/null | grep -i plane || true
     fi
+    echo "silo_running: $(_silo_running && echo yes || echo no)"
+    echo "github_configured: $(_github_configured)"
     echo "plane_config: $( [[ -f "$PLANE_CONFIG" ]] && echo present || echo absent )"
     echo "configured: $(_plane_configured)"
     echo "url: $DEFAULT_URL"
@@ -314,7 +547,7 @@ PYEOF
 
   *)
     echo "pbrain: unknown /init-plane subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | vhost | status | help" >&2
+    echo "Try: probe | fetch | up | config | vhost | github | status | help" >&2
     exit 1
     ;;
 esac

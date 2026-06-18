@@ -81,6 +81,13 @@ set -euo pipefail
 #                         store + auto-refreshes on expiry (macOS), or a persisted cookie /
 #                         login. Fetched if estimates exist, else skipped; --import-json is
 #                         the manual fallback. Then the `estimate` field resolves.
+#   backup <action>       Plane data snapshots (PB-17). Operates on Docker directly
+#                         (no plane.json needed). actions: estimate | now [--dir D] |
+#                         run (headless launchd entry) | enable [--time HH:MM]
+#                         [--dest local|external|vps] [--dir D] [--keep N]
+#                         [--vps-host H --vps-path P --vps-port N --ssh-key K] |
+#                         disable | config <same flags> | status | list |
+#                         restore <file|latest> --yes. See lib/plane-backup.sh.
 #
 # Overrides:
 #   PBRAIN_PLANE_HOME     where setup.sh + its data live (default
@@ -95,6 +102,7 @@ done
 _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
+source "$_SCRIPT_DIR/../lib/plane-backup.sh"
 
 pbrain_emit_prefs "project-manager" || true
 
@@ -169,7 +177,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -189,7 +197,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -237,6 +245,12 @@ case "$SUB" in
     else
       echo "plane_env: absent"
     fi
+    eval "$(pbrain_pbk_load)"
+    echo "backup_scheduled: $(pbrain_launchagent_loaded "$PBK_LABEL" && echo yes || echo no)"
+    echo "backup_dest: ${PBK_DEST:-local}"
+    echo "backup_time: ${PBK_TIME:-03:30}"
+    bk_dir="${PBK_LOCAL_DIR:-$(pbrain_pbk_default_dir)}"; [[ "${PBK_DEST:-local}" == external ]] && bk_dir="${PBK_EXTERNAL_DIR:-$bk_dir}"
+    echo "backup_count: $(ls -1 "$bk_dir"/plane-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
     ;;
 
   fetch)
@@ -398,6 +412,7 @@ PYEOF
     echo "plane_config: $( [[ -f "$PLANE_CONFIG" ]] && echo present || echo absent )"
     echo "configured: $(pbrain_plane_configured && echo yes || echo no)"
     echo "url: $DEFAULT_URL"
+    echo "backup_scheduled: $(pbrain_launchagent_loaded "$PBK_LABEL" && echo yes || echo no)"
     ;;
 
   # ===== Plane ops ==========================================================
@@ -617,6 +632,136 @@ PYEOF
       $(_has_bool from_browser && printf '%s' --from-browser) \
       $(_has_bool create && printf '%s' --create) \
       $(_has_bool replace && printf '%s' --replace) || true
+    ;;
+
+  # ===== Plane backup / snapshot (PB-17) ====================================
+  # Operates directly on Docker (no plane.json needed). Actions:
+  #   now | run | estimate | enable | disable | config | status | list | restore
+  backup)
+    ACTION="${1:-status}"; [[ $# -gt 0 ]] && shift || true
+    _parse_args "$@"
+    eval "$(pbrain_pbk_load)"
+    PM_SH="$_SCRIPT_DIR/project-manager.sh"
+
+    case "$ACTION" in
+      estimate)
+        echo "PM_BACKUP_ESTIMATE"
+        pbrain_pbk_estimate || true
+        ;;
+
+      now|run)
+        # `run` is the headless launchd entry point; `now` is the interactive one.
+        echo "PM_BACKUP"
+        [[ "$ACTION" == run ]] && echo "[$(date '+%Y-%m-%d %H:%M:%S')] backup run start"
+        dest_override="$(_flag dir)"
+        if [[ -n "$dest_override" ]]; then destdir="$dest_override"; mkdir -p "$destdir"
+        else destdir="$(pbrain_pbk_resolve_dest_dir)" || { echo "Backup aborted — see PBK_ERR above."; exit 0; }; fi
+        snap="$(pbrain_pbk_snapshot "$destdir")" || { echo "Snapshot failed — see PBK_ERR above."; exit 0; }
+        echo "wrote $snap ($(pbrain_pbk_human "$(wc -c < "$snap" | tr -d ' ')"))"
+        if [[ "${PBK_DEST:-local}" == vps ]]; then
+          if pbrain_pbk_upload_vps "$snap"; then
+            echo "uploaded to ${PBK_VPS_HOST}:${PBK_VPS_PATH}"
+            [[ "${PBK_VPS_KEEPLOCAL:-True}" == "False" || "${PBK_VPS_KEEPLOCAL:-true}" == "false" ]] && rm -f "$snap" && echo "removed local staging copy"
+          else
+            echo "PBK_WARN upload failed — local copy kept at $snap"
+          fi
+        fi
+        pbrain_pbk_prune "$destdir" "${PBK_KEEP:-14}"
+        [[ "$ACTION" == run ]] && echo "[$(date '+%Y-%m-%d %H:%M:%S')] backup run done"
+        ;;
+
+      enable)
+        echo "PM_BACKUP_ENABLE"
+        # Persist any destination/retention/schedule flags, then install the agent.
+        saves=()
+        [[ -n "$(_flag dest)" ]] && saves+=("dest=$(_flag dest)")
+        [[ -n "$(_flag dir)" && "$(_flag dest)" == external ]] && saves+=("external_dir=$(_flag dir)")
+        [[ -n "$(_flag dir)" && "$(_flag dest)" != external ]] && saves+=("local_dir=$(_flag dir)")
+        [[ -n "$(_flag keep)" ]] && saves+=("keep=$(_flag keep)")
+        [[ -n "$(_flag time)" ]] && saves+=("time=$(_flag time)")
+        [[ -n "$(_flag vps_host)" ]] && saves+=("vps.host=$(_flag vps_host)")
+        [[ -n "$(_flag vps_path)" ]] && saves+=("vps.path=$(_flag vps_path)")
+        [[ -n "$(_flag vps_port)" ]] && saves+=("vps.port=$(_flag vps_port)")
+        [[ -n "$(_flag ssh_key)" ]] && saves+=("vps.ssh_key=$(_flag ssh_key)")
+        [[ ${#saves[@]} -gt 0 ]] && pbrain_pbk_save "${saves[@]}"
+        eval "$(pbrain_pbk_load)"
+        pbrain_pbk_schedule_install "$PM_SH" "${PBK_TIME:-03:30}"
+        if pbrain_launchagent_loaded "$PBK_LABEL"; then
+          echo "daily Plane backup scheduled at ${PBK_TIME:-03:30} → dest=${PBK_DEST:-local}, keep=${PBK_KEEP:-14}"
+          echo "runs: $PM_SH backup run   (log: $(pbrain_pbk_log_file))"
+        else
+          echo "PBK_WARN could not load the LaunchAgent — check launchctl."
+        fi
+        ;;
+
+      disable)
+        echo "PM_BACKUP_DISABLE"
+        pbrain_pbk_schedule_uninstall
+        echo "daily Plane backup disabled (existing snapshots kept)."
+        ;;
+
+      config)
+        echo "PM_BACKUP_CONFIG"
+        saves=()
+        [[ -n "$(_flag dest)" ]] && saves+=("dest=$(_flag dest)")
+        [[ -n "$(_flag dir)" && "$(_flag dest)" == external ]] && saves+=("external_dir=$(_flag dir)")
+        [[ -n "$(_flag dir)" && "$(_flag dest)" != external ]] && saves+=("local_dir=$(_flag dir)")
+        [[ -n "$(_flag keep)" ]] && saves+=("keep=$(_flag keep)")
+        [[ -n "$(_flag time)" ]] && saves+=("time=$(_flag time)")
+        [[ -n "$(_flag vps_host)" ]] && saves+=("vps.host=$(_flag vps_host)")
+        [[ -n "$(_flag vps_path)" ]] && saves+=("vps.path=$(_flag vps_path)")
+        [[ -n "$(_flag vps_port)" ]] && saves+=("vps.port=$(_flag vps_port)")
+        [[ -n "$(_flag ssh_key)" ]] && saves+=("vps.ssh_key=$(_flag ssh_key)")
+        [[ -n "$(_flag keep_local)" ]] && saves+=("vps.keep_local_copy=$(_flag keep_local)")
+        [[ ${#saves[@]} -gt 0 ]] && pbrain_pbk_save "${saves[@]}"
+        # If the schedule is already live, re-install so a new time takes effect.
+        if pbrain_launchagent_loaded "$PBK_LABEL"; then
+          eval "$(pbrain_pbk_load)"
+          pbrain_pbk_schedule_install "$PM_SH" "${PBK_TIME:-03:30}"
+          echo "config updated + live schedule refreshed."
+        else
+          echo "config updated (no schedule running — enable with: backup enable)."
+        fi
+        ;;
+
+      list)
+        echo "PM_BACKUP_LIST"
+        bdir="${PBK_LOCAL_DIR:-$(pbrain_pbk_default_dir)}"; [[ "${PBK_DEST:-local}" == external ]] && bdir="${PBK_EXTERNAL_DIR:-$bdir}"
+        if ls -1 "$bdir"/plane-*.tar.gz >/dev/null 2>&1; then
+          ls -1t "$bdir"/plane-*.tar.gz 2>/dev/null | while IFS= read -r f; do
+            printf '%s\t%s\n' "$(pbrain_pbk_human "$(wc -c < "$f" | tr -d ' ')")" "$(basename "$f")"
+          done
+        else
+          echo "(no snapshots in $bdir)"
+        fi
+        ;;
+
+      restore)
+        echo "PM_BACKUP_RESTORE"
+        target="${POS[0]:-$(_flag file)}"
+        bdir="${PBK_LOCAL_DIR:-$(pbrain_pbk_default_dir)}"; [[ "${PBK_DEST:-local}" == external ]] && bdir="${PBK_EXTERNAL_DIR:-$bdir}"
+        [[ "$target" == latest || -z "$target" ]] && target="$(ls -1t "$bdir"/plane-*.tar.gz 2>/dev/null | head -1)"
+        [[ -n "$target" ]] || { echo "PBK_ERR no snapshot to restore (give a path or 'latest')"; exit 0; }
+        pbrain_pbk_restore "$target" "$(_has_bool yes && echo --yes)" || true
+        ;;
+
+      status|*)
+        echo "PM_BACKUP_STATUS"
+        echo "scheduled: $(pbrain_launchagent_loaded "$PBK_LABEL" && echo "yes (daily ${PBK_TIME:-03:30})" || echo no)"
+        echo "destination: ${PBK_DEST:-local}"
+        bdir="${PBK_LOCAL_DIR:-$(pbrain_pbk_default_dir)}"; [[ "${PBK_DEST:-local}" == external ]] && bdir="${PBK_EXTERNAL_DIR:-$bdir}"
+        echo "directory: $bdir"
+        [[ "${PBK_DEST:-local}" == vps ]] && echo "vps: ${PBK_VPS_HOST:-<unset>}:${PBK_VPS_PATH:-<unset>} (keep_local=${PBK_VPS_KEEPLOCAL:-true})"
+        echo "retention: keep ${PBK_KEEP:-14}"
+        if command -v tmutil >/dev/null 2>&1 && [[ "${PBK_DEST:-local}" == local ]]; then
+          echo "time_machine: $(tmutil isexcluded "$bdir" 2>/dev/null | grep -q '\[Excluded\]' && echo "EXCLUDED — not in Time Machine" || echo "included (Time Machine covers it)")"
+        fi
+        cnt="$(ls -1 "$bdir"/plane-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')" || true
+        last="$(ls -1t "$bdir"/plane-*.tar.gz 2>/dev/null | head -1)" || true
+        echo "snapshots: ${cnt:-0}"
+        [[ -n "$last" ]] && echo "latest: $(basename "$last") ($(pbrain_pbk_human "$(wc -c < "$last" | tr -d ' ')"))"
+        ;;
+    esac
     ;;
 
   # ===== natural-language router (D2): vague instruction → specific verbs =====

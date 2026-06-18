@@ -46,10 +46,10 @@ teardown() { rm -rf "$TMP"; }
   grep -q '"backend": "plane"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
-@test "config respects an explicit --base-url (e.g. Plane Cloud)" {
-  run IP config --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid
+@test "config respects an explicit --base-url (self-host on a custom domain)" {
+  run IP config --base-url https://plane.example.com --api-key SECRET --workspace ws --project pid
   [ "$status" -eq 0 ]
-  grep -q '"base_url": "https://api.plane.so"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+  grep -q '"base_url": "https://plane.example.com"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
 @test "config auto-detects the vhost port from plane.env (defaults base_url to the loopback)" {
@@ -161,6 +161,85 @@ _stub_docker() {
   grep -q '^LISTEN_HTTP_PORT=80$' "$PBRAIN_PLANE_HOME/plane.env"
   [ ! -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
   grep -q '"base_url": "http://localhost"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+# --- github -------------------------------------------------------------------
+
+@test "github without plane.env reports INIT_PLANE_GITHUB_NO_ENV (no crash)" {
+  # Force docker discovery to find nothing so a real Plane on the dev box doesn't
+  # leak a plane.env into the result.
+  STUB="$TMP/nodock"; mkdir -p "$STUB"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/docker"; chmod +x "$STUB/docker"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github
+  [ "$status" -eq 0 ] && [[ "$output" == *"INIT_PLANE_GITHUB_NO_ENV"* ]]
+}
+
+@test "github with no flags prints the guide with callback URLs derived from APP_DOMAIN" {
+  _seed_plane_env 1800 plane.localhost
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"INIT_PLANE_GITHUB_GUIDE"* ]] \
+    && [[ "$output" == *"http://plane.localhost/silo/api/github/auth/callback"* ]] \
+    && [[ "$output" == *"http://plane.localhost/silo/api/github/github-webhook"* ]] \
+    && [[ "$output" == *"silo"* ]]
+}
+
+@test "github apply writes the credentials + base64 private key + SILO_BASE_URL into plane.env" {
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  printf -- '-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----\n' > "$TMP/key.pem"
+  EXPECT_B64="$(python3 -c 'import base64,sys;sys.stdout.write(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$TMP/key.pem")"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github \
+    --app-name myapp --app-id 12345 --client-id cid --client-secret csecret \
+    --private-key "$TMP/key.pem" --silo-base-url https://plane.example.com
+  [ "$status" -eq 0 ] \
+    && grep -q '^GITHUB_APP_NAME=myapp$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^GITHUB_APP_ID=12345$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^GITHUB_CLIENT_ID=cid$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^GITHUB_CLIENT_SECRET=csecret$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q "^GITHUB_PRIVATE_KEY=$EXPECT_B64\$" "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^SILO_BASE_URL=https://plane.example.com$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && [ ! -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
+}
+
+@test "github apply is idempotent (no duplicate keys on re-run)" {
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  printf 'pem\n' > "$TMP/key.pem"
+  ARGS=(github --app-name a --app-id 1 --client-id c --client-secret s --private-key "$TMP/key.pem" --silo-base-url https://x.example.com)
+  env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" "${ARGS[@]}" >/dev/null
+  env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" "${ARGS[@]}" >/dev/null
+  [ "$(grep -c '^GITHUB_APP_ID=' "$PBRAIN_PLANE_HOME/plane.env")" -eq 1 ]
+}
+
+@test "github missing flags fails with INIT_PLANE_GITHUB_INCOMPLETE" {
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github --app-name only
+  [ "$status" -ne 0 ] && [[ "$output" == *"INIT_PLANE_GITHUB_INCOMPLETE"* ]]
+}
+
+@test "github --remove strips only the github keys and leaves vhost knobs intact" {
+  _seed_plane_env 1800 plane.localhost
+  STUB="$(_stub_docker)"
+  printf 'pem\n' > "$TMP/key.pem"
+  env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github \
+    --app-name a --app-id 1 --client-id c --client-secret s \
+    --private-key "$TMP/key.pem" --silo-base-url https://x.example.com >/dev/null
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" github --remove
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"INIT_PLANE_GITHUB_REMOVE"* ]] \
+    && ! grep -q '^GITHUB_APP_ID=' "$PBRAIN_PLANE_HOME/plane.env" \
+    && ! grep -q '^SILO_BASE_URL=' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^APP_DOMAIN=plane.localhost$' "$PBRAIN_PLANE_HOME/plane.env" \
+    && grep -q '^LISTEN_HTTP_PORT=1800$' "$PBRAIN_PLANE_HOME/plane.env"
+}
+
+@test "probe reports silo_running + github_configured keys" {
+  _seed_plane_env
+  run IP probe
+  [[ "$output" == *"silo_running:"* ]] && [[ "$output" == *"github_configured: no"* ]]
 }
 
 @test "up before fetch tells the user to fetch first (no crash)" {
