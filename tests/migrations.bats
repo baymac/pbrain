@@ -312,7 +312,8 @@ EOF
   for id in 0001_prefs_feedback_to_vault 0002_plans_profile_rebuild \
             0003_fitness_profiles 0004_diet_profile_combine \
             0005_habits_profile_to_store 0006_food_library_to_store \
-            0007_goals_project_reframe; do
+            0007_goals_project_reframe 0008_habits_categorize \
+            0009_habit_scores_to_unit_scale 0010_clear_default_scored_notes; do
     [ -f "$LEDGER/$id.done" ]
   done
 }
@@ -452,4 +453,62 @@ EOF
   run pbrain_run_migrations
   [[ "$output" != *"0009_habit_scores_to_unit_scale"* ]]
   [ -f "$VAULT_DIR/.pbrain/migrations/0009_habit_scores_to_unit_scale.done" ]
+}
+
+# ── real migration: 0010 clear default scored-habit notes ───────────────────
+
+@test "0010 clears default scored-habit notes; keeps custom-scored + non-scored notes" {
+  mkdir -p "$VAULT_DIR/life/habit-tracking/.profile"
+  cat > "$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md" <<'EOF'
+---
+type: habits-profile
+version: 1
+committed: true
+---
+
+```json
+{"habits":[
+  {"id":"deep-work","name":"Deep work","schedule_type":"daily","measure_target":0.75,"archived":false,"notes":"old 0-100 prose","scoring":{"type":"focus_ratio"}},
+  {"id":"eat-clean","name":"Eat clean","schedule_type":"daily","measure_target":0.8,"archived":false,"notes":"Default scored habit, score = ... x 100","scoring":{"type":"meal_ratio"}},
+  {"id":"my-fast","name":"My fast","schedule_type":"daily","measure_target":1.0,"archived":false,"notes":"good = fasted 16h, bad = ate early","scoring":{"type":"slip_ladder","ladder":[1.0,0.5,0]}},
+  {"id":"floss","name":"Floss","schedule_type":"daily","archived":false,"notes":"just floss"}
+]}
+```
+EOF
+  run pbrain_run_migrations
+  [[ "$output" == *"PBRAIN_MIGRATED 0010_clear_default_scored_notes"* ]]
+  [ -f "$VAULT_DIR/.pbrain/backup/habits-profile.v1.md.pre-0010" ]
+  # default scored ids blanked; custom-scored + non-scored notes preserved
+  local prof="$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md"
+  run python3 - "$prof" <<'PY'
+import json,re,sys
+d=json.loads(re.search(r"```json\s*\n(.*?)```",open(sys.argv[1]).read(),re.S).group(1))
+h={x["id"]:x for x in d["habits"]}
+ok=(h["deep-work"].get("notes","")==""
+    and h["eat-clean"].get("notes","")==""
+    and h["my-fast"].get("notes")=="good = fasted 16h, bad = ate early"
+    and h["floss"].get("notes")=="just floss")
+print("OK" if ok else "BAD:"+json.dumps(h))
+PY
+  [ "$output" = "OK" ]
+  # idempotent: a second run does not re-fire
+  run pbrain_run_migrations
+  [[ "$output" != *"0010_clear_default_scored_notes"* ]]
+}
+
+@test "0010 is vacuous when default scored notes are already empty" {
+  mkdir -p "$VAULT_DIR/life/habit-tracking/.profile"
+  cat > "$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md" <<'EOF'
+---
+type: habits-profile
+version: 1
+committed: true
+---
+```json
+{"habits":[{"id":"deep-work","name":"Deep work","schedule_type":"daily","measure_target":0.75,"archived":false,"notes":"","scoring":{"type":"focus_ratio"}}]}
+```
+EOF
+  run pbrain_run_migrations
+  [[ "$output" != *"0010_clear_default_scored_notes"* ]]
+  [ -f "$VAULT_DIR/.pbrain/migrations/0010_clear_default_scored_notes.done" ]
 }

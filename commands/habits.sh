@@ -184,10 +184,9 @@ with ProfileLock(path) as lock:
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 0.8, "archived": False,
-            "notes": ("Default scored habit (from the diet profile). Daily score = "
-                      "share of clean meals: count clean vs unclean MEALS in the "
-                      "diet log for the day (every eating occasion counts) and "
-                      "mark with --good/--bad; target 0.8+."),
+            # Default scored habit: scoring lives in lib/habits.sh (score_from_spec)
+            # + the /habits spec ("Default scored habits"), never in notes.
+            "notes": "",
             "scoring": {"type": "meal_ratio"},
         })
         added.append("Eat clean (scored from your diet log)")
@@ -206,10 +205,7 @@ with ProfileLock(path) as lock:
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 0.8, "archived": False,
-            "notes": ("Default scored habit (from the fitness profile). Daily "
-                      "score = deviation from the normal sleep window: mark with "
-                      "--actual-time HH:MM (bed time) and --actual-hours N.N; "
-                      "target 0.8+."),
+            "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "deviation", "normal_time": bed,
                         "normal_hours": hours, "unit_minutes": 30,
                         "unit_hours": 0.5, "ladder": [1.0, 0.9, 0.75, 0.5, 0.25, 0]},
@@ -222,10 +218,7 @@ with ProfileLock(path) as lock:
             "schedule": {"type": "daily"}, "schedule_type": "daily",
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 0.7, "archived": False,
-            "notes": ("Default scored habit (from the plans profile). Daily score = "
-                      "weighted task completion (difficulty=load, priority=importance, "
-                      "status=credit). Mark at end-of-day with "
-                      "--items JSON array of {priority,difficulty,status}; target 0.7+."),
+            "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "weighted_completion",
                         "difficulty_weights": {"easy": 1, "normal": 2, "hard": 3, "nightmare": 5},
                         "status_credit": {"done": 1.0, "partial": 0.5, "dropped": 0.0, "carried": 0.0},
@@ -285,9 +278,7 @@ with ProfileLock(path) as lock:
             "schedule": schedule, "schedule_type": schedule_type,
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 0.8, "archived": False,
-            "notes": ("Default scored habit (from the fitness library). Daily score = "
-                      "session volume ratio (actual vs planned volume). Mark after "
-                      "logging a session with --session JSON; target 0.8+."),
+            "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "session_volume",
                         "status_credit": {"completed": 1.0, "partial": 0.5, "skipped": 0.0},
                         "volume_cap": 1.0},
@@ -402,11 +393,7 @@ with ProfileLock(path) as lock:
             "schedule": schedule, "schedule_type": schedule_type,
             "target_count": None, "priority": "high",
             "unit": "", "measure_target": 0.75, "archived": False,
-            "notes": ("Default scored habit (from laptop tracking + the plans "
-                      "profile). Auto-scored at /end-of-day: maps the day's laptop "
-                      "activity onto the plan's work blocks; score = work / (work + "
-                      "distraction) of active time (AFK is neutral, not penalized). "
-                      "Marked with --focus JSON of per-category minutes; target 0.75+."),
+            "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "focus_ratio",
                         "work_categories": ["work"],
                         "distraction_categories": ["social", "entertainment"]},

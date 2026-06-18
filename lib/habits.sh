@@ -1771,7 +1771,10 @@ for h in data.get("habits") or []:
         notes = str(h.get("notes", "")).strip()
         if not n:
             continue
-        line = f"  {n}: {notes}" if notes else ""
+        # Notes carry the classification logic of a USER-DEFINED habit; the default
+        # scored habits have blank notes, so point the model at the /habits spec
+        # (their classification + flags live there, the math in score_from_spec).
+        line = f"  {n}: {notes}" if notes else f"  {n}: [scored habit — no notes; classify by the /habits spec \"Default scored habits\" and pass the per-type flag, never pick the score]"
         if str(sc.get("type", "")).strip() == "checklist":
             comps = [c for c in (sc.get("components") or []) if isinstance(c, dict)]
             labels = ", ".join(
