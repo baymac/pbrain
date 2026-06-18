@@ -92,8 +92,12 @@ The overlay sets macOS kiosk options while it's up — it hides the Dock and men
 | `PBRAIN_OVERLAY_APP` | Where the compiled overlay app is cached/built | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | Default overlay background colour (hex, e.g. `#1e3a5f`) | unset → slate |
 | `PBRAIN_OVERLAY_SNOOZE_MINUTES` | Warning-panel **Snooze** button push-out, in minutes; `0` hides the button | unset → `5` |
+| `PBRAIN_OVERLAY_CHIME` | Lifecycle chime (plays at notif-start / blocking-start / blocking-end); `0`/`off`/`false`/`no` mutes it | unset → on |
+| `PBRAIN_CHIME_FILE` | Override the chime clip with your own audio file (any `afplay`-playable format) | unset → bundled `chime.mp3` |
 | `PBRAIN_REMIND_GRACE_SECONDS` | How overdue an occurrence may be and still fire; past it → `missed` | `600` (10 min) |
 | `PBRAIN_SCREEN_LOCKED` | Override the screen-lock probe: `1` = treat as locked (defer overlays), `0` = unlocked | unset → auto-detect via `ioreg` |
+
+**Chime.** A short audio cue fires at three moments of a blocking reminder: the pre-roll notification appearing (**notif start**), the full overlay appearing (**blocking start**), and the overlay clearing (**blocking end**). The clip ships with pbrain (`lib/assets/chime.mp3`) and is copied into the overlay app bundle's `Resources/` on build. A skip/snooze/miss during the *warning* phase never starts a block, so it gets no end cue. Mute with `PBRAIN_OVERLAY_CHIME=0`, or swap the sound with `PBRAIN_CHIME_FILE=/path/to/your.mp3`.
 
 **Subcommands (the script's API — you normally just type natural language):** `add --text … ( --due … | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]`, `test`, `list`, `cancel <handle>` (`S<id>` series / `R<id>` one-shot), `tick`, `install`, `uninstall`.
 

@@ -1282,6 +1282,69 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
     return out
 
 
+def explode_context(cfg, client, ref, project_ref=None):
+    """Read-only context for INTERACTIVELY exploding ONE issue into sub-issues.
+    Resolve `ref` via find_issues; 0 or >1 cards → return the candidates so the
+    model disambiguates. Exactly one → fetch the full record + its existing
+    sub-issues + the project's estimate-scale info, so the Socratic walk can
+    avoid duplicating children and offer valid estimate points. Never writes."""
+    cards = find_issues(cfg, client, ref, project_ref=project_ref)
+    if len(cards) != 1:
+        return {"status": "none" if not cards else "ambiguous", "candidates": cards}
+    card = cards[0]
+    pid, iid = card["project_id"], card["issue_id"]
+    try:
+        issue = client.get_work_item(pid, iid)
+    except PlaneError as e:
+        return {"status": "error", "error": str(e), "candidates": cards}
+    scale = ensure_estimate_scale(cfg, client, pid)   # the live/imported scale, or None
+
+    # get_work_item returns `state` as a bare id (unlike list_work_items, which
+    # expands it). Resolve ids → names via the project's state list so neither the
+    # parent nor its children surface a raw uuid.
+    try:
+        names_by_state = {s.get("id"): s.get("name") for s in client.list_states(pid)}
+    except PlaneError:
+        names_by_state = {}
+
+    def _state_name(obj):
+        st = obj.get("state")
+        if isinstance(st, dict):
+            return st.get("name")
+        return names_by_state.get(st, st)
+
+    # Best-effort, like the get_work_item/list_states reads above — a failed
+    # sub-issue fetch degrades to "no known children", never a crashed context.
+    try:
+        raw_subs = client.list_sub_issues(pid, iid) or []
+    except PlaneError:
+        raw_subs = []
+    subs = []
+    for s in raw_subs:
+        subs.append({"id": s.get("id"), "title": s.get("name", ""),
+                     "state": _state_name(s)})
+
+    def _pt_key(v):
+        try:
+            return (0, float(v))
+        except (TypeError, ValueError):
+            return (1, 0.0)
+
+    return {
+        "status": "ok",
+        "tie": card["tie"], "id": card["id"], "issue_id": iid,
+        "title": issue.get("name", ""),
+        "description": (issue.get("description_stripped") or "").strip(),
+        "priority": issue.get("priority"),
+        "state": card.get("state"),
+        "estimate_point": issue.get("estimate_point"),
+        "has_estimate_scale": bool(scale),
+        "estimate_points": sorted((scale or {}).get("points", {}).keys(), key=_pt_key) if scale else [],
+        "existing_subissues": subs,
+        "project": card["project"], "project_id": pid,
+    }
+
+
 def resolve_label_refs(client, project_id, names, allow_create=True, guard=None, existing=None):
     """Map label names → label UUIDs for a project. Reuse existing labels
     (fuzzy-deduped by normalised name); create the rest when `allow_create` and
@@ -1908,6 +1971,14 @@ def cmd_find(args):
     return 0
 
 
+def cmd_explode(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(explode_context(cfg, client, args.ref, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_update(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -2151,6 +2222,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_find)
+
+    sp = sub.add_parser("explode")
+    sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
+    sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
+    sp.set_defaults(func=cmd_explode)
 
     sp = sub.add_parser("update")
     sp.add_argument("--edits", required=True, help="JSON [{tie,field,value}] (any field family)")

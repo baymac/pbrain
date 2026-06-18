@@ -70,6 +70,8 @@
 //                  [--mark-done]            # enable Option-hold + "Mark Done" button (no countdown)
 //                  [--warning-seconds 10]   # show a small non-kiosk warning panel first (default 10, 0 = skip)
 //                  [--snooze-minutes 5]     # warning-panel "Snooze" button push-out (default 5, 0 = hide; needs --id/--db)
+//                  [--chime <path>]         # override the lifecycle chime file (default: bundled Resources/chime.mp3)
+//                  [--no-chime]             # mute the notif-start / blocking-start / blocking-end chimes
 //                  [--id <instance_id>] [--db <path>]
 //
 // Build: `swiftc -suppress-warnings pbrain-overlay.swift`
@@ -113,6 +115,41 @@ func colorFromHex(_ hex: String?) -> NSColor {
         alpha: 1)
 }
 let background = colorFromHex(argValue("--background"))
+
+// ---------------------------------------------------------------------------
+// Chime. A short audio cue fires at the three lifecycle moments of a blocking
+// reminder: the pre-roll notification panel appearing (NOTIF START), the full
+// kiosk overlay appearing (BLOCKING START), and the overlay clearing (BLOCKING
+// END). The clip (Conductor's "closing doors" chime) ships with pbrain and is
+// copied into this app bundle's Resources at build time, so Bundle.main resolves
+// it regardless of the launchd/GUI session it fires from.
+//
+// Resolution order: --chime <path> (explicit override) → bundled Resources/chime.mp3
+// → ~/.config/pbrain/chime.mp3 (the user install). --no-chime mutes it entirely.
+// Gating from the shell happens by translating PBRAIN_OVERLAY_CHIME into these
+// argv flags (env doesn't survive `open -n`, argv does).
+//
+// Playback shells out to /usr/bin/afplay as a DETACHED child — we never wait on
+// it, so the BLOCKING END cue keeps playing after the overlay calls
+// NSApp.terminate (the child reparents to launchd and finishes on its own).
+let chimeMuted = CommandLine.arguments.contains("--no-chime")
+func resolveChimePath() -> String? {
+    if let p = argValue("--chime"), !p.isEmpty { return p }
+    if let u = Bundle.main.url(forResource: "chime", withExtension: "mp3") { return u.path }
+    let env = ProcessInfo.processInfo.environment
+    let cfg = (env["XDG_CONFIG_HOME"].map { $0 + "/pbrain" }
+               ?? NSHomeDirectory() + "/.config/pbrain") + "/chime.mp3"
+    return FileManager.default.fileExists(atPath: cfg) ? cfg : nil
+}
+let chimePath: String? = chimeMuted ? nil : resolveChimePath()
+
+func playChime() {
+    guard let path = chimePath, FileManager.default.fileExists(atPath: path) else { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+    p.arguments = [path]
+    try? p.run()   // fire-and-forget; never waited on, survives overlay teardown
+}
 
 // Authoritative lock-state poll. The lock/unlock distributed notifications are a
 // fast path, but macOS can drop them (notably with Touch ID / Apple Watch unlock);
@@ -349,6 +386,7 @@ final class Controller: NSObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var distributedObservers: [NSObjectProtocol] = []
     private var isDismissing = false
+    private var blockingStarted = false   // gates the BLOCKING END chime to a block that actually began
 
     // Warning phase (shown before the full kiosk overlay)
     private let warningSeconds: Int
@@ -479,6 +517,12 @@ final class Controller: NSObject {
     }
 
     func start() {
+        // BLOCKING START — the full kiosk overlay is now live. Reached from both the
+        // warning→overlay transition and the no-warning direct path, exactly once.
+        if !blockingStarted {
+            blockingStarted = true
+            playChime()
+        }
         // Disable App Nap so the countdown / lock-poll timers keep firing while the
         // overlay is hidden behind a lock screen. We still ALLOW idle system sleep —
         // sleeping mid-break is fine: the process is suspended and resumes on wake,
@@ -647,6 +691,9 @@ final class Controller: NSObject {
         // NSEvent.removeMonitor on an already-removed token (undefined behaviour).
         guard !isDismissing else { return }
         isDismissing = true
+        // BLOCKING END — only when the full overlay actually ran. A skip/snooze/miss
+        // during the warning phase never started a block, so it gets no end cue.
+        if blockingStarted { playChime() }
         warningTimer?.invalidate(); warningTimer = nil
         warningWindow?.close(); warningWindow = nil
         countdownTimer?.invalidate()
@@ -709,6 +756,7 @@ final class Controller: NSObject {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             enterFullOverlay(); return
         }
+        playChime()   // NOTIF START — the pre-roll panel is appearing
         // Snooze sits next to Skip; only offered when there's a row to reschedule.
         let showSnooze = canWrite && snoozeMinutes > 0
         let ww: CGFloat = showSnooze ? 560 : 460, wh: CGFloat = 64
