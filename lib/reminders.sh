@@ -139,6 +139,18 @@ pbrain_overlay_build() {
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
   pbrain_swift_build "$PBRAIN_OVERLAY_APP" "$lib_dir/pbrain-overlay.swift" "com.pbrain.overlay" \
     --plist-extra '  <key>LSUIElement</key><true/>'
+  # Ship the lifecycle chime INTO the app bundle's Resources so Bundle.main resolves
+  # it from any launchd/GUI session. Idempotent: only (re)copies when the bundled
+  # copy is missing or differs from the shipped source. Best-effort — a missing
+  # asset just leaves the overlay chimeless (it degrades silently).
+  local chime_src="$lib_dir/assets/chime.mp3"
+  local chime_dst="$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3"
+  if [[ -f "$chime_src" && -d "$PBRAIN_OVERLAY_APP/Contents" ]]; then
+    if [[ ! -f "$chime_dst" ]] || ! cmp -s "$chime_src" "$chime_dst"; then
+      mkdir -p "$PBRAIN_OVERLAY_APP/Contents/Resources" 2>/dev/null \
+        && cp -f "$chime_src" "$chime_dst" 2>/dev/null || true
+    fi
+  fi
 }
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
@@ -171,6 +183,13 @@ pbrain_overlay_show() {
     [[ "$mark_done" == "1" ]] && args+=(--mark-done)
     [[ -n "$warning" ]]       && args+=(--warning-seconds "$warning")
     [[ -n "$snooze" ]]        && args+=(--snooze-minutes "$snooze")
+    # Lifecycle chime (notif-start / blocking-start / blocking-end). Translate the
+    # env gate into argv, since env doesn't survive `open -n`. PBRAIN_OVERLAY_CHIME
+    # in {0,off,false,no} (any case) mutes it; PBRAIN_CHIME_FILE overrides the clip.
+    case "$(printf '%s' "${PBRAIN_OVERLAY_CHIME:-}" | tr '[:upper:]' '[:lower:]')" in
+      0|off|false|no) args+=(--no-chime) ;;
+      *) [[ -n "${PBRAIN_CHIME_FILE:-}" ]] && args+=(--chime "$PBRAIN_CHIME_FILE") ;;
+    esac
     if command -v open >/dev/null 2>&1; then
       open -n "$PBRAIN_OVERLAY_APP" --args "${args[@]}" >/dev/null 2>&1 && return 0
     fi
