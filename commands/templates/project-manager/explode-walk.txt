@@ -1,0 +1,70 @@
+---
+INSTRUCTIONS — interactive task EXPLODE. PM_EXPLODE above is a JSON object for
+ONE issue the user wants broken down. This is a Socratic walk — the same spirit
+as /discuss and /journal's open questions: ONE question at a time, pull on the
+thread the user just gave you, don't widen, don't pre-solution. You draw out the
+breakdown together, then write it back to Plane. Read-only until the user says go.
+
+BRANCH ON `status` FIRST
+  • "none"      → the ref matched nothing. Say so; offer to create it
+                  (${PM_SELF} issue --project <R> --title "<t>"). Stop.
+  • "ambiguous" → several matches in `candidates` (tie·id·title·project). Show a
+                  tight shortlist, ask which one, then re-run
+                  ${PM_SELF} explode "<that PB-id>" and continue.
+  • "error"     → relay `error` plainly, help fix, don't loop.
+  • "ok"        → proceed. You have: tie, id, title, description, priority, state,
+                  has_estimate_scale, estimate_points[], existing_subissues[].
+
+STEP 0 — READ THE CONTEXT SILENTLY
+  Absorb the title, current description, and existing_subissues. Do NOT dump the
+  JSON back at the user. One short opening line naming the task is enough, then
+  go straight to the first question. Never re-create a child whose title already
+  appears in existing_subissues — if the user heads there, offer to extend it.
+
+STEP 1 — THE SOCRATIC INTERVIEW (one question at a time)
+  Mechanism:
+    • If the AskUserQuestion tool is available, ask ONE question per call, with
+      2–4 concrete suggested `options` drawn from THIS issue's context (the tool
+      auto-adds a free-form "Other" — never add your own "Other"/"Something else"
+      option). multiSelect only when several answers can genuinely co-apply.
+    • If AskUserQuestion is NOT available (e.g. the Codex CLI), fall back to plain
+      conversational questions — still one at a time, exactly like /discuss.
+  Rules (same as /discuss): each question follows from the last answer — pull the
+  thread, don't introduce a new one. No advice, no reflexive validation. Stay
+  curious. Don't ask what the user already told you (it's in the description).
+
+  The thread to pull, roughly in this order — but follow the user, not the list:
+    a) DONE — what does "done" look like for this task? What's the outcome?
+    b) SEAMS — where does it naturally split? What are the real sub-steps?
+    c) ORDER & DEPS — which part must land before another? Any blockers?
+    d) SIZING — are any pieces > ~1h? Split those toward ~30m–1h sub-issues.
+    e) SCOPE — what's explicitly OUT of scope / a non-goal for this issue?
+  Stop when the breakdown feels complete — check like /discuss does: "Does that
+  capture the whole thing, or is there a piece we're missing?"
+
+STEP 2 — SYNTHESIZE & CONFIRM (no writes yet)
+  Replay, in the user's own words:
+    • the refined PARENT DESCRIPTION (what the task is, why it matters, what done
+      looks like, what's out of scope) — telegraphic, not padded; and
+    • the ordered SUB-ISSUE list (title + rough size, dependencies noted).
+  Get an explicit yes before writing anything. If they tweak, fold it in and
+  re-confirm. Never auto-commit.
+
+STEP 3 — APPLY (decision: sub-issues + refined parent description)
+  One batch creates the children and rewrites the parent description:
+    ${PM_SELF} update --edits '[
+      {"tie":"<tie>","field":"description","value":"<refined description, HTML ok>"},
+      {"tie":"<tie>","field":"subissue","value":"<child 1 title>"},
+      {"tie":"<tie>","field":"subissue","value":"<child 2 title>"}]'
+  Set priority/estimate too ONLY if the user clearly landed on them in the walk
+  (estimate only when has_estimate_scale is true — value must be one of
+  estimate_points). Don't interrogate for them; this explode is about the breakdown.
+  RELATIONS between freshly-created children need their new ties, which only exist
+  AFTER the create returns. If dependencies surfaced, do a SECOND pass: re-find the
+  new children (or read the create result), then wire relation:<blocking|blocked_by>
+  in another update. If the API can't wire a relation, hand back the exact Plane-UI
+  steps — don't fail silently.
+
+STEP 4 — REPORT
+  One compact table: child | size | order | depends-on. Then the parent's new
+  state in one line. Relay any PLANE_ERROR plainly; don't loop.

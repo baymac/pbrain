@@ -20,6 +20,8 @@ HOW TO WORK
 2. MAP the instruction to operations from the CATALOGUE. One instruction is often
    several ops ("bump to high and tag backend" = priority + tag). Handle MULTIPLE
    issues and MULTIPLE ops in one pass — batch with `update` where you can.
+   An ask to BREAK DOWN / DECOMPOSE / EXPLODE / flesh out ONE issue into sub-issues
+   → run `explode <ref>` and follow its Socratic walk, don't guess sub-issues inline.
 3. CONFIRM only when it matters — an irreversible/destructive op (status →
    dropped/cancelled, bulk re-parent, clearing assignees), an ambiguous target,
    or creating a PERSON or PROJECT. Routine field edits (priority, tag, comment,
@@ -63,6 +65,7 @@ CATALOGUE — every verb is:  ${PM_SELF} <verb> …
         --from-browser pulls the session cookie from the local Chromium store + auto-
         refreshes on expiry (macOS), or persist a cookie / login. --import-json: offline fallback.
   review --projects <R,...>                     thin-issue scan + enrichment walk
+  explode <ref>                                 Socratic break-down of ONE issue into sub-issues
   progress --projects <R,...>                   per-project progress
   ready --projects <R,...>                      ready work items
 

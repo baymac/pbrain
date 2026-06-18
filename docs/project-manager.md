@@ -48,6 +48,7 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `progress --projects a,b [--since DATE]` | Per-project progress: `pct` (estimate-weighted when present, else count), status counts, items completed since `DATE`. The engine behind `/plan-my-work`'s progress report. |
 | `find <ref> [--project R]` | Resolve an issue by URL, id (`PB-26`), bare sequence, or **fuzzy name** → candidate cards `{tie, id, title, state, project}`. The resolver behind plain-language editing. |
 | `review --projects a,b` | **Read-only** scan for thin issues (flags ⊆ `no_description \| no_priority`). Absent fields are "can't assess," not thin. Followed by the dual-mode enrichment-walk instructions. |
+| `explode <ref> [--project R]` | **Read-only** context for breaking ONE issue down. Resolves the ref, then prefetches its description + existing sub-issues + estimate scale and emits a **Socratic walk** (see below). |
 | `enrich` / `update --edits '<json>'` | The generic write path: `[{tie,field,value}]`. `field` ∈ description · title · priority · target_date/due · start_date · estimate · assignees(name\|uuid) · tag/untag/labels · state · parent · cycle · module · comment · link · subissue · relation:&lt;type&gt;. One batch shares a creation-guard + cache. |
 | `move <tie> --to <status>` | Status (`todo\|doing\|done\|blocked\|dropped`). |
 | `priority <tie> --value <p>` | Priority (`urgent\|high\|medium\|low\|none`). |
@@ -96,6 +97,10 @@ A snapshot is `plane-YYYYMMDD-HHMMSS.tar.gz` containing `db.dump` (logical `pg_d
 ## The review walk (dual-mode)
 
 `review` proposes nothing on its own — it scans, then follows the enrichment-walk instructions. **Invoked directly**, it walks the flagged issues **one at a time**, suggests a concrete enrichment per issue, and writes **only on an explicit yes** — never auto-committing a flag you declined. **Invoked by `/plan-my-work`** (executor mode), it grooms fast — infers sensible values as a PM would (description, priority, assignee, relations, sub-tasks, backlog→todo) and applies them in batches without interrogating you, so the morning planner just gets ready work.
+
+## Exploding a task (interactive break-down)
+
+Where `review` scans many thin issues and infers, `explode <ref>` takes the ONE issue you name and breaks it down **with** you — a Socratic, one-question-at-a-time walk in the spirit of `/discuss` and `/journal`'s open questions. It uses the `AskUserQuestion` tool (suggested options drawn from the issue, plus a free-form answer; it falls back to plain conversation where that tool isn't available, e.g. the Codex CLI) to draw out what "done" looks like, the natural seams to split on, ordering/dependencies, sizing (toward ~30m–1h sub-issues), and what's out of scope. It prefetches the issue's existing sub-issues so it never proposes a duplicate. Once you confirm, it writes the refined parent **description** plus each child as a `subissue` in one batch, then reports a compact table. Drive it in plain words too — "break down PB-24 into sub-issues" routes here.
 
 ## Environment
 

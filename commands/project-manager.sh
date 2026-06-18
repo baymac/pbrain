@@ -197,7 +197,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -209,7 +209,7 @@ fi
 # Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|enrich|move|priority|timeline|completed|issue|project-create)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|enrich|move|priority|timeline|completed|issue|project-create)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — this needs a configured Plane instance."
@@ -476,6 +476,19 @@ PYEOF
     PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
     export PM_SELF
     envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/review-walk.txt"
+    ;;
+
+  # ===== interactive task explode (PB-24): Socratic break-down of ONE issue ===
+  explode)
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag ref)}"
+    [[ -n "$ref" ]] || { echo "Usage: /project-manager explode <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
+    echo "PM_EXPLODE"
+    python3 "$PLANE" explode "$ref" ${F_project:+--project "$F_project"} || true
+    echo ""
+    PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+    export PM_SELF
+    envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/explode-walk.txt"
     ;;
 
   enrich)
