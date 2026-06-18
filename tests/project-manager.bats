@@ -33,7 +33,11 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "config wires pbrain to the local instance and flips backend to plane" {
-  run PM config --api-key SECRET --workspace ws --project pid
+  # Stub docker to exit 1 so _default_base_url's discovery finds no local Plane
+  # (a real Plane on the dev box must not leak its port into the default).
+  STUB="$TMP/nodock"; mkdir -p "$STUB"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/docker"; chmod +x "$STUB/docker"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/project-manager.sh" config --api-key SECRET --workspace ws --project pid
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLANE_CONFIGURED"* ]]
   [[ "$output" == *"backend=plane"* ]]
@@ -41,11 +45,27 @@ teardown() { rm -rf "$TMP"; }
   grep -q '"backend": "plane"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
+@test "estimates --import-json caches the scale; estimate field then resolvable" {
+  PM setup --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid >/dev/null
+  payload='[{"id":"e1","type":"points","last_used":true,"name":"Points","points":[{"id":"u1","value":"1"},{"id":"u3","value":"3"}]}]'
+  run PM estimates --project pid --import-json "$payload" --hours-per-point 1.5
+  [[ "$output" == *PM_ESTIMATES* ]] && [[ "$output" == *'"hours_per_point": 1.5'* ]] && grep -q '"3": "u3"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
 @test "setup (Cloud/remote path) passes base-url through with no localhost default" {
   run PM setup --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid
   [ "$status" -eq 0 ]
   [[ "$output" == *"PM_SETUP"* ]]
   grep -q '"base_url": "https://api.plane.so"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+@test "config auto-detects the vhost port from plane.env (loopback default)" {
+  # Default flow runs vhost (off :80) before config; config picks the live
+  # 127.0.0.1:<port> from plane.env instead of plain http://localhost.
+  mkdir -p "$PBRAIN_PLANE_HOME"
+  printf 'APP_DOMAIN=plane.localhost:1800\nLISTEN_HTTP_PORT=1800\n' > "$PBRAIN_PLANE_HOME/plane.env"
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  grep -q '"base_url": "http://127.0.0.1:1800"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
 @test "status reflects config + backend" {
@@ -123,8 +143,46 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"PM_MOVE"* ]]
 }
 
-@test "unknown subcommand exits non-zero with a hint" {
-  run PM frobnicate
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"unknown /project-manager subcommand"* ]]
+@test "an unknown first token routes to the NL router (not an error)" {
+  # With the router, free text is an instruction, not an error: configured →
+  # PM_ROUTE with the words echoed back.
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM frobnicate the gym bug up to high
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_ROUTE"* && "$output" == *"instruction: frobnicate the gym bug up to high"* ]]
+}
+
+# --- the richer write/lookup verbs (the catalogue) --------------------------
+@test "a write verb is gated by the Plane guard when unset" {
+  run PM tag PB-1 --add backend
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_NOT_CONFIGURED"* ]]
+}
+
+@test "find + write/lookup verbs emit their PM_* tokens (engine degrades on unreachable Plane)" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM find PB-1;                   [[ "$output" == *"PM_FIND"* ]]
+  run PM tag PB-1 --add x;            [[ "$output" == *"PM_TAG"* ]]
+  run PM comment PB-1 --body hi;      [[ "$output" == *"PM_COMMENT"* ]]
+  run PM assign PB-1 --to kylo;       [[ "$output" == *"PM_ASSIGN"* ]]
+  run PM reparent PB-1 --parent PB-2; [[ "$output" == *"PM_REPARENT"* ]]
+  run PM update --edits '[]';         [[ "$output" == *"PM_UPDATE"* ]]
+  run PM labels;                      [[ "$output" == *"PM_LABELS"* ]]
+}
+
+# --- the NL router (D2) + dual-mode (D3) ------------------------------------
+@test "route emits PM_ROUTE with the catalogue and is goal-aware when invoked directly" {
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM route tag PB-1 backend
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_ROUTE"* && "$output" == *"instruction: tag PB-1 backend"* \
+     && "$output" == *"caller: direct"* && "$output" == *"PLANNING CONTEXT"* && "$output" == *"CATALOGUE"* ]]
+}
+
+@test "executor mode (PBRAIN_PM_CALLER) skips the planning context" {
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  PBRAIN_PM_CALLER=plan-my-work run PM route move PB-1 to todo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"caller: plan-my-work"* && "$output" == *"EXECUTOR MODE"* \
+     && "$output" != *"PLANNING CONTEXT"* ]]
 }

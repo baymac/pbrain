@@ -156,6 +156,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/diet-journal` | Diet log + nutrition analysis + named-food library | `$VAULT/fitness/diet-tracking/` |
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
+| `/clipper <platform> <url>` | Save an online video as a clean, faithful long-form transcript ("clip"). Platform subcommands — `x` (X/Twitter) and `yt` (YouTube). The script does the technical work (browser cookies → `yt-dlp` → VTT cleanup → local Parakeet v3 transcription fallback for caption-less videos); the model only reframes the captions into readable prose — keeps the speaker's words and length, drops filler/ads/plugs, adds punctuation + paragraphs. Not a summary | `$VAULT/agent-work/clips/<platform>/<slug>.md` |
 
 ### Daily flow
 
@@ -176,7 +177,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | After the day is shaped | `/plan-my-work` | Fills the empty blocks with real tasks from Plane — picks today's projects, shows a progress report, packs the tasks. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends the day: reconciles the work tracker (back to Plane), what shipped, what slipped, what carries over. |
 
-`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/project-manager`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, and `/organize-clippings` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
+`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/project-manager`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, `/organize-clippings`, and `/clipper <platform> <url>` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -209,6 +210,10 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_TRACKER_POLL` / `PBRAIN_TRACKER_IDLE` | `/laptop-tracking` (daemon poll interval / idle-away threshold, seconds) | `10` / `300` |
 | `PBRAIN_LAPTOP_CATEGORIES_FILE` | `/laptop-tracking` (domain/app → category map behind the *Deep work* focus score) | `$VAULT/life/laptop-tracking/categories.md` |
 | `PBRAIN_THOUGHTS_DIR` | `/thoughts` | `$VAULT/life/thought-tracking` |
+| `PBRAIN_CLIPPER_DIR` | `/clipper` (clips parent; `<platform>` are subdirs) | `$VAULT/agent-work/clips` |
+| `PBRAIN_CLIPPER_COOKIES_BROWSER` / `PBRAIN_CLIPPER_COOKIES_FILE` | `/clipper` (`yt-dlp` cookie source — browser jar / `cookies.txt`; `none` disables) | `brave` / unset |
+| `PBRAIN_CLIPPER_SUB_LANGS` | `/clipper` (subtitle langs to fetch) | `en,en-orig,en-US,en-GB` |
+| `PBRAIN_CLIPPER_FLUIDAUDIO_BIN` / `_DIR` / `_REF` / `_MODEL_DIR` | `/clipper` (no-caption fallback: prebuilt `fluidaudiocli` / build dir / git tag / Parakeet v3 model dir) | (unset) / `~/.config/pbrain/fluidaudio` / `v0.15.4` / FluidAudio cache |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_NOTES_DIR` | `/discuss` | `$VAULT/agent-work/notes` |
@@ -225,6 +230,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_HABIT_SUGGEST_FILE` | `/habits` + journaling commands (new-habit nudge suppress-list) | `~/.config/pbrain/habit-suggest-seen` |
 | `PBRAIN_HABIT_SUGGEST_TTL_DAYS` | `/habits` + journaling commands | `14` (days a suggested habit stays suppressed) |
 | `PBRAIN_PLANE_BASE_URL` / `PBRAIN_PLANE_API_KEY` / `PBRAIN_PLANE_WORKSPACE` / `PBRAIN_PLANE_PROJECT` / `PBRAIN_PLANE_DEFAULT_EST_H` | Plane backend (env overrides for `~/.config/pbrain/plane.json`; the token is local-only, never synced) | config file / `2`h |
+| `PBRAIN_PLANE_SESSION_COOKIE` / `PBRAIN_PLANE_EMAIL` / `PBRAIN_PLANE_PASSWORD` | Plane **internal-API** auth, used only to auto-fetch estimate scales (story points) the public token API can't enumerate — a session cookie, or login creds that auto-refresh. Local-only, never synced; see `/project-manager estimates` | config file / unset |
 | `PBRAIN_PLANE_HOME` | `/init-plane` — where Plane's `setup.sh` + its Docker data live | `~/.config/pbrain/plane-selfhost` |
 | `PBRAIN_WEEKLY_DIR` | `/weekly-review` | `$VAULT/life/weekly-tracking` |
 | `PBRAIN_MONTHLY_DIR` | `/monthly-review` | `$VAULT/life/monthly-tracking` |

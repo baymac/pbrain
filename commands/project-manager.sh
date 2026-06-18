@@ -44,7 +44,9 @@ set -euo pipefail
 #                         subissue/subtask (value=title, creates a sub-issue),
 #                         relation:<type> (value=target tie; types: blocking, blocked_by,
 #                         relates_to, duplicate, start_after, start_before, finish_after,
-#                         finish_before). estimate_point needs a Plane estimate scheme.
+#                         finish_before), estimate (value = a point on the project's
+#                         scale, e.g. "3"; resolves to its estimate_point UUID — needs a
+#                         cached scale, see the `estimates` verb).
 #   move <tie> --to <status>           Move one issue's status.
 #   priority <tie> --value <p>          Set one issue's priority.
 #   timeline <tie> --target-date <d>    Set one issue's target date.
@@ -52,6 +54,33 @@ set -euo pipefail
 #                         Create a new issue in an existing project.
 #   project-create --name N [--shortcut s]
 #                         Create a new Plane project and add it to the registry.
+#   --- richer write / lookup verbs (the catalogue the NL router targets) ---
+#   <plain words>         Natural-language instruction → routed to the verbs below
+#                         (or explicit: route <words>). E.g. "bump PB-26 to high,
+#                         tag backend". Resolves the issue, maps to ops, executes.
+#   find <ref> [--project R]   Resolve URL | PB-26 | seq | name fragment → card(s).
+#   update --edits '<json>'    Apply [{tie,field,value}] — any field family, batched.
+#   tag <tie> --add a,b [--remove c] [--set x,y]   Labels (auto-created, capped).
+#   assign <tie> --to <name|email|uuid>            Assignee by fuzzy name; '' clears.
+#   comment <tie> --body <text>                    Add a comment.
+#   reparent <tie> --parent <PB-12|none>           Re-parent / un-parent an issue.
+#   cycle|module <tie> --name <name>               Add the issue to a cycle / module.
+#   labels|members|cycles|modules [--project R]    List the project's name→uuid tables.
+#   estimates [--project R] [--create [--template fibonacci|linear|squares|tshirt]
+#             [--type points|categories|time] [--scale a,b,c] [--name N] [--replace]]
+#             [--hours-per-point N] [--from-browser [--browser b] | --session-cookie C
+#             | --email E --password P] [--import-json J]
+#                         Show / create / live-fetch the project's estimate scale
+#                         (story-point→uuid map + points→hours factor /plan-my-work packs
+#                         blocks with). The scale is read LIVE every run (never cached, so
+#                         manual edits in Plane show immediately). --create makes + activates
+#                         a scale (default Fibonacci points; --template for UI presets incl.
+#                         t-shirt, --replace to switch type; only points scales feed planning).
+#                         The public API can't enumerate/create points → internal API. Internal auth:
+#                         --from-browser pulls the session cookie from the local Chromium
+#                         store + auto-refreshes on expiry (macOS), or a persisted cookie /
+#                         login. Fetched if estimates exist, else skipped; --import-json is
+#                         the manual fallback. Then the `estimate` field resolves.
 #
 # Overrides:
 #   PBRAIN_PLANE_HOME     where setup.sh + its data live (default
@@ -116,6 +145,23 @@ _vhost_envfile() {
   return 0
 }
 
+# The base_url pbrain should use for the local instance. The default flow moves
+# Plane off port 80 to the named vhost (plane.localhost:1800), so derive the live
+# port from plane.env: a non-80 LISTEN_HTTP_PORT → the loopback form
+# http://127.0.0.1:<port>; otherwise plain http://localhost. Lets `config` wire
+# the right URL without the caller having to remember --base-url.
+_default_base_url() {
+  local envf port
+  envf="$(_vhost_envfile 2>/dev/null || true)"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    port="$(awk -F= '/^LISTEN_HTTP_PORT=/{print $2}' "$envf" | tail -1)"
+    if [[ -n "$port" && "$port" != "80" ]]; then
+      echo "http://127.0.0.1:$port"; return 0
+    fi
+  fi
+  echo "$DEFAULT_URL"
+}
+
 # --- flag parsing (bash-3.2-safe, verbatim from project.sh) ------------------
 # Positionals go in POS[]; each --flag sets an indirect plain var (value flags
 # F_<name>, bool flags B_<name>). One subcommand per process, so no reset.
@@ -123,7 +169,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -137,16 +183,28 @@ _parse_args() {
 _flag() { eval "printf '%s' \"\${F_$1:-}\""; }
 _has_bool() { eval "[[ -n \"\${B_$1:-}\" ]]"; }
 
+RAW_ARGS="$*"               # the full instruction text, for the NL router
 SUB="${1:-probe}"
-[[ $# -gt 0 ]] && shift || true
 
-# Ops subcommands need a configured Plane instance. The setup family
+# The known verbs. ANYTHING ELSE that arrives with args is treated as a
+# natural-language instruction and routed (D2): "bump the auth bug to high and
+# tag it backend" → resolve the issue, map to priority+tag, execute.
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates route help -h --help "
+_pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
+
+if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
+  SUB="route"               # free text → NL router; RAW_ARGS carries the instruction
+else
+  [[ $# -gt 0 ]] && shift || true
+fi
+
+# Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  test|ping|states|projects|ready|progress|review|enrich|move|priority|timeline|completed|issue|project-create)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|enrich|move|priority|timeline|completed|issue|project-create)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
-      echo "Plane isn't set up yet — '$SUB' needs a configured Plane instance."
+      echo "Plane isn't set up yet — this needs a configured Plane instance."
       echo "Set one up with /init-plane (local self-host) or /project-manager setup"
       echo "(Plane Cloud / a remote host), then re-run. Task planning and project"
       echo "progress require Plane; the rest of pbrain works fine without it."
@@ -212,11 +270,13 @@ case "$SUB" in
       echo "INIT_PLANE_ERROR lib/plane.py not found at $PLANE" >&2; exit 1
     fi
     echo "INIT_PLANE_CONFIG"
-    # Default base-url to the local instance when the caller doesn't pass one.
+    # Default base-url to the active local instance when the caller doesn't pass
+    # one (the vhost loopback http://127.0.0.1:1800 once Plane is moved off :80,
+    # else http://localhost) — see _default_base_url.
     has_base=no
     for a in "$@"; do [[ "$a" == "--base-url" ]] && has_base=yes; done
     if [[ "$has_base" == no ]]; then
-      python3 "$PLANE" setup --base-url "$DEFAULT_URL" "$@"
+      python3 "$PLANE" setup --base-url "$(_default_base_url)" "$@"
     else
       python3 "$PLANE" setup "$@"
     fi
@@ -397,6 +457,10 @@ PYEOF
     python3 "$PLANE" review \
       ${F_projects:+--projects "$F_projects"} \
       --include-backlog || true
+    echo ""
+    PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+    export PM_SELF
+    envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/review-walk.txt"
     ;;
 
   enrich)
@@ -463,13 +527,157 @@ PYEOF
       --date "$(_flag date)" || true
     ;;
 
+  # ===== richer write/lookup verbs (the catalogue the NL router targets) =====
+  find)
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag ref)}"
+    [[ -n "$ref" ]] || { echo "Usage: /project-manager find <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
+    echo "PM_FIND"
+    python3 "$PLANE" find "$ref" ${F_project:+--project "$F_project"} || true
+    ;;
+
+  update)
+    _parse_args "$@"
+    echo "PM_UPDATE"
+    python3 "$PLANE" update --edits "${F_edits:-[]}" || true
+    ;;
+
+  tag)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"
+    [[ -n "$tie" ]] || { echo "Usage: /project-manager tag <tie> --add a,b [--remove c] [--set x,y]" >&2; exit 1; }
+    echo "PM_TAG"
+    python3 "$PLANE" tag --tie "$tie" \
+      ${F_add:+--add "$F_add"} ${F_remove:+--remove "$F_remove"} ${F_set:+--set "$F_set"} || true
+    ;;
+
+  comment)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"; body="$(_flag body)"
+    [[ -n "$tie" && -n "$body" ]] || { echo "Usage: /project-manager comment <tie> --body <text>" >&2; exit 1; }
+    echo "PM_COMMENT"
+    python3 "$PLANE" comment --tie "$tie" --body "$body" || true
+    ;;
+
+  assign)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"
+    # --to must be PRESENT (even empty, to clear). Absent → don't silently clear.
+    [[ -n "$tie" && -n "${F_to+x}" ]] || {
+      echo "Usage: /project-manager assign <tie> --to <name|email|uuid>  (--to '' clears)" >&2; exit 1; }
+    echo "PM_ASSIGN"
+    python3 "$PLANE" assign --tie "$tie" --to "$(_flag to)" || true
+    ;;
+
+  reparent)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"; parent="$(_flag parent)"
+    [[ -n "$tie" && -n "$parent" ]] || { echo "Usage: /project-manager reparent <tie> --parent <PB-12|none>" >&2; exit 1; }
+    echo "PM_REPARENT"
+    python3 "$PLANE" reparent --tie "$tie" --parent "$parent" || true
+    ;;
+
+  cycle)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"; name="$(_flag name)"
+    [[ -n "$tie" && -n "$name" ]] || { echo "Usage: /project-manager cycle <tie> --name <cycle name>" >&2; exit 1; }
+    echo "PM_CYCLE"
+    python3 "$PLANE" cycle --tie "$tie" --name "$name" || true
+    ;;
+
+  module)
+    _parse_args "$@"
+    tie="${POS[0]:-$(_flag tie)}"; name="$(_flag name)"
+    [[ -n "$tie" && -n "$name" ]] || { echo "Usage: /project-manager module <tie> --name <module name>" >&2; exit 1; }
+    echo "PM_MODULE"
+    python3 "$PLANE" module --tie "$tie" --name "$name" || true
+    ;;
+
+  labels|members|cycles|modules)
+    _parse_args "$@"
+    echo "PM_$(printf '%s' "$SUB" | tr '[:lower:]' '[:upper:]')"
+    python3 "$PLANE" "$SUB" ${F_project:+--project "$F_project"} || true
+    ;;
+
+  estimates)
+    _parse_args "$@"
+    echo "PM_ESTIMATES"
+    python3 "$PLANE" estimates \
+      ${F_project:+--project "$F_project"} \
+      ${F_import_json:+--import-json "$F_import_json"} \
+      ${F_hours_per_point:+--hours-per-point "$F_hours_per_point"} \
+      ${F_session_cookie:+--session-cookie "$F_session_cookie"} \
+      ${F_browser:+--browser "$F_browser"} \
+      ${F_email:+--email "$F_email"} \
+      ${F_password:+--password "$F_password"} \
+      ${F_scale:+--scale "$F_scale"} \
+      ${F_name:+--name "$F_name"} \
+      ${F_template:+--template "$F_template"} \
+      ${F_type:+--type "$F_type"} \
+      $(_has_bool from_browser && printf '%s' --from-browser) \
+      $(_has_bool create && printf '%s' --create) \
+      $(_has_bool replace && printf '%s' --replace) || true
+    ;;
+
+  # ===== natural-language router (D2): vague instruction → specific verbs =====
+  route)
+    CALLER="${PBRAIN_PM_CALLER:-}"
+    INSTR="${RAW_ARGS#route }"
+    PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+    echo "PM_ROUTE"
+    echo "instruction: $INSTR"
+    echo "caller: ${CALLER:-direct}"
+    echo "project_manager_cmd: $PM_SELF"
+    echo ""
+    echo "=== PROJECT REGISTRY (id | name | shortcut) ==="
+    pbrain_projects_registry_json 2>/dev/null || echo "[]"
+    echo ""
+    if [[ -z "$CALLER" ]]; then
+      # DIRECT invocation → load planning context so routing is goal-aware (D3).
+      PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
+      STORE="$(pbrain_profile_store "$PLAN_DIR" 2>/dev/null || true)"
+      ISO_WEEK="$(python3 -c 'import datetime;t=datetime.date.today();y,w,_=t.isocalendar();print(f"{y}-W{w:02d}")')"
+      MONTH_YEAR="$(date +%Y-%m)"
+      PROFILE_FILE="$(pbrain_profile_latest "$STORE" plans-profile 2>/dev/null || true)"
+      WEEKLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$STORE" weekly-goals "$ISO_WEEK" 2>/dev/null || true)"
+      MONTHLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$STORE" monthly-goals "$MONTH_YEAR" 2>/dev/null || true)"
+      echo "=== PLANNING CONTEXT (direct invocation — weigh the instruction against these) ==="
+      echo "iso_week: $ISO_WEEK   month: $MONTH_YEAR"
+      if [[ -n "$PROFILE_FILE" ]]; then
+        echo "--- current_focus (lean: id·title·track·priority·deadline·project) ---"
+        pbrain_profile_json "$PROFILE_FILE" | python3 -c "import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+keys=('id','title','goal','track','priority','deadline','plane_project','project_name')
+print(json.dumps([{k:f.get(k) for k in keys if f.get(k) is not None}
+                  for f in d.get('current_focus',[])], ensure_ascii=False))" 2>/dev/null || echo "[]"
+      fi
+      echo "--- this week's goals ($ISO_WEEK) ---"
+      if [[ -n "$WEEKLY_GOALS_FILE" ]]; then cat "$WEEKLY_GOALS_FILE" 2>/dev/null || true; else echo "(none set — /weekly-review creates these)"; fi
+      echo "--- this month's goals ($MONTH_YEAR) ---"
+      if [[ -n "$MONTHLY_GOALS_FILE" ]]; then cat "$MONTHLY_GOALS_FILE" 2>/dev/null || true; else echo "(none set — /monthly-review creates these)"; fi
+    else
+      echo "=== EXECUTOR MODE (invoked by $CALLER) ==="
+      echo "Do exactly the instruction below — no grooming, no planning deliberation,"
+      echo "minimal questions. $CALLER already made the decisions; you just execute in Plane."
+    fi
+    echo ""
+    export INSTR CALLER PM_SELF
+    envsubst '$INSTR $CALLER $PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/catalogue.txt"
+    ;;
+
   help|-h|--help)
     awk 'NR>2 && /^#/ {sub(/^# ?/,""); print; next} NR>2 {exit}' "$_SCRIPT_DIR/project-manager.sh"
     ;;
 
   *)
+    # Unreachable in practice: an unknown first token is treated as a natural-
+    # language instruction and routed above. Kept as a defensive fallback.
     echo "pbrain: unknown /project-manager subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | vhost | status | setup | use | test | states | projects | ready | progress | review | enrich | move | priority | timeline | issue | project-create" >&2
+    echo "Verbs: probe|fetch|up|config|vhost|status|setup|use|test|states|projects|ready|" >&2
+    echo "  progress|review|enrich|move|priority|timeline|issue|project-create|find|update|" >&2
+    echo "  tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules" >&2
+    echo "Or just describe what you want in plain words — it'll be routed." >&2
     exit 1
     ;;
 esac

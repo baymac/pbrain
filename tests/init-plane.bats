@@ -33,7 +33,11 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "config wires pbrain to the local instance and switches backend to plane" {
-  run IP config --api-key SECRET --workspace ws --project pid
+  # Stub docker to exit 1 so _default_base_url's discovery finds no local Plane
+  # (a real Plane on the dev box must not leak its port into the default).
+  STUB="$TMP/nodock"; mkdir -p "$STUB"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/docker"; chmod +x "$STUB/docker"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" config --api-key SECRET --workspace ws --project pid
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLANE_CONFIGURED"* ]]
   [[ "$output" == *"backend=plane"* ]]
@@ -46,6 +50,14 @@ teardown() { rm -rf "$TMP"; }
   run IP config --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid
   [ "$status" -eq 0 ]
   grep -q '"base_url": "https://api.plane.so"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+@test "config auto-detects the vhost port from plane.env (defaults base_url to the loopback)" {
+  # Default flow runs vhost (off :80) before config; config should pick the live
+  # 127.0.0.1:<port> from plane.env rather than the plain http://localhost.
+  _seed_plane_env 1800
+  IP config --api-key SECRET --workspace ws --project pid >/dev/null
+  grep -q '"base_url": "http://127.0.0.1:1800"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
 @test "probe reflects the config + configured state after wiring" {
@@ -85,13 +97,14 @@ teardown() { rm -rf "$TMP"; }
 # discovery-by-docker-inspect fallback here — the explicit PBRAIN_PLANE_HOME
 # path is the documented one.
 _seed_plane_env() {
+  local port="${1:-80}" dom="${2:-localhost}"
   mkdir -p "$PBRAIN_PLANE_HOME"
-  cat > "$PBRAIN_PLANE_HOME/plane.env" <<'ENV'
-APP_DOMAIN=localhost
-LISTEN_HTTP_PORT=80
+  cat > "$PBRAIN_PLANE_HOME/plane.env" <<ENV
+APP_DOMAIN=$dom
+LISTEN_HTTP_PORT=$port
 LISTEN_HTTPS_PORT=443
-WEB_URL=http://${APP_DOMAIN}
-CORS_ALLOWED_ORIGINS=http://${APP_DOMAIN}
+WEB_URL=http://\${APP_DOMAIN}
+CORS_ALLOWED_ORIGINS=http://\${APP_DOMAIN}
 ENV
 }
 _stub_docker() {

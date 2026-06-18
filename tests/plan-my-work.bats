@@ -43,8 +43,29 @@ committed: true
 \`\`\`json
 {"working_style":{"session_length_min":90,"break_min":30,"work_hours_per_day":7,"last_block_end":"18:00"},
  "daily_anchors":{"bed_target":"23:00"},
- "typical_day":{"rest_days":["sat","sun"]}}
+ "typical_day":{"rest_days":["sat","sun"]},
+ "current_focus":[{"id":"secret-focus","title":"only-plan-my-day-needs-this"}]}
 \`\`\`
+EOF
+}
+
+# A planned day with a populated "## Work tracker" (for the task-verb tests).
+seed_plan_with_tracker() {
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 10:00–11:30 | Block 1 (10:00–11:30) | ship | — |
+
+## Work tracker
+
+| Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Block 1 (10:00–11:30) | ship | Lettuce | lt:abc | high | 2h | planned | | | | |
+
+## How it went
 EOF
 }
 
@@ -155,4 +176,35 @@ EOF
     [[ "$output" == *"PLAN_MY_WORK_TASK"* ]]
     [[ "$output" == *"action: $action"* ]]
   done
+}
+
+# --- separation of concern + externalization (the refactor) -----------------
+@test "session delegates grooming to /project-manager and carries no inline triage" {
+  seed_profile
+  configure_plane
+  run PMW
+  [ "$status" -eq 0 ]
+  # READY-CHECK hands grooming to PM in executor mode; the old inline ENRICH+TRIAGE
+  # block (and its hardcoded assignee uuid) is gone.
+  [[ "$output" == *"READY-CHECK"* && "$output" == *"PBRAIN_PM_CALLER=plan-my-work"* \
+     && "$output" != *"ENRICH + TRIAGE"* && "$output" != *"e364da77-b440"* ]]
+}
+
+@test "session profile is leaned to working_style (current_focus dropped)" {
+  seed_profile         # the seed carries a 'secret-focus' current_focus item
+  configure_plane
+  run PMW
+  [ "$status" -eq 0 ]
+  # WORK_PROFILE_JSON keeps working_style but drops current_focus (that's plan-my-day's).
+  [[ "$output" == *"working_style"* && "$output" != *"secret-focus"* ]]
+}
+
+@test "task add emits the externalized template with a PM hand-off" {
+  seed_profile
+  seed_plan_with_tracker
+  run PMW task add
+  [ "$status" -eq 0 ]
+  # the inline heredoc is gone — task-add.txt is emitted, and creation hands off to PM.
+  [[ "$output" == *"INSTRUCTIONS — task add"* && "$output" == *"<link | PB-26 | name fragment>"* \
+     && "$output" == *"project-manager.sh"* ]]
 }

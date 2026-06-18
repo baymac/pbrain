@@ -137,3 +137,50 @@ pbrain_projects_completed_today_json() {
   fi
   echo "[]"
 }
+
+# Resolve an issue reference (URL | PB-26 | bare seq | name fragment) → JSON array
+# of candidate cards {tie,id,issue_id,project,title,state,priority}. The caller
+# (the model) disambiguates when >1 comes back. Empty array when Plane is off.
+pbrain_projects_find_json() {
+  local ref="${1:-}" project="${2:-}"
+  [[ -n "$ref" ]] || { echo "[]"; return 0; }
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run find "$ref" ${project:+--project "$project"})"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "[]"
+    return 0
+  fi
+  echo "[]"
+}
+
+# Project labels / members / cycles as JSON — the name→UUID lookup tables the
+# router resolves vague references against. Each takes an optional project ref
+# (defaults to the lone/first project) and degrades to [] when Plane is off.
+pbrain_projects_labels_json() {
+  local project="${1:-}"
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run labels ${project:+--project "$project"})"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "[]"
+    return 0
+  fi
+  echo "[]"
+}
+
+pbrain_projects_members_json() {
+  local project="${1:-}"
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run members ${project:+--project "$project"})"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "[]"
+    return 0
+  fi
+  echo "[]"
+}
+
+pbrain_projects_cycles_json() {
+  local project="${1:-}"
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run cycles ${project:+--project "$project"})"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "[]"
+    return 0
+  fi
+  echo "[]"
+}

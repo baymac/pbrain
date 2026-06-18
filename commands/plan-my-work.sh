@@ -5,11 +5,15 @@ set -euo pipefail
 #
 # Runs AFTER /plan-my-day (which lays out the life anchors + empty work blocks).
 # /plan-my-day stopped assigning tasks; /plan-my-work is the work layer:
-#   1. run /project-manager review (so pulled tasks are well-formed),
-#   2. show a progress report keyed off this week's PROJECT-level goals,
+#   1. delegate grooming of this week's goal projects to /project-manager (it owns
+#      every Plane write — this layer never triages inline),
+#   2. show a progress report keyed off this week's PROJECT-level goals (+ monthly),
 #   3. let the user pick today's projects → renormalize their allocation,
 #   4. pull ready tasks from Plane and pack them into the blocks,
 #   5. write a rich "## Work tracker" into the SAME daily file.
+#
+# The session INSTRUCTIONS + the task-verb prompts are externalized to
+# commands/templates/plan-my-work/*.txt (this .sh is a thin dispatcher).
 #
 # It writes into $PLAN_DIR/$TODAY.md — editing in place when /plan-my-day wrote
 # it, or creating a minimal standalone file (now → bed work blocks, no whole-day
@@ -139,6 +143,15 @@ if [[ -z "$PROFILE_FILE" ]]; then
   exit 0
 fi
 PROFILE_JSON="$(pbrain_profile_json "$PROFILE_FILE")"
+# Lean the profile to what the WORK layer needs (working_style + day shape) —
+# current_focus / anti_patterns / planning_guidelines are /plan-my-day's concern.
+WORK_PROFILE_JSON="$(printf '%s' "$PROFILE_JSON" | python3 -c "import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(json.dumps({k:d.get(k) for k in ('working_style','typical_day','daily_anchors','rest_days') if d.get(k) is not None}, ensure_ascii=False))" 2>/dev/null || printf '%s' "$PROFILE_JSON")"
+# Browser base for clickable tracker links (the loopback base_url isn't browsable);
+# override with PBRAIN_PLANE_WEB_BASE if your vhost/workspace slug differs.
+PLANE_WEB_BASE="${PBRAIN_PLANE_WEB_BASE:-http://plane.localhost:1800/pb}"
 
 # --- goals (new project-level schema), registry, progress -------------------
 WEEKLY_GOALS_FILE="$(pbrain_profile_latest_for_period "$STORE" weekly-goals "$ISO_WEEK" || true)"
@@ -197,85 +210,22 @@ if [[ "${1:-}" == "task" ]]; then
   echo "=== TODAY'S PLAN ($OUT_FILE) ==="
   cat "$OUT_FILE"
   echo ""
-  echo "=== PLANS PROFILE (working_style) ==="
-  echo "$PROFILE_JSON"
+  echo "=== PLANS PROFILE (working_style + day shape) ==="
+  echo "$WORK_PROFILE_JSON"
   echo ""
   echo "=== PROJECT REGISTRY ==="
   echo "$REGISTRY_JSON"
   echo ""
 
-  if [[ "$TASK_ACTION" == "list" ]]; then
-    cat <<'TASKLIST'
----
-INSTRUCTIONS — task list. Show the rows of today's "## Work tracker" as a short
-numbered list: number, task, project, Plane id (tie), priority, est, status.
-Do NOT rewrite the file and do NOT touch "Today at a glance". If there are no
-task rows yet, say so in one line. Stop here.
-TASKLIST
-    exit 0
-  fi
-
-  cat <<TASKEDIT
----
-INSTRUCTIONS — task $TASK_ACTION. You are revising TODAY'S EXISTING work tracker
-($OUT_FILE), not rebuilding the day. The plan carries TWO things that stay in sync:
-  • "## Today at a glance" — the gap-free schedule; work blocks flow around the
-    FIXED life anchors (calendar, meals, fitness, walk, bed, habit 🔔). Never
-    disturb those anchors or ✓ done rows.
-  • "## Work tracker" — one row per task pulled from Plane:
-    | Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
-    where "Plane id" carries the full tie (<project_id>:<issue_id>).
-
-WORKING STYLE (from the plans profile JSON above): use working_style.session_length_min
-for block size, working_style.break_min for the gap between blocks, and NEVER
-schedule a work block past working_style.last_block_end.
-TASKEDIT
-
-  if [[ "$TASK_ACTION" == "add" ]]; then
-    cat <<'TASKADD'
-
-For `task add`:
-1. IDENTIFY the task. If the user named a Plane issue, use its tie
-   (<project_id>:<issue_id>); priority/est come from Plane. If it's a brand-new
-   task, offer to create it in Plane first via the project manager
-   (`/project-manager` — capture it under the right project), then pull it. If
-   the user just wants a quick local row, set Plane id = "—".
-2. APPEND a row to "## Work tracker": Block (TBD until placed) | Task | Project |
-   Plane id | Priority | Est | planned | (Done at blank) | (% blank) | (Est
-   rating blank) | (Notes). Leave existing rows untouched.
-3. RE-FLOW "Today at a glance": slot ONE new work block (session_length_min, with
-   a break_min break separating it from an adjacent block) into the next free gap
-   that fits, honoring the fixed anchors and the last_block_end ceiling. If
-   nothing fits before last_block_end, don't silently overflow — offer to (a) do
-   it tomorrow, (b) shrink/drop a block, or (c) extend past last_block_end today.
-   Set the new tracker row's Block to the placed time range.
-4. If the placed block corresponds to a habit with a linked one-shot reminder,
-   realign it (best-effort, silent on failure) with habits_cmd above:
-     bash "<habits_cmd>" reminders-reschedule --habit "<name>" --time "HH:MM" --date TODAY
-TASKADD
-  else
-    cat <<'TASKREMOVE'
-
-For `task remove`:
-1. IDENTIFY the row the user means in "## Work tracker" (by name or list number —
-   quote it back).
-2. CONFIRM-ON-CLOSED-ROW: if its Status is already filled (anything other than
-   "planned"), confirm before removing — /end-of-day's Plane reconcile would
-   otherwise lose a closed task. A plain "planned" row removes without the prompt.
-3. DROP the row from "## Work tracker".
-4. RE-FLOW "Today at a glance": free the removed block — pull later work blocks
-   earlier to close the gap, OR leave the span as a rest/buffer row; SAY which.
-   Keep the table gap-free; never disturb the fixed anchors or ✓ done rows.
-TASKREMOVE
-  fi
-
-  cat <<TASKWRITE
-
-After editing, REWRITE BOTH the "## Today at a glance" work-block rows AND the
-"## Work tracker" TOGETHER and save the full plan back to $OUT_FILE (they must
-never drift apart). Then show the updated blocks + tracker and confirm in one
-line what changed. Do not re-run the full work session. Stop here.
-TASKWRITE
+  # Instructions live in commands/templates/plan-my-work/task-*.txt — the .sh is a
+  # thin dispatcher (mirrors /plan-my-day). Plane writes hand off to /project-manager.
+  PM_CMD="${PM_CMD:-/project-manager}"
+  export OUT_FILE PM_CMD HABITS_CMD TODAY
+  case "$TASK_ACTION" in
+    list)   cat "$_SCRIPT_DIR/templates/plan-my-work/task-list.txt" ;;
+    add)    envsubst '$OUT_FILE $PM_CMD $HABITS_CMD $TODAY' < "$_SCRIPT_DIR/templates/plan-my-work/task-add.txt" ;;
+    remove) envsubst '$OUT_FILE' < "$_SCRIPT_DIR/templates/plan-my-work/task-remove.txt" ;;
+  esac
   exit 0
 fi
 
@@ -357,8 +307,8 @@ echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
 echo "blocks_helper: bash \"$_SCRIPT_DIR/plan-my-work.sh\" blocks --now HH:MM --bed HH:MM --session-min N --break-min N"
 echo "alloc_helper: bash \"$_SCRIPT_DIR/plan-my-work.sh\" alloc --chosen '<json>' --blocks N"
 echo ""
-echo "=== PLANS PROFILE (working_style + bed/typical_day) ==="
-echo "$PROFILE_JSON"
+echo "=== PLANS PROFILE (working_style + day shape) ==="
+echo "$WORK_PROFILE_JSON"
 echo ""
 echo "=== THIS WEEK'S PROJECT GOALS ($ISO_WEEK) ==="
 echo "weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}"
@@ -383,122 +333,12 @@ if [[ "$PLAN_EXISTS" == yes ]]; then
   echo ""
 fi
 
-cat <<INSTRUCTIONS
----
-INSTRUCTIONS — fill today's work blocks with real tasks from Plane. The plans
-profile carries working_style (session_length_min, break_min, work_hours_per_day,
-last_block_end) and the typical_day bed time; read them from the JSON above.
-
-1. PREFLIGHT.
-   - plan_exists = yes → /plan-my-day already laid out "## Today at a glance"
-     with empty work-block rows. Read those rows; you'll label them, not move the
-     life anchors (calendar, meals, fitness, walk, bed, habit 🔔 stay put).
-   - plan_exists = no → STANDALONE. Don't build a whole-day timeline. Ask the
-     user how many focused hours they have, read working_style + bed time, and
-     compute the block count from now → bed with:
-       bash "$_SCRIPT_DIR/plan-my-work.sh" blocks --now $NOW_TIME --bed <bed HH:MM> --session-min <N> --break-min <N>
-     You'll create a minimal file with just a "## Work tracker" (and a short
-     "## Today at a glance" listing only the work blocks).
-
-2. ENRICH + TRIAGE (the PM step — do this before picking today's tasks).
-   Run the review scan over this week's goal projects (always include backlog since
-   new issues default there):
-     bash "${PM_CMD:-/project-manager}" review --projects "${WEEKLY_PIDS:-<weekly-goal pids>}"
-   (If weekly_pids is empty, ask which projects to pull from and use those.)
-
-   For EVERY issue flagged as thin, apply ALL of the following without asking —
-   infer sensible values yourself as a PM would:
-
-   a) DESCRIPTION — write a clear, actionable description covering: what the task
-      is, why it matters, what "done" looks like, and any known blockers or
-      dependencies. Use description_html. No placeholders.
-
-   b) PRIORITY — assign urgent/high/medium/low based on: deadline proximity,
-      dependency chain (blockers get higher priority), week goal allocation%, and
-      impact. Urgent = must ship this week or blocks others. High = this week.
-      Medium = this month. Low = backlog, no deadline.
-
-   c) ESTIMATE — set the Est field in the tracker (free text: 30m / 1h / 2h / 3h
-      / 4h / 6h). Plane's estimate_point is not patchable without a configured UUID
-      scheme (and there is none in this workspace); use the tracker column only.
-      Base estimates on scope of work in the description: quick fix = 30m–1h,
-      feature = 2–4h, large feature = 6h+.
-
-   d) START DATE — set to today for any issue going into today's blocks. Leave
-      blank for backlog issues not being worked today.
-        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"start_date","value":"$TODAY"}]'
-
-   e) ASSIGNEE — assign to the sole developer (kylojavier68,
-      id=e364da77-b440-4f36-a167-f3b96c535bb9) for every issue that has no assignee.
-        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"assignees","value":["e364da77-b440-4f36-a167-f3b96c535bb9"]}]'
-
-   f) RELATIONS — wire blocking/blocked_by between issues whose descriptions
-      imply a dependency (e.g. "blocked by", "requires X first", "unblocks Y").
-      Use field "relation:<type>" (valid types: blocking, blocked_by, relates_to,
-      duplicate, start_after, start_before, finish_after, finish_before):
-        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"relation:blocking","value":"<target_tie>"}]'
-
-   g) SUB-TASKS — if a task's description implies multiple sequential steps, break
-      it into sub-issues now so it's actionable in blocks:
-        bash "${PM_CMD:-/project-manager}" enrich --edits '[{"tie":"<tie>","field":"subissue","value":"<subtask title>"}]'
-      Create sub-tasks for any issue estimated > 2h or with a clear multi-step
-      delivery (e.g. build → test → publish). Aim for sub-tasks of 30m–1h each.
-
-   h) TRIAGE — after enriching, move issues that are ready to work from backlog →
-      todo state so they appear in the ready pull:
-        bash "${PM_CMD:-/project-manager}" move "<tie>" --to todo
-
-   Apply all enrichments in a single batch enrich call per group where possible.
-   Do NOT ask the user to confirm each field — use your PM judgment and apply.
-   Only pause if you genuinely cannot infer a value (e.g. a task title that's
-   completely ambiguous). Report what you set at the end of this step as a
-   compact table: issue | priority | est | assignee | start | relations | subtasks.
-
-3. PROGRESS REPORT (before picking projects). Using progress_json + this week's
-   goals (each with allocation_percent + plane_project):
-   - Per goal: name · alloc% · Plane pct · tasks done this week (from the week's
-     tracker rows) · flag.
-   - % of the week's importance met = Σ(alloc% · pct) / Σ(alloc%).
-   - FLAGS: "pile-up" (last week's partial/not-started tracker rows still open)
-     and "re-evaluate" (high alloc%, low pct, no recent activity).
-   - One-line monthly read from the monthly goals.
-
-4. PICK PROJECTS → DAILY ALLOCATION. The user names today's subset. Renormalize
-   and distribute the day's blocks deterministically (leftover → highest-priority
-   chosen project) with:
-     bash "$_SCRIPT_DIR/plan-my-work.sh" alloc --chosen '[{"id":..,"project_name":..,"plane_project":..,"priority":..,"allocation_percent":..}]' --blocks <N>
-   It returns each chosen goal with daily_alloc + blocks. N = the empty work
-   blocks in "Today at a glance" (plan_exists=yes) or the standalone count from
-   step 1.
-
-5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects — ALWAYS pass
-   the explicit project list so all projects are queried (not just the default):
-     bash "${PM_CMD:-/project-manager}" ready --projects "<chosen pids comma-separated>"
-   If ready returns empty for a project, check with --include-backlog and triage
-   (move to todo + set priority) before assigning. Map tasks → blocks:
-   PREFER one project per block; combine projects in a block only when a project
-   has few/easy tasks. Biggest-rock first (priority → est). Honor last_block_end.
-
-6. WRITE "## Work tracker" into $OUT_FILE and (re)label the "## Today at a glance"
-   work-block rows so each names its task/project. Tracker schema:
-     | Block | Task | Project | Plane | Priority | Est | Status | Done at | % complete | Est rating | Notes |
-   - "Block" = the time range (e.g. "Block 1 (10:00–11:30)").
-   - "Plane" = clickable markdown link(s) using the format
-       [PB-19](http://plane.localhost:1800/pb/browse/PB-19/)
-     Multiple issues in one block: comma-separated links. Use "—" for no Plane issue.
-     The tie (<project_id>:<issue_id>) is what /end-of-day uses for reconciliation;
-     embed it as a data comment if needed, but the visible cell must be the link.
-     Plane issue URL pattern: http://plane.localhost:1800/pb/browse/<IDENTIFIER>-<seq>/
-     Project identifiers (uppercase): PB, YT, KA, ML, MUC, BIO.
-   - Status starts "planned"; Done at / % complete / Est rating stay blank for
-     /end-of-day. "Est rating" later judges whether the estimate held.
-   If plan_exists=no, write a minimal file: frontmatter + a short "## Today at a
-   glance" (work blocks only) + the "## Work tracker" + an empty "## How it went".
-   Both tables are rewritten together; never let them drift.
-
-7. Confirm in one tight read: the chosen projects, the block→task assignment, and
-   "run /end-of-day to close + reconcile to Plane." Stop here.
-INSTRUCTIONS
+# Instructions live in commands/templates/plan-my-work/session.txt — the .sh is a
+# thin dispatcher (mirrors /plan-my-day). Grooming/triage hands off to
+# /project-manager (separation of concern); this layer owns goals → blocks.
+PM_CMD="${PM_CMD:-/project-manager}"
+export PM_CMD WEEKLY_PIDS OUT_FILE PLANE_WEB_BASE
+envsubst '$PM_CMD $WEEKLY_PIDS $OUT_FILE $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/session.txt"
 
 pbrain_emit_habits_extract "plan-my-work" || true
 pbrain_emit_self_improve "plan-my-work" "$PROFILE_FILE" "plans profile" || true

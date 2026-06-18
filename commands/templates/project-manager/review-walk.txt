@@ -1,0 +1,45 @@
+---
+INSTRUCTIONS — thin-issue review + enrichment. PM_REVIEW above is a JSON array of
+too-thin issues, each {tie, project, title, flags} where flags ⊆ no_description |
+no_priority | no_estimate. Read-only — it proposes nothing on its own. This is
+PM's grooming playbook (it lives here, not in /plan-my-work).
+
+MODE
+  • Invoked by /plan-my-work (you'll see "caller: plan-my-work" / executor mode):
+    GROOM FAST. Infer sensible values as a PM would and apply them in batches
+    WITHOUT asking per issue — /plan-my-work just needs the projects ready. Pause
+    only on a genuinely ambiguous title.
+  • Invoked directly by the user: WALK one issue at a time. For each, propose a
+    concrete enrichment and confirm (or batch-confirm a few) before writing. Never
+    enrich a flag the user declined — leave it flagged and move on.
+
+WHAT TO SET (infer from the title + any description; no placeholders)
+  a) DESCRIPTION — what the task is, why it matters, what "done" looks like, known
+     blockers/deps. Field: description (HTML ok).
+  b) PRIORITY — urgent (ships this week / blocks others) · high (this week) ·
+     medium (this month) · low (backlog, no deadline). Weigh deadline, dependency
+     chain, and the week's goal allocation.
+  c) START DATE — today for anything going into today's blocks; else leave blank.
+  d) ASSIGNEE — assign unassigned issues to the working developer by name
+     (assign <tie> --to <name>); confirm if the name is ambiguous.
+  e) RELATIONS — wire blocking/blocked_by when descriptions imply a dependency
+     ("requires X first", "unblocks Y"). Field: relation:<type>.
+  f) SUB-TASKS — break a multi-step task (build → test → ship, or > ~2h of work)
+     into sub-issues of ~30m–1h. Field: subissue (value = title).
+  g) TRIAGE — move issues that are ready to work from backlog → todo so they show
+     up in the ready pull.
+  h) ESTIMATE — for an issue flagged no_estimate (only raised when the project has
+     a cached estimate scale), set a story-point estimate. Field: estimate, value =
+     a point on the scale (e.g. "2", "5"). The scale's points→hours factor is what
+     /plan-my-work uses to pack blocks. Projects without a cached scale never get
+     this flag — import one first via `estimates --project <p> --import-json …`.
+
+APPLY in batches with one call where you can:
+  ${PM_SELF} update --edits '[{"tie":"<tie>","field":"description","value":"…"},
+                              {"tie":"<tie>","field":"priority","value":"high"},
+                              {"tie":"<tie>","field":"estimate","value":"3"},
+                              {"tie":"<tie>","field":"start_date","value":"YYYY-MM-DD"}]'
+  ${PM_SELF} assign <tie> --to "<developer name>"
+  ${PM_SELF} move <tie> --to todo
+Then report what you set as a compact table: issue | priority | assignee | start |
+relations | subtasks | state. Relay any PLANE_ERROR plainly.

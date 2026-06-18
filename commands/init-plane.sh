@@ -23,7 +23,10 @@
 #                         http://plane.localhost:1800) by editing Plane's own
 #                         plane.env knobs (LISTEN_HTTP_PORT + APP_DOMAIN). No
 #                         sidecar proxy — Plane's built-in Caddy serves both the
-#                         vanity URL (browser) and 127.0.0.1:<port> (pbrain).
+#                         vanity URL (browser) and 127.0.0.1:<port> (pbrain). The
+#                         default setup flow runs this right after `up` so the
+#                         user lands on plane.localhost:1800 from the first visit;
+#                         `vhost --remove` reverts to plain http://localhost.
 #                         Flags: --host (default plane.localhost), --port
 #                         (default 1800), --plane-home, --no-restart, --remove.
 #   status                Show Docker + Plane container + pbrain backend state.
@@ -87,6 +90,23 @@ _vhost_envfile() {
     echo "$envf"; return 0
   fi
   return 0
+}
+
+# The base_url pbrain should use for the local instance. The default flow moves
+# Plane off port 80 to the named vhost (plane.localhost:1800), so derive the live
+# port from plane.env: a non-80 LISTEN_HTTP_PORT → the loopback form
+# http://127.0.0.1:<port>; otherwise plain http://localhost. Lets `config` wire
+# the right URL without the caller having to remember --base-url.
+_default_base_url() {
+  local envf port
+  envf="$(_vhost_envfile 2>/dev/null || true)"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    port="$(awk -F= '/^LISTEN_HTTP_PORT=/{print $2}' "$envf" | tail -1)"
+    if [[ -n "$port" && "$port" != "80" ]]; then
+      echo "http://127.0.0.1:$port"; return 0
+    fi
+  fi
+  echo "$DEFAULT_URL"
 }
 
 # yes (0) when a Plane API key is reachable (env or config file) — Plane is the
@@ -156,11 +176,13 @@ case "$SUB" in
       echo "INIT_PLANE_ERROR lib/plane.py not found at $PLANE_ENGINE" >&2; exit 1
     fi
     echo "INIT_PLANE_CONFIG"
-    # Default base-url to the local instance when the caller doesn't pass one.
+    # Default base-url to the active local instance when the caller doesn't pass
+    # one (the vhost loopback http://127.0.0.1:1800 once Plane is moved off :80,
+    # else http://localhost) — see _default_base_url.
     has_base=no
     for a in "$@"; do [[ "$a" == "--base-url" ]] && has_base=yes; done
     if [[ "$has_base" == no ]]; then
-      python3 "$PLANE_ENGINE" setup --base-url "$DEFAULT_URL" "$@"
+      python3 "$PLANE_ENGINE" setup --base-url "$(_default_base_url)" "$@"
     else
       python3 "$PLANE_ENGINE" setup "$@"
     fi

@@ -1,0 +1,61 @@
+---
+INSTRUCTIONS — fill today's work blocks with real tasks from Plane. You own the
+WORK PLAN: goals → allocation → pulling ready tasks into the blocks → the tracker.
+Plane grooming and writes are /project-manager's job — hand those off (step 2).
+Read working_style (session_length_min, break_min, work_hours_per_day,
+last_block_end) + bed time from the profile JSON above.
+
+1. PREFLIGHT.
+   - plan_exists = yes → /plan-my-day already laid "## Today at a glance" with
+     empty work-block rows. You'll label those rows; never move the life anchors
+     (calendar, meals, fitness, walk, bed, habit 🔔).
+   - plan_exists = no → STANDALONE. Don't build a whole-day timeline. Ask focus
+     hours, then compute the block count now → bed with the blocks_helper shown
+     above. Write a minimal file (a short work-only glance + the tracker).
+
+2. READY-CHECK — delegate grooming to /project-manager (separation of concern).
+   The tasks you pull must be well-formed, but you don't groom them here. If this
+   week's goal projects have thin or still-in-backlog issues, hand grooming to the
+   PM in EXECUTOR mode (it owns every Plane write):
+     PBRAIN_PM_CALLER=plan-my-work bash "${PM_CMD}" review --projects "${WEEKLY_PIDS}"
+   PM enriches (description/priority/assignee/relations/sub-tasks) and triages
+   backlog → todo, then reports. If weekly_pids is empty, ask which projects to
+   pull from. Do NOT enrich issues inline.
+
+3. PROGRESS REPORT (weekly primary + monthly context). From progress_json + this
+   week's goals (each with allocation_percent + plane_project):
+   - Per weekly goal: name · alloc% · Plane pct · tasks done this week (from the
+     week's tracker rows) · flag.
+   - % of the week's importance met = Σ(alloc% · pct) / Σ(alloc%).
+   - FLAGS: "pile-up" (last week's open rows still not done) · "re-evaluate"
+     (high alloc%, low pct, no recent activity).
+   - One-line monthly read: are this week's goals serving this month's goals?
+
+4. PICK PROJECTS → DAILY ALLOCATION. The user names today's subset. Distribute the
+   day's blocks deterministically (leftover → highest-priority chosen project)
+   with the alloc_helper shown above. N = the empty work blocks in "Today at a
+   glance" (plan_exists=yes) or the standalone count from step 1.
+
+5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects — ALWAYS pass the
+   explicit project list:
+     bash "${PM_CMD}" ready --projects "<chosen pids, comma-separated>"
+   If a project returns empty, it likely still needs grooming — hand it back to
+   step 2 (PM review), don't triage inline. Map tasks → blocks: PREFER one project
+   per block; biggest-rock first (priority → est); honor last_block_end.
+
+6. WRITE "## Work tracker" into ${OUT_FILE} and (re)label the "## Today at a
+   glance" work-block rows. Tracker schema:
+     | Block | Task | Project | Plane | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+   - "Block" = the time range ("Block 1 (10:00–11:30)").
+   - "Plane" = clickable link(s): [PB-19](${PLANE_WEB_BASE}/browse/PB-19/) — comma-
+     separate when a block has several. The tie (<project_id>:<issue_id>) is what
+     /end-of-day reconciles by; keep it recoverable (a `find PB-19` re-resolves
+     the tie). "—" for no Plane issue.
+   - Status starts "planned"; Done at / % complete / Est rating stay blank for
+     /end-of-day. "Est rating" later judges whether the estimate held.
+   If plan_exists=no, write a minimal file: frontmatter + short "## Today at a
+   glance" (work blocks only) + the tracker + an empty "## How it went". Rewrite
+   both tables together; never let them drift.
+
+7. Confirm in one tight read: the chosen projects, the block→task assignment, and
+   "run /end-of-day to close + reconcile to Plane." Stop here.
