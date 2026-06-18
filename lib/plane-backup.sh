@@ -330,6 +330,9 @@ pbrain_pbk_restore() {
 # starts with a bare PATH). Best-effort via the shared launchd helper.
 pbrain_pbk_schedule_install() {
   local pm_sh="${1:?project-manager.sh path}" hhmm="${2:-03:30}"
+  # Bake the stable command path, not the (possibly ephemeral) invoking path —
+  # a workspace/dev clone gets cleaned up, the daily agent must outlive it.
+  pm_sh="$(pbrain_stable_cmd_path "$pm_sh")"
   local hh="${hhmm%%:*}" mm="${hhmm##*:}"
   hh=$((10#${hh:-3})); mm=$((10#${mm:-30}))
   local docker_dir=""; command -v docker >/dev/null 2>&1 && docker_dir="$(dirname "$(command -v docker)")"

@@ -688,7 +688,7 @@ PYEOF
         pbrain_pbk_schedule_install "$PM_SH" "${PBK_TIME:-03:30}"
         if pbrain_launchagent_loaded "$PBK_LABEL"; then
           echo "daily Plane backup scheduled at ${PBK_TIME:-03:30} → dest=${PBK_DEST:-local}, keep=${PBK_KEEP:-14}"
-          echo "runs: $PM_SH backup run   (log: $(pbrain_pbk_log_file))"
+          echo "runs: $(pbrain_stable_cmd_path "$PM_SH") backup run   (log: $(pbrain_pbk_log_file))"
         else
           echo "PBK_WARN could not load the LaunchAgent — check launchctl."
         fi
