@@ -349,6 +349,44 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "explode_context resolves one issue with subissues; branches on ambiguous/none" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FC:
+    items={"i1":{"id":"i1","sequence_id":7,"name":"build payment flow",
+                 "state":{"name":"Todo","group":"unstarted"},"priority":"high","parent":None},
+           "i2":{"id":"i2","sequence_id":8,"name":"build payment refunds",
+                 "state":{"name":"In Progress","group":"started"},"priority":"medium","parent":None}}
+    def list_projects(self): return [{"id":"P","identifier":"PB","name":"pb"}]
+    def list_work_items(self,pid): return list(self.items.values()) if pid=="P" else []
+    def get_work_item(self,pid,iid):
+        # full record returns state as a BARE id (unlike list_work_items)
+        return {"id":"i1","name":"build payment flow","description_stripped":"Take payments end to end",
+                "priority":"high","state":"s1","estimate_point":None}
+    def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
+                                       {"id":"s2","name":"In Progress","group":"started"}]
+    def list_sub_issues(self,pid,iid): return [{"id":"c1","name":"wire stripe","state":"s1"},
+                                               {"id":"c2","name":"add webhook","state":"s2"}]
+cfg={"projects":[{"id":"P","name":"pb","shortcut":"pb"}]}
+fc=FC()
+ctx=m.explode_context(cfg,fc,"PB-7")
+assert ctx["status"]=="ok", ctx
+assert ctx["state"]=="Todo"                                   # from the find card, not the bare id
+assert ctx["description"]=="Take payments end to end"
+assert ctx["has_estimate_scale"] is False and ctx["estimate_points"]==[]
+assert [s["title"] for s in ctx["existing_subissues"]]==["wire stripe","add webhook"]
+assert ctx["existing_subissues"][1]["state"]=="In Progress"   # bare id -> resolved name
+amb=m.explode_context(cfg,fc,"build payment")
+assert amb["status"]=="ambiguous" and len(amb["candidates"])==2, amb
+non=m.explode_context(cfg,fc,"zzz no such issue")
+assert non["status"]=="none" and non["candidates"]==[], non
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "estimate scale: parse payload, resolve value<->uuid, points->hours" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
