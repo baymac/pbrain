@@ -27,10 +27,10 @@ The plan-close loop is where most planning systems get sticky. Opening the day w
 
 **`### Scoreboard`** — a numeric snapshot written into `## How it went`, immediately after `### Executive summary`:
 
-- **Habits (scored):** a table with one row per scored habit — Score (`N/100`, read back verbatim from `habits.sh scores --date <date>` after the marks are written), Priority, and Basis (a terse derivation: `4 clean / 1 unclean`, `bed 23:40 vs 23:30 · 7.2h`, `2h10 work / 35m social`). Score values come straight from the engine (stored in `habit_events.amount` at mark time) — never re-derived by the model.
+- **Habits (scored):** a table with one row per scored habit — Score (`0.NN` on a 0–1 scale, read back verbatim from `habits.sh scores --date <date>` after the marks are written), Priority, and Basis (a terse derivation: `4 clean / 1 unclean`, `bed 23:40 vs 23:30 · 7.2h`, `2h10 work / 35m social`). Score values come straight from the engine (stored in `habit_events.amount` at mark time) — never re-derived by the model.
 - **Habits (other due today):** one line per non-scored habit that was due, from the rollup, plus a one-line `Today: N missed · M skipped` summary from the autostatus pass when either is non-zero.
 - **Diet:** `Cals X / target Y (net ±Z) · P x/t · C x/t · F x/t · Fiber x/t`, from the closed diet log.
-- **Fitness:** `{activity} — actual/planned volume (Train N/100) · {status}`.
+- **Fitness:** `{activity} — actual/planned volume (Train 0.NN) · {status}`.
 - **Work:** `Focus N% — work Xm / social Ym / entertainment Zm · AFK Wm over Vh blocks`.
 - Any domain with nothing logged is omitted. Numbers are never invented.
 
