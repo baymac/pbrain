@@ -93,10 +93,12 @@ set -euo pipefail
 #                   life/Habits Profile.md here automatically)
 # Event log:        shared SQLite DB (~/.config/pbrain/pbrain.db)
 #
-# DEFAULT SCORED HABITS: once a committed diet profile exists, "Eat clean"
-# (meal_ratio scoring) is seeded automatically; once a committed fitness
-# profile exists, "Sleep well" (deviation scoring vs the profile's normal
-# sleep window) is seeded. Idempotent; archived defaults are never resurrected.
+# DEFAULT SCORED HABITS: each seeds ONLY when its owning command is enabled —
+# i.e. that command's committed profile exists (or, for Deep work, the laptop
+# tracker DB). So /diet-journal → "Eat clean", /fitness-journal → "Sleep well"
+# + "Train", /plan-my-day → "Work the plan", /laptop-tracking (+ plans) →
+# "Deep work"; a command the user hasn't set up seeds none of its habits
+# (PB-39). Idempotent; archived defaults are never resurrected.
 #
 # Overrides:
 #   PBRAIN_VAULT                  — vault root
@@ -120,12 +122,14 @@ PROFILE_FILE="$(pbrain_habits_profile_file)"
 TODAY="$(date +%Y-%m-%d)"
 SUB="${1:-}"
 
-# Default scored habits — seeded once their source profiles exist: a committed
-# diet profile enables "Eat clean" (meal_ratio: score = share of clean meals);
-# a committed fitness profile enables "Sleep well" (deviation vs the normal
-# sleep window baked from that profile). Goes through the same atomic
-# ProfileLock write path as `add`. Idempotent; an id that exists (active OR
-# archived) is never re-added, so archiving a default makes it stay gone.
+# Default scored habits — each seeds ONLY when its owning command is enabled,
+# where "enabled" = that command's committed profile exists (the laptop tracker
+# DB for Deep work). The hard-coded command→habit gates below are independent,
+# so enabling one command never seeds another's habits (PB-39 — e.g. no "Train"
+# without /fitness-journal). The full map lives in the lib/habits.sh header.
+# Goes through the same atomic ProfileLock write path as `add`. Idempotent; an
+# id that exists (active OR archived) is never re-added, so archiving a default
+# makes it stay gone.
 _habits_seed_defaults() {
   [[ -f "$PROFILE_FILE" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
