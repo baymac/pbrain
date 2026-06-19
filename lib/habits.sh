@@ -66,12 +66,19 @@
 # All five are weekly aggregates: scored daily as a 0–1 unit value (the Count
 # cell), banked over the week as a running sum out of 7, measure_target = the
 # weekly pass bar (5 → Criteria "weekly ≥5"); all eod_only.
-#   committed diet profile     → "Eat clean" (meal_ratio).
-#   committed fitness profile  → "Sleep well" (deviation; normal window from it).
-#   committed plans-profile    → "Work the plan" (weighted_completion).
-#   committed fitness-library  → "Train" (session_volume; any logged session).
-#   tracker.db + committed plans-profile → "Deep work" (focus_ratio; from the
-#                                tracker over the day's work-block windows).
+#
+# Each default seeds ONLY when its owning command is ENABLED. "Enabled" = that
+# command's committed profile exists (or, for Deep work, the laptop tracker DB);
+# a command the user never set up — or disabled by never committing its profile
+# — seeds none of its habits (PB-39). The hard-coded command→habit map:
+#   /diet-journal     (committed diet profile)     → "Eat clean"   (meal_ratio).
+#   /fitness-journal  (committed fitness profile)   → "Sleep well"  (deviation; normal window from it).
+#   /fitness-journal  (committed fitness-library)   → "Train"       (session_volume; any logged session)
+#                                                     + one per-activity habit per library activity.
+#   /plan-my-day      (committed plans-profile)     → "Work the plan" (weighted_completion).
+#   /laptop-tracking  (tracker.db) + /plan-my-day (committed plans-profile)
+#                                                   → "Deep work"   (focus_ratio; tracker over the
+#                                                     day's work-block windows).
 #
 # Habit↔reminder linking — a per-day ONE-SHOT reminder on the days the habit's
 # SCHEDULE is due (NOT Apple-recurring). The link is an INTENT on the habit:

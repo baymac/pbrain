@@ -1625,9 +1625,9 @@ print(row[0] if row else 'none')
 
 # ── default-habit seeding (eat-clean + sleep-well) ──────────────────────────
 
-_plant_source_profiles() {
-  mkdir -p "$PBRAIN_VAULT/fitness/diet-tracking/.profile" \
-           "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
+# /diet-journal "enabled" signal: a committed diet profile.
+_plant_diet_profile() {
+  mkdir -p "$PBRAIN_VAULT/fitness/diet-tracking/.profile"
   cat > "$PBRAIN_VAULT/fitness/diet-tracking/.profile/diet-profile.v1.md" <<'EOF'
 ---
 type: diet-profile
@@ -1639,6 +1639,11 @@ committed: true
 {"created": "2026-06-03", "meal_slots": ["Breakfast", "Lunch", "Dinner"]}
 ```
 EOF
+}
+
+# /fitness-journal "enabled" signal: a committed fitness profile (Sleep well).
+_plant_fitness_profile() {
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile"
   cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-profile.v1.md" <<'EOF'
 ---
 type: fitness-profile
@@ -1652,6 +1657,12 @@ committed: true
  "steps_per_day": 8000}
 ```
 EOF
+}
+
+# Both diet + fitness profiles (the original combined planter).
+_plant_source_profiles() {
+  _plant_diet_profile
+  _plant_fitness_profile
 }
 
 @test "dashboard seeds eat-clean + sleep-well when diet + fitness profiles exist" {
@@ -1689,6 +1700,67 @@ EOF
   _write_profile
   run HABITS
   [[ "$output" != *"Added default habit"* ]]
+}
+
+# ── PB-39: a default habit seeds ONLY when its owning command is enabled ─────
+# "Enabled" = that command's committed profile (or, for Deep work, the laptop
+# tracker DB) is present. These guard the cross-command isolation: enabling one
+# command must not seed another command's habits (e.g. no Train without
+# /fitness-journal). Assertions are &&-chained onto the final line because the
+# suite only enforces each test's last command.
+
+# Negatives assert on the precise seed line ("Added default habit: <name>"),
+# not a bare name — the dashboard's scoring legend mentions every scored default
+# by name ("e.g. Sleep well") regardless of what is actually seeded.
+
+@test "PB-39: /diet-journal enabled alone seeds only Eat clean" {
+  _write_profile
+  _plant_diet_profile
+  run HABITS
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"Added default habit: Eat clean"* ]] \
+    && [[ "$output" != *"Added default habit: Sleep well"* ]] \
+    && [[ "$output" != *"Added default habit: Train"* ]] \
+    && [[ "$output" != *"per-activity fitness habit)"* ]] \
+    && [[ "$output" != *"Added default habit: Work the plan"* ]] \
+    && [[ "$output" != *"Added default habit: Deep work"* ]]
+}
+
+@test "PB-39: /fitness-journal enabled alone seeds Sleep well + Train, not Eat clean / Work the plan" {
+  _write_profile
+  _plant_fitness_profile
+  _plant_fitness_library
+  run HABITS
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"Added default habit: Sleep well"* ]] \
+    && [[ "$output" == *"Added default habit: Train"* ]] \
+    && [[ "$output" != *"Added default habit: Eat clean"* ]] \
+    && [[ "$output" != *"Added default habit: Work the plan"* ]] \
+    && [[ "$output" != *"Added default habit: Deep work"* ]]
+}
+
+@test "PB-39: /fitness-journal disabled means no Train even with the fitness profile present" {
+  # fitness PROFILE (Sleep well) present, but no fitness LIBRARY → no Train / per-activity.
+  _write_profile
+  _plant_fitness_profile
+  run HABITS
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"Added default habit: Sleep well"* ]] \
+    && [[ "$output" != *"Added default habit: Train"* ]] \
+    && [[ "$output" != *"per-activity fitness habit)"* ]]
+}
+
+@test "PB-39: /plan-my-day enabled alone seeds only Work the plan" {
+  # plans profile present but no tracker DB → Work the plan yes, Deep work no.
+  _write_profile
+  _plant_goals_profile
+  run HABITS
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"Added default habit: Work the plan"* ]] \
+    && [[ "$output" != *"Added default habit: Eat clean"* ]] \
+    && [[ "$output" != *"Added default habit: Sleep well"* ]] \
+    && [[ "$output" != *"Added default habit: Train"* ]] \
+    && [[ "$output" != *"Added default habit: Deep work"* ]]
 }
 
 @test "extraction emitter explains meal_ratio and deviation marking" {
