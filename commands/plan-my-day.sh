@@ -64,7 +64,7 @@ unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 # Surface this user's standing preferences for /plan-my-day (emits nothing if none set).
-pbrain_emit_prefs "plan-my-day" || true
+pbrain_emit_prefs "plan-my-day" "${PBRAIN_PLAN_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}")" plans-profile)}" || true
 
 PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"

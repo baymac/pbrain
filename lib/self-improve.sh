@@ -7,11 +7,18 @@
 #
 # When a command owns a core profile (e.g. /diet-journal owns the diet
 # profile), it passes the profile's path + a human label as the 2nd/3rd args.
-# The reflection then gains a PLAN UPDATE route: lasting profile changes the
-# user raised in-session are proposed against that file under the same
-# propose->explicit-yes->write discipline used for preference capture.
-# Commands with no profile call it with just the command name, and the route
-# is omitted.
+# This has two effects:
+#   1. The reflection gains a PLAN UPDATE route: lasting STRUCTURAL changes to
+#      the plan/profile (a changed target/goal, dropping part of the plan) are
+#      proposed against that file under the propose->explicit-yes->write
+#      discipline.
+#   2. PB-37 — a captured COMMAND preference is folded INTO that profile rather
+#      than a flat <cmd>/prefs.md: placed in the field/section it belongs to, or
+#      a top-level "prefs" array when nothing fits, edited IN PLACE (no new
+#      version — capturing a pref is a living-document edit). lib/prefs.sh reads
+#      that "prefs" array back on the next run.
+# Commands with no profile call it with just the command name; both profile
+# routes are omitted and COMMAND prefs go to <cmd>/prefs.md as before.
 #
 # Emitted at the END of a command's output (after its work/INSTRUCTIONS), it
 # prints a terse "reflect on feedback" instruction block that tells the calling
@@ -117,9 +124,23 @@ pbrain_emit_self_improve() {
   printf '%s\n' "  3. On yes:"
   printf '%s\n' "     - PREFERENCE (GLOBAL) -> consolidate into $global_file. Read it first;"
   printf '%s\n' "       update a related line rather than duplicating. Create the file if missing."
-  printf '%s\n' "     - PREFERENCE (COMMAND) -> consolidate into $prefs_file. Read it first; if a"
-  printf '%s\n' "       related line already exists, update/replace it (reconcile any contradiction"
-  printf '%s\n' "       with the user) instead of appending a duplicate. Create the file if missing."
+  if [[ -n "$plan_file" ]]; then
+    printf '%s\n' "     - PREFERENCE (COMMAND) -> fold into this command's profile ($plan_label"
+    printf '%s\n' "       at $plan_file), NOT a separate prefs file. Read the profile first, then"
+    printf '%s\n' "       place the preference where it semantically belongs: an existing field or"
+    printf '%s\n' "       section that already governs this behaviour (a notes / style / criteria"
+    printf '%s\n' "       field, etc.). ONLY if nothing fits, append it to a top-level \"prefs\""
+    printf '%s\n' "       array in the profile's fenced JSON block (create the array if absent)."
+    printf '%s\n' "       Edit the LATEST version IN PLACE — do NOT mint a new profile version."
+    printf '%s\n' "       (Capturing a preference is a living-document edit; new versions mint only"
+    printf '%s\n' "       on an explicit ask, a large/structural change, or /weekly-review ·"
+    printf '%s\n' "       /monthly-review.) Reconcile/replace a contradicting entry instead of"
+    printf '%s\n' "       duplicating, and keep the fenced JSON valid."
+  else
+    printf '%s\n' "     - PREFERENCE (COMMAND) -> consolidate into $prefs_file. Read it first; if a"
+    printf '%s\n' "       related line already exists, update/replace it (reconcile any contradiction"
+    printf '%s\n' "       with the user) instead of appending a duplicate. Create the file if missing."
+  fi
   printf '%s\n' "     - QUALITY FIX -> append to $feedback_file (create if missing). Then offer"
   printf '%s\n' "       once: \"Want me to open a GitHub issue for this?\" Only run \`gh issue"
   printf '%s\n' "       create\` if they say yes AND \`gh\` is available."

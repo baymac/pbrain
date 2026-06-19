@@ -110,3 +110,41 @@ teardown() {
   [[ "$output" == *"global only"* ]]
   [[ "$output" != *"USER PREFERENCES for /journal"* ]]
 }
+
+# --- PB-37: prefs read from a profile's "prefs" array -----------------------
+
+@test "PB-37: profile prefs array is surfaced when a profile file is passed" {
+  local prof="$VAULT_DIR/habits-profile.v1.md"
+  printf -- '---\nversion: 1\ncommitted: true\n---\n```json\n{"habits": [], "prefs": ["Eat clean good = mains only"]}\n```\n' > "$prof"
+  run pbrain_emit_prefs journal "$prof"
+  [ "$status" -eq 0 ] && [[ "$output" == *"USER PREFERENCES for /journal"* && "$output" == *"Eat clean good = mains only"* && "$output" == *'profile "prefs"'* ]]
+}
+
+@test "PB-37: pbrain_prefs_from_profile lists each prefs entry as a bullet" {
+  local prof="$VAULT_DIR/p.v1.md"
+  printf -- '```json\n{"prefs": ["one", "two"]}\n```\n' > "$prof"
+  run pbrain_prefs_from_profile "$prof"
+  [ "$status" -eq 0 ] && [[ "$output" == *"- one"* && "$output" == *"- two"* ]]
+}
+
+@test "PB-37: profile with no prefs array falls back to the flat prefs.md" {
+  local prof="$VAULT_DIR/noprefs.v1.md"
+  printf -- '```json\n{"habits": []}\n```\n' > "$prof"
+  echo "- flat fallback pref" > "$PREFS"
+  run pbrain_emit_prefs journal "$prof"
+  [ "$status" -eq 0 ] && [[ "$output" == *"flat fallback pref"* && "$output" == *"$PREFS"* ]]
+}
+
+@test "PB-37: empty prefs array in profile falls back to the flat prefs.md" {
+  local prof="$VAULT_DIR/empty.v1.md"
+  printf -- '```json\n{"prefs": []}\n```\n' > "$prof"
+  echo "- still flat" > "$PREFS"
+  run pbrain_emit_prefs journal "$prof"
+  [ "$status" -eq 0 ] && [[ "$output" == *"still flat"* ]]
+}
+
+@test "PB-37: no profile file passed still reads the flat prefs.md (back-compat)" {
+  echo "- legacy flat pref" > "$PREFS"
+  run pbrain_emit_prefs journal
+  [ "$status" -eq 0 ] && [[ "$output" == *"legacy flat pref"* ]]
+}
