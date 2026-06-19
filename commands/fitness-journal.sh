@@ -2,10 +2,13 @@
 set -euo pipefail
 
 # fitness-journal.sh
-# Flexible daily fitness journal — a low-friction LOGGER. The user says what they
-# did in plain words; we parse it into the activity's per-activity KPIs, tolerate
-# partial/missing data, and write the day's file. We never prescribe a workout —
-# we only OFFER to help the user plan their OWN.
+# Flexible daily fitness journal — logger-first. The user says what they did in
+# plain words; we parse it into the activity's per-activity KPIs, tolerate
+# partial/missing data, and write the day's file. We never prescribe onto a session
+# they are REPORTING. But when they PLAN AHEAD a session not done yet (accept the
+# owed/scheduled session, or ask "plan it" / "what should I do"), we GENERATE a
+# complete, ready-to-follow session: gym uses Block/Day rotation + progressive
+# overload + training-gap deload; non-gym uses concrete KPI targets.
 #
 # Base config lives in the VERSIONED PROFILE STORE (lib/profiles.sh) under
 # the tracking dir:
@@ -15,8 +18,8 @@ set -euo pipefail
 #       (activities + stable metadata + occurrence per week|month + per-activity
 #        `kpis` — what to log for each, e.g. gym→sets, swim→distance, dance→min)
 #   <tracking-dir>/.profile/activities/<slug>.vN.md — per-activity profiles
-#       (fixed days-of-week, goals, focus areas; gym MAY keep its Block/Day
-#        tables as an OPTIONAL planning reference; equipment captured here ONCE)
+#       (fixed days-of-week, goals, focus areas; gym keeps its Block/Day tables
+#        which DRIVE generated gym sessions; equipment captured here ONCE)
 #
 # KPIs are USER-EXTENSIBLE (the profile defines which KPIs each activity has)
 # and BACKWARD-COMPATIBLE: when a library activity has no `kpis`, the daily flow
@@ -26,7 +29,8 @@ set -euo pipefail
 # First run bootstraps the profile + library + per-activity profiles via
 # interview; daily runs open with "what did you do today?", parse the
 # description into the activity's KPIs, and log it. The training-gap band and
-# fixed-day schedule survive only as soft HINTS for the optional plan offer.
+# fixed-day schedule DRIVE on-request plan generation (which session is owed, gym
+# rotation/deload); generation fires only when the user is planning a session ahead.
 #
 # `fitness-journal.sh profile show|new|commit [base]` manages the profiles:
 # drafts are editable, committed versions are final (changes mint the next
@@ -637,9 +641,10 @@ PYEOF
 [[ -n "${PRESELECTED//[[:space:]]/}" ]] || PRESELECTED="(none scheduled today)"
 
 # Training-gap detection: days since the last GYM session (a session file
-# whose frontmatter carries `day: <A-D>`). The band is now only a soft HINT for
-# the OPTIONAL plan offer ("you've been away N days — ease back in"), never a
-# forced weight calc. Degrades to "unknown" when no prior gym session is found.
+# whose frontmatter carries `day: <A-D>`). The band drives generated gym sessions
+# (no_progression 7–13d → repeat weights; deload 14+d → −20%; else progressive
+# overload) when the user plans ahead. Degrades to "unknown" when no prior gym
+# session is found.
 TRAINING_GAP="$(python3 - "$TRACKING_DIR" "$TODAY" <<'PYEOF' 2>/dev/null || true
 import datetime, glob, os, re, sys
 d, today_s = sys.argv[1], sys.argv[2]
@@ -797,6 +802,8 @@ FITNESS_JOURNAL_EXISTING
 date: $TODAY
 date_human: $TODAY_HUMAN
 output_file: $OUT_FILE
+training_gap_days: $TRAINING_GAP_DAYS
+training_gap_band: $TRAINING_GAP_BAND
 
 === EXISTING ENTRY ===
 $EXISTING_ENTRY
@@ -807,13 +814,18 @@ $LIBRARY_CONTENT
 === PER-ACTIVITY KPIs (resolved; "derived": true ⇒ defaults, offer to save) ===
 $ACTIVITY_KPIS
 
+=== RECENT SESSIONS (last 7) ===
+$RECENT_SESSIONS
+
 === ACTIVITY PROFILES ($ACT_STORE) ===
 $ACTIVITY_PROFILES
 
 ---
 INSTRUCTIONS — today's fitness entry already exists. The user is back to add to it
-or refine it. This is a LOGGER — log what they actually did; never prescribe. The
-entry uses two sections: ## Planned (targets) and ## Logged (actuals).
+or refine it. It is logger-first — log what they actually did and never prescribe
+onto a session they are reporting — BUT if they ask you to PLAN / generate the
+session (case D below), build it fully. The entry uses two sections: ## Planned
+(targets) and ## Logged (actuals).
 
 Step 1 — Show a one-line summary of the entry's state (the activity, whether it's
   still \`planned\` or has ## Logged actuals), then ask:
@@ -829,10 +841,23 @@ Step 2 — Based on intent:
   C) A SECOND ACTIVITY today → append a new "# {Activity} — $TODAY" block below the
      first (its own summary line + ## Planned / ## Logged), so the file can hold
      more than one activity in a day.
-  D) PLAN HELP → offer to help them shape THEIR OWN targets (sets / distance /
-     duration) in ## Planned, using the activity profile's focus areas. Surface
-     the gym Block/Day reference or training-gap context only if it helps THEM
-     plan. Never auto-generate a prescribed workout.
+  D) PLAN HELP → the user wants the session PLANNED / generated (e.g. the existing
+     entry is a thin plan-ahead and they want it filled out properly). GENERATE a
+     complete, ready-to-follow session and REPLACE the entry's ## Planned with it,
+     keeping \`status: planned\`:
+     - GYM: from ACTIVITY PROFILES (Block/Day) + RECENT SESSIONS (last weights) +
+       the training-gap band ($TRAINING_GAP_BAND, $TRAINING_GAP_DAYS days). Pick the
+       next day in the A→B→C→D rotation; set weights by the gap rule — "no_progression"
+       (7–13 days off) repeat last weights, "deload" (14+) drop ~20% rounded to 2.5kg
+       + a deload note, else progressive overload (+2.5kg barbell / +1–2kg DB on a
+       clean last session, repeat on missed reps). Write a coaching note, a ## Warmup,
+       a ## Planned GROUPED by muscle with sets × reps + a REAL weight + a cue, a
+       ## Cooldown, and an empty pre-filled ## Logged set-log table (one row per
+       exercise) to fill in later; add week/block/day to the frontmatter.
+     - NON-GYM: concrete targets per KPI from PER-ACTIVITY KPIs + the profile's focus
+       areas, plus warmup/cooldown if the profile defines them, and an empty ## Logged.
+     If instead they only want light help (their OWN targets, no full generation),
+     do that and never auto-assign weights — but a request to "plan it" means GENERATE.
 
 Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep the
   \`activity:\`/\`focus:\` and \`sleep_*\` frontmatter intact (plan-my-day reads them).
@@ -952,21 +977,53 @@ Step 4 — Fold in whatever state they gave (don't re-ask). From bed + wake time
   soreness on what they're loading, low energy — note it in ONE line and, if it
   fits, suggest scaling back. Never prescribe and never block; they decide.
 
-Step 5 — OFFER to plan (only if useful — never prescribe):
-  If they said "help me plan", or logged a partial session and want targets, or
-  asked what to do: offer to help shape THEIR OWN plan — "want me to sketch some
-  targets (sets / distance / duration) for this?". Build it FROM the activity
-  profile's focus areas and their input; for gym you MAY surface the activity
-  profile's optional Block/Day reference and the training-gap context
-  (training_gap_band: $TRAINING_GAP_BAND, $TRAINING_GAP_DAYS days — "ease back in"
-  after a long gap) as suggestions. The user owns the plan; you never auto-assign
-  weights or rotate a prescribed split.
+Step 5 — GENERATE a plan-ahead session, or stay the logger (logger-first):
+  From Step 2's answer, pick ONE case.
+
+  • GENERATE — the user is PLANNING AHEAD a session NOT done yet: they accepted the
+    owed / scheduled session, or asked "plan it" / "what should I do". Produce a
+    COMPLETE, ready-to-follow session (NOT a thin target list) and write it with the
+    GENERATED-SESSION layout in Step 6 (coaching note + warmup + a real weighted /
+    target ## Planned + cooldown + an empty pre-filled ## Logged table to fill in
+    later). By activity:
+
+    GYM — use the gym activity profile (in ACTIVITY PROFILES) as the source of truth
+    for block / day / exercises:
+    - Next session: parse week/block/day from RECENT SESSIONS frontmatter to find the
+      last completed day letter; cycle A→B→C→D→A (after D, increment week; week 5
+      starts Block 2); Block 1 exercises for weeks 1–4, Block 2 for weeks 5–8.
+      Session number = total gym sessions so far + 1.
+    - Weights — TRAINING-GAP RULE FIRST (training_gap_band: $TRAINING_GAP_BAND,
+      $TRAINING_GAP_DAYS days since the last gym session):
+        · "no_progression" (7–13 days off): tell them weights stay the same, no
+          progression this session — repeat the LAST LOGGED weight for every exercise.
+        · "deload" (14+ days off): suggest a deload — drop weights ~20% (rounded to
+          2.5kg), and add a Notes line "Deload — first session back after
+          $TRAINING_GAP_DAYS-day gap".
+        · "normal" / "unknown": progressive overload — last session all reps clean →
+          +2.5kg barbell / +1–2kg DB/cable; reps missed last time → repeat the same
+          weight; an exercise never done before → start conservative (RPE 6, light).
+      Pull the last weights from the most recent gym file in RECENT SESSIONS.
+
+    NON-GYM — generate concrete targets from the activity's KPIs (in PER-ACTIVITY
+    KPIs) and the profile's focus areas: a real target per KPI (distance / duration /
+    sets / etc.), plus a warmup and cooldown when the activity profile defines them.
+    No weight machinery — just a complete, followable session.
+
+  • LOG / light-offer — the user already DID the session, gave their OWN custom list
+    ("something else" with specific exercises), or only wants a nudge: keep the
+    flexible logger — Step 3's ## Planned / ## Logged from their words, tolerate
+    partial, STANDARD layout in Step 6. Offer to sketch targets from the activity's
+    focus areas ONLY if they ask; never auto-assign weights or rotate a prescribed
+    split onto a session they are just logging.
 
 Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   ## Planned (intended/target work) and ## Logged (actuals). WHICH appear, and the
   \`status:\`, depend on what the user did:
-    - PLAN-AHEAD ONLY (planned but not done yet) → write ## Planned ONLY; omit
-      ## Logged; \`status: planned\`.
+    - PLAN-AHEAD ONLY (planned but not done yet) → \`status: planned\`. A quick
+      plan-ahead log writes ## Planned ONLY and omits ## Logged. A GENERATED session
+      (Step 5 → GENERATE) instead uses the GENERATED-SESSION layout below and DOES
+      include an empty pre-filled ## Logged table to fill in during/after the session.
     - LOGGED DIRECTLY / DONE → write BOTH ## Planned (what they set out to do) and
       ## Logged (what they actually hit); \`status: completed\` (or \`partial\` if
       they fell short or only did some of it). When they logged with no separate
@@ -1029,6 +1086,72 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   (or \`planned\` if planning a rest day ahead), a "# Rest day — $TODAY" heading and
   a one-line note; skip ## Planned / ## Logged.
 
+  GENERATED-SESSION layout (use ONLY when Step 5 chose GENERATE) — the standard
+  entry made complete and ready to follow. Same ## Planned / ## Logged contract, so
+  the Train scoring (Step 7B) and /end-of-day still read it; it just adds week/block/
+  day frontmatter (gym), a coaching note, a warmup, real weights/targets, a cooldown,
+  and an empty ## Logged table to fill in later:
+
+  ---
+  type: fitness
+  date: $TODAY
+  week: {N}            # gym only — from the rotation
+  block: {N}           # gym only
+  day: {letter}        # gym only
+  activity: {gym | the activity name}
+  focus: {gym → today's muscle groups; else → the activity name}
+  bodyweight: {kg or blank}        # gym
+  duration_min: {N or blank}       # non-gym
+  distance_km: {N or blank}        # non-gym
+  status: planned
+  sleep_bed: {HH:MM or blank}
+  sleep_wake: {HH:MM or blank}
+  sleep_quality: {1-10 or blank}
+  sleep_hours: {X.X or blank}
+  tags: []
+  ---
+
+  # {gym: Day {letter} — {Focus}   |   non-gym: {Activity} — $TODAY}
+  {gym only: **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min}
+
+  > {one coaching note tied to today's state — RPE / fatigue / mindset cue; mention
+     the gap band if it is not normal. 1-2 sentences.}
+
+  ## Warmup ({X} min)
+  | | |
+  |---|---|
+  | {exercise} | {reps/duration + cue} |
+  (4-5 items relevant to today; for non-gym use the activity's warmup, or omit)
+
+  ## Planned
+  {gym: GROUP BY muscle, every exercise with sets × reps, a REAL weight, and a cue}
+  ### {Muscle Group}
+  | Exercise | Sets × Reps | Weight | Notes |
+  |---|---|---|---|
+  | {exercise} | {sets × reps} | **{weight}** | {short form cue} |
+  Rest {X}s between sets.   (repeat the ### block per muscle group in today's day)
+  -- non-gym: one target row per KPI --
+  | KPI | Target |
+  |---|---|
+  | {label} | {concrete target} |
+
+  ## Cooldown ({X} min)
+  - {stretches / easy work relevant to today} (3-5 items)
+
+  ## Logged
+  {Empty, pre-filled so the user just fills cells in later. status stays planned.}
+  | Exercise | Set 1 | Set 2 | Set 3 | Notes |   # gym — one row per planned exercise
+  |---|---|---|---|---|
+  | {every exercise from ## Planned} | | | | |
+  -- non-gym --
+  | KPI | Logged |
+  |---|---|
+  | {label} | — |
+
+  ## Notes
+  - {1-3 contextual notes; include the deload line when band = deload}
+  - {gym only} Next session: {next day from rotation} → Day {next letter} ({next focus})
+
 Step 7 — Confirm + KPI upkeep:
   - Confirm: "Saved → $OUT_FILE".
   - $DIET_SUGGESTION
@@ -1044,7 +1167,8 @@ Step 7 — Confirm + KPI upkeep:
 Step 7B — "Train" scored habit. If "Train" is a tracked [scored] habit (it
   appears in the HABIT EXTRACTION block below) AND the entry has a ## Logged
   section with real actuals (status \`completed\`/\`partial\`) — NOT a plan-ahead-only
-  entry (status \`planned\`, ## Planned but no ## Logged) — then build the --session
+  entry (status \`planned\` with no logged actuals — including a GENERATED session
+  whose ## Logged table is still empty) — then build the --session
   JSON and mark it ONCE per the session_volume instructions in that block, taking
   PLANNED from ## Planned and ACTUAL from ## Logged:
     - strength: from a \`sets\`-type KPI — planned = Σ(target sets × reps) from
