@@ -62,15 +62,16 @@
 #                              sum(done weights)/sum(all weights) (0–1); pass parts
 #                              done by name or id as --done '[…]'.
 #
-# Auto-seeded default habits (idempotent; archived defaults never resurrected):
+# Auto-seeded default habits (idempotent; archived defaults never resurrected).
+# All five are weekly aggregates: scored daily as a 0–1 unit value (the Count
+# cell), banked over the week as a running sum out of 7, measure_target = the
+# weekly pass bar (5 → Criteria "weekly ≥5"); all eod_only.
 #   committed diet profile     → "Eat clean" (meal_ratio).
 #   committed fitness profile  → "Sleep well" (deviation; normal window from it).
-#   committed plans-profile    → "Work the plan" (weighted_completion, daily, target 0.7).
-#   committed fitness-library  → "Train" (session_volume, target 0.8; union of the
-#                                activities' fixed days; rest days never missed).
-#   tracker.db + committed plans-profile → "Deep work" (focus_ratio, target 0.75; on
-#                                the plan's WORKDAYS = weekdays minus
-#                                typical_day.rest_days).
+#   committed plans-profile    → "Work the plan" (weighted_completion).
+#   committed fitness-library  → "Train" (session_volume; any logged session).
+#   tracker.db + committed plans-profile → "Deep work" (focus_ratio; from the
+#                                tracker over the day's work-block windows).
 #
 # Habit↔reminder linking — a per-day ONE-SHOT reminder on the days the habit's
 # SCHEDULE is due (NOT Apple-recurring). The link is an INTENT on the habit:
