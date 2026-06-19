@@ -393,15 +393,14 @@ for h in active:
     if h["measured"]:
         # amount-based vs target. A plain measured habit (water, distance) SUMS
         # the amount over the period. A SCORED habit stores a 0–1 unit score per
-        # day, so over a week/month we want the AVERAGE of those daily scores,
-        # not the sum (5 days × 0.75 must read 0.75, not 3.75). round to 2 dp to
-        # keep the unit scale (an int round would collapse it to 0/1). Daily
-        # stays today's score.
+        # day; over a week/month we show the running SUM of those daily scores
+        # (like Eat clean: "4/7 wk"), banked toward the period max. round to 2 dp
+        # to keep the unit scale. Daily stays today's score.
         scored = isinstance(h.get("scoring"), dict)
         if scored and st == "weekly":
-            amt = round(week_amount / week_count, 2) if week_count else 0
+            amt = round(week_amount, 2)
         elif scored and st == "monthly":
-            amt = round(month_amount / month_count, 2) if month_count else 0
+            amt = round(month_amount, 2)
         else:
             amt = {"daily": today_amount, "weekly": week_amount, "monthly": month_amount}.get(st, today_amount)
         used, target = amt, h["measure_target"]
@@ -501,17 +500,24 @@ def render(h):
     head = f"- {h['name']} ({h.get('schedule_label', 'daily')}{tag}, {h['priority']}): "
     if h["measured"]:
         # amount-based: "2.5/4 L today ✅" — period word per schedule_type. A
-        # scored habit reads as a weekly/monthly AVERAGE, so say so.
+        # scored habit reads as a running weekly/monthly SUM (banked points).
         scored = isinstance(h.get("scoring"), dict)
         period_word = {"daily": "today", "weekly": "this week", "monthly": "this month"}.get(st, "today")
-        if scored and st in ("weekly", "monthly"):
-            period_word = "avg " + period_word
         unit = (" " + h["unit"]) if h["unit"] else ""
         if direction == "at_most":
             flag = " — OVER ⚠️" if h["over"] else (" — at cap" if h["at_cap"] else " ✅")
         else:
             flag = " ✅" if h["fulfilled"] else " ⏳"
-        body = f"{fmt(used)}/{tgt}{unit} {period_word}{flag}"
+        # A scored habit's progress denominator is the period MAX (1 for a day,
+        # 7 for a week), not measure_target (the pass threshold the ✅/⏳ flag
+        # checks). Measured non-scored habits keep their real target.
+        if scored and st == "daily":
+            disp_tgt = "1"
+        elif scored and st == "weekly":
+            disp_tgt = "7"
+        else:
+            disp_tgt = f"{tgt}{unit}"
+        body = f"{fmt(used)}/{disp_tgt} {period_word}{flag}"
         if direction == "at_least" and h["streak"] > 0:
             body += f" · streak {h['streak']}"
     elif direction == "at_most":
@@ -1063,6 +1069,17 @@ def db_progress(con, h, date):
         # habit that's the running total of daily scores, not an average.
         unit = (" " + h["unit"]) if h["unit"] else ""
         tgt = fmtnum(h["measure_target"]) if h["measure_target"] is not None else "?"
+        scored = isinstance(h.get("scoring"), dict)
+        # A SCORED habit stores a 0–1 unit score per day, so its progress
+        # denominator is the period's MAX possible sum (1 for a day, 7 for a
+        # week) — NOT measure_target, which for a scored habit is the pass
+        # THRESHOLD (< max) shown in Criteria/fulfillment. A weekly scored habit
+        # banks the week's daily scores like Eat clean ("4/7 wk"). Measured
+        # non-scored habits keep their real target as the denominator.
+        if scored and st == "daily":
+            return f"{fmtnum(agg(today))}/1 day"
+        if scored and st == "weekly":
+            return f"{fmtnum(agg(week_start))}/7 wk"
         if st == "weekly":
             return f"{fmtnum(agg(week_start))}/{tgt}{unit} wk"
         if st == "monthly":

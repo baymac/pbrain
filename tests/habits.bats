@@ -1432,6 +1432,52 @@ EOF
   [ "$output" = "0.6" ]
 }
 
+@test "scored daily habit: Progress denominator is the 1.0 max, Criteria is the <1 threshold" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PROF'
+---
+type: habits-profile
+---
+
+```json
+{"habits":[
+ {"id":"deep-work","name":"Deep work","schedule_type":"daily","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":0.75,"notes":"","scoring":{"type":"focus_ratio"}},
+ {"id":"water","name":"Water","schedule_type":"daily","direction":"at_least","priority":"medium","archived":false,"unit":"L","measure_target":2}
+]}
+```
+PROF
+  HABITS mark --name "Deep work" --date 2026-06-03 --focus '{"work":50,"social":50}' >/dev/null
+  HABITS mark --name "Water" --date 2026-06-03 --amount 1.5 >/dev/null
+  HABITS sync --days 0 --date 2026-06-03 >/dev/null
+  HABITS track --date 2026-06-03 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  # scored daily → Criteria shows the <1 pass threshold; Progress denominator is
+  # the 1.0 unit max (NOT the threshold). measured non-scored Water is unchanged.
+  [[ "$body" == *"| Deep work | daily ≥0.75 | 0.5/1 day |"* ]] \
+    && [[ "$body" == *"| Water | daily ≥2 L | 1.5/2 L day |"* ]]
+}
+
+@test "scored weekly habit: Progress banks the week's sum out of 7, Criteria is the <7 pass bar" {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PROF'
+---
+type: habits-profile
+---
+
+```json
+{"habits":[{"id":"deep-work","name":"Deep work","schedule_type":"weekly","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":5,"eod_only":true,"notes":"","scoring":{"type":"focus_ratio"}}]}
+```
+PROF
+  # week of Mon 2026-06-15: bank a 0.5 score on four days -> running sum 2.0
+  for d in 2026-06-15 2026-06-16 2026-06-17 2026-06-18; do
+    HABITS mark --name "Deep work" --date "$d" --amount 0.5 >/dev/null
+  done
+  HABITS sync --days 6 --date 2026-06-18 >/dev/null
+  HABITS track --date 2026-06-18 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-18.md")"
+  # weekly scored → Criteria is the <7 pass bar; Progress banks the week's sum
+  # against the 7-day max (like Eat clean's "4/7 wk").
+  [[ "$body" == *"| Deep work | weekly ≥5 | 2/7 wk |"* ]]
+}
+
 @test "mark: --amount still works when no classification counts are passed" {
   _write_scored_profile
   pbrain_habit_mark "2026-06-05" "Eat clean" "1" "manual override" "0.4"
@@ -1940,43 +1986,9 @@ EOF
   grep -q '"type": "session_volume"' "$PBRAIN_HABITS_PROFILE_FILE"
 }
 
-@test "train seeds with weekdays schedule from activity profile days" {
-  # Per-activity profiles store fixed days in FRONTMATTER as weekday NAMES
-  # (the format fitness-journal actually writes) — NOT as a JSON block.
-  _write_profile
-  _plant_fitness_library
-  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
-  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md" <<'EOF'
----
-type: activity-profile
-activity: Gym
-days: [Mon, Wed, Fri]
-version: 1
-committed: true
----
-# Gym
-EOF
-  run HABITS
-  [ "$status" -eq 0 ]
-  python3 -c "
-import json, re
-with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
-m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
-data = json.loads(m.group(1))
-train = next((h for h in data['habits'] if h['id'] == 'train'), None)
-assert train is not None
-sched = train.get('schedule', {})
-# Stored schedules key on 'type' (same as the add path / build_schedule),
-# NOT 'kind' — otherwise derive_schedule/is_due ignore it and the habit
-# collapses to a legacy floating schedule.
-assert sched.get('type') == 'weekdays', repr(sched)
-assert sched.get('days') == ['mon', 'wed', 'fri'], repr(sched)
-"
-}
-
-@test "seeded train is genuinely schedule-aware (is_due honors its weekdays)" {
-  # Regression: the seeded schedule must be readable by the schedule engine,
-  # i.e. is_due must treat it as weekdays — due on Mon, off on Tue.
+@test "train seeds as a floating weekly aggregate (max 7, pass 5), not schedule-bound" {
+  # Train is a cross-activity weekly volume score banked like Eat clean — scored
+  # on the days you do ANY fitness activity, not pinned to library weekdays.
   _write_profile
   _plant_fitness_library
   mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
@@ -1985,61 +1997,15 @@ assert sched.get('days') == ['mon', 'wed', 'fri'], repr(sched)
   run HABITS
   [ "$status" -eq 0 ]
   python3 -c "
-import json, re, sys
-sys.path.insert(0, '$REPO_ROOT/lib')
-from habit_schedule import is_due
+import json, re
 with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
 m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
 train = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'train')
-sched = train['schedule']
-assert is_due(sched, '2026-06-08') is True, 'Mon 2026-06-08 should be due'   # Monday
-assert is_due(sched, '2026-06-09') is False, 'Tue 2026-06-09 should be off'  # Tuesday
-"
-}
-
-@test "train unions the fixed days across activities (highest committed version per slug)" {
-  _write_profile
-  _plant_fitness_library
-  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities"
-  # gym v1 Mon/Thu, superseded by a committed v2 Tue/Fri — only v2's days count.
-  printf -- '---\nactivity: Gym\ndays: [Mon, Thu]\nversion: 1\ncommitted: true\n---\n# Gym v1\n' \
-    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md"
-  printf -- '---\nactivity: Gym\ndays: [Tue, Fri]\nversion: 2\ncommitted: true\n---\n# Gym v2\n' \
-    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v2.md"
-  # a separate activity adds Sunday; an open draft must NOT contribute.
-  printf -- '---\nactivity: Yoga\ndays: [Sun]\nversion: 1\ncommitted: true\n---\n# Yoga\n' \
-    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/yoga.v1.md"
-  printf -- '---\nactivity: Run\ndays: [Sat]\nversion: 1\ncommitted: false\n---\n# Run draft\n' \
-    > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/run.v1.md"
-  run HABITS
-  [ "$status" -eq 0 ]
-  python3 -c "
-import json, re
-with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
-m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
-data = json.loads(m.group(1))
-train = next((h for h in data['habits'] if h['id'] == 'train'), None)
-sched = train.get('schedule', {})
-# gym v2 (tue,fri) + yoga (sun); gym v1 superseded; run draft excluded.
-assert sched.get('type') == 'weekdays', repr(sched)
-assert sched.get('days') == ['tue', 'fri', 'sun'], repr(sched)
-"
-}
-
-@test "train seeds with daily schedule when no activity profiles exist" {
-  _write_profile
-  _plant_fitness_library
-  run HABITS
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Added default habit: Train"* ]]
-  python3 -c "
-import json, re
-with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
-m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
-data = json.loads(m.group(1))
-train = next((h for h in data['habits'] if h['id'] == 'train'), None)
-assert train is not None
-assert train.get('schedule', {}).get('type') == 'daily', repr(train.get('schedule'))
+assert train.get('schedule_type') == 'weekly', repr(train)
+assert train.get('schedule') is None, repr(train)
+assert train.get('measure_target') == 5, repr(train)
+assert train.get('eod_only') is True, repr(train)
+assert train['scoring']['type'] == 'session_volume', repr(train)
 "
 }
 
@@ -2197,9 +2163,9 @@ EOF
   [[ "$output" != *"Added default habit: Deep work"* ]]
 }
 
-@test "deep-work schedule is the plan's workdays (all days minus rest_days)" {
+@test "deep-work seeds as a floating weekly aggregate (max 7, pass 5), not workday-bound" {
   _write_profile
-  _plant_goals_profile_rest '["Sat","Sun"]'
+  _plant_goals_profile_rest '"'"'["Sat","Sun"]'"'"'
   : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
   export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
   run HABITS
@@ -2209,25 +2175,11 @@ import json, re
 with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
 m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
 dw = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'deep-work')
-sched = dw['schedule']
-assert sched.get('type') == 'weekdays', repr(sched)
-assert sched.get('days') == ['mon','tue','wed','thu','fri'], repr(sched)
-"
-}
-
-@test "deep-work defaults to Mon-Fri when the plan records no rest_days" {
-  _write_profile
-  _plant_goals_profile   # no typical_day / rest_days
-  : > "$XDG_CONFIG_HOME/pbrain/tracker.db"
-  export PBRAIN_TRACKER_DB_FILE="$XDG_CONFIG_HOME/pbrain/tracker.db"
-  run HABITS
-  [ "$status" -eq 0 ]
-  python3 -c "
-import json, re
-with open('$PBRAIN_HABITS_PROFILE_FILE') as f: t = f.read()
-m = re.search(r'\x60\x60\x60json\s*\n(.*?)\x60\x60\x60', t, re.DOTALL)
-dw = next(h for h in json.loads(m.group(1))['habits'] if h['id'] == 'deep-work')
-assert dw['schedule'].get('days') == ['mon','tue','wed','thu','fri'], repr(dw['schedule'])
+assert dw.get('schedule_type') == 'weekly', repr(dw)
+assert dw.get('schedule') is None, repr(dw)
+assert dw.get('measure_target') == 5, repr(dw)
+assert dw.get('eod_only') is True, repr(dw)
+assert dw['scoring']['type'] == 'focus_ratio', repr(dw)
 "
 }
 
@@ -2539,17 +2491,16 @@ type: habits-profile
 PEOF
 }
 
-@test "rollup: a weekly scored habit reads the AVERAGE of its daily scores" {
+@test "rollup: a weekly scored habit banks the running SUM of its daily scores out of 7" {
   _write_weekly_scored_profile
-  # Mon/Tue/Wed of the week containing 2026-06-17: scores 0.6, 0.8, 1.0 → avg 0.8.
+  # Mon/Tue/Wed of the week containing 2026-06-17: scores 0.6, 0.8, 1.0 → sum 2.4.
   HABITS mark --name "Deep work" --date 2026-06-15 --focus '{"work":60,"social":40}' >/dev/null
   HABITS mark --name "Deep work" --date 2026-06-16 --focus '{"work":80,"social":20}' >/dev/null
   HABITS mark --name "Deep work" --date 2026-06-17 --focus '{"work":100}' >/dev/null
   run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_habits_rollup 2026-06-17"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Deep work"* ]]
-  [[ "$output" == *"0.8/0.75 avg this week"* ]]
-  [[ "$output" != *"2.4"* ]]
+  # banked sum 2.4 against the 7-day max, not an average
+  [[ "$output" == *"Deep work"* ]] && [[ "$output" == *"2.4/7 this week"* ]]
 }
 
 @test "rollup: a plain measured weekly habit still SUMS its amounts" {
@@ -2568,8 +2519,8 @@ PEOF
   HABITS track --date 2026-06-17 >/dev/null
   run grep "Deep work" "$PBRAIN_HABIT_TRACK_DIR/2026-06-17.md"
   [ "$status" -eq 0 ]
-  # weekly = running SUM over the period: 0.6 + 1.0 = 1.6, labelled "wk"
-  [[ "$output" == *"1.6/0.75 wk"* ]]
+  # weekly = running SUM over the period out of the 7-day max: 0.6 + 1.0 = 1.6
+  [[ "$output" == *"1.6/7 wk"* ]]
 }
 
 # ═════════════════════════════════════════════════════════════════════════

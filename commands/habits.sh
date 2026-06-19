@@ -181,9 +181,10 @@ with ProfileLock(path) as lock:
     if dietp and "eat-clean" not in ids:
         habits.append({
             "id": "eat-clean", "name": "Eat clean", "direction": "at_least",
-            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            # Weekly aggregate: scored daily, banked over the week (max 7), pass at 5.
+            "schedule_type": "weekly", "eod_only": True,
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 0.8, "archived": False,
+            "unit": "", "measure_target": 5, "archived": False,
             # Default scored habit: scoring lives in lib/habits.sh (score_from_spec)
             # + the /habits spec ("Default scored habits"), never in notes.
             "notes": "",
@@ -202,9 +203,9 @@ with ProfileLock(path) as lock:
             hours = 8.0
         habits.append({
             "id": "sleep-well", "name": "Sleep well", "direction": "at_least",
-            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            "schedule_type": "weekly", "eod_only": True,  # weekly aggregate (max 7, pass 5)
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 0.8, "archived": False,
+            "unit": "", "measure_target": 5, "archived": False,
             "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "deviation", "normal_time": bed,
                         "normal_hours": hours, "unit_minutes": 30,
@@ -215,9 +216,9 @@ with ProfileLock(path) as lock:
     if goalsp and "work-the-plan" not in ids:
         habits.append({
             "id": "work-the-plan", "name": "Work the plan", "direction": "at_least",
-            "schedule": {"type": "daily"}, "schedule_type": "daily",
+            "schedule_type": "weekly", "eod_only": True,  # weekly aggregate (max 7, pass 5)
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 0.7, "archived": False,
+            "unit": "", "measure_target": 5, "archived": False,
             "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "weighted_completion",
                         "difficulty_weights": {"easy": 1, "normal": 2, "hard": 3, "nightmare": 5},
@@ -227,57 +228,15 @@ with ProfileLock(path) as lock:
         added.append("Work the plan (scored from your daily task log)")
 
     if fitlibp and "train" not in ids:
-        import glob as _glob
-        import os as _os
-        try:
-            from habit_schedule import norm_days as _norm_days
-        except Exception:
-            _norm_days = None
-        # Per-activity profiles carry their fixed days in FRONTMATTER as weekday
-        # NAMES (`days: [Mon, Thu]`), not in a JSON block — mirror the
-        # fitness-journal pre-select parser. Take the highest COMMITTED version
-        # per slug, then union the activities' fixed days into the schedule.
-        by_slug = {}  # slug -> (version, [day-name tokens])
-        for af in _glob.glob(_os.path.join(act_store, "*.v*.md")):
-            mver = re.match(r"^(.*)\.v(\d+)\.md$", _os.path.basename(af))
-            if not mver:
-                continue
-            slug, ver = mver.group(1), int(mver.group(2))
-            try:
-                with open(af) as fh:
-                    atxt = fh.read()
-            except Exception:
-                continue
-            fm = re.match(r"^---\n(.*?)\n---", atxt, re.DOTALL)
-            if not fm:
-                continue
-            front = fm.group(1)
-            if re.search(r"^committed:\s*false\s*$", front, re.MULTILINE):
-                continue
-            dm = re.search(r"^days:\s*\[(.*?)\]\s*$", front, re.MULTILINE)
-            if not dm:
-                continue
-            days = [d.strip().strip("\"'") for d in dm.group(1).split(",") if d.strip()]
-            if slug not in by_slug or ver > by_slug[slug][0]:
-                by_slug[slug] = (ver, days)
-        train_days = []
-        for _ver, days in by_slug.values():
-            train_days.extend(days)
-        if _norm_days:
-            norm = _norm_days(train_days)
-        else:
-            norm = sorted({d.strip().lower()[:3] for d in train_days if d.strip()})
-        if norm:
-            schedule = {"type": "weekdays", "days": norm}
-            schedule_type = "weekly"
-        else:
-            schedule = {"type": "daily"}
-            schedule_type = "daily"
+        # Cross-activity volume score over ANY fitness activity (the per-activity
+        # habits below own occurrence + reminders). A weekly aggregate like Eat
+        # clean: scored on the days you train, banked over the week.
         habits.append({
             "id": "train", "name": "Train", "direction": "at_least",
-            "schedule": schedule, "schedule_type": schedule_type,
+            # Weekly aggregate (scored daily, banked over the week; max 7, pass 5).
+            "schedule_type": "weekly", "eod_only": True,
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 0.8, "archived": False,
+            "unit": "", "measure_target": 5, "archived": False,
             "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "session_volume",
                         "status_credit": {"completed": 1.0, "partial": 0.5, "skipped": 0.0},
@@ -365,34 +324,14 @@ with ProfileLock(path) as lock:
             continue   # a malformed activity entry never aborts the rest of seeding
 
     if tracker_present == "1" and goalsp and "deep-work" not in ids:
-        # Schedule over the plan's WORKDAYS (all weekdays minus rest_days from the
-        # plans profile's typical_day) so weekends/rest days aren't counted as
-        # missed — there are no work blocks to score then. Falls back to Mon–Fri.
-        try:
-            from habit_schedule import norm_days as _norm_days
-        except Exception:
-            _norm_days = None
-        ALL = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        gp = read_json_block(goalsp) or {}
-        td = gp.get("typical_day") or {}
-        rest = td.get("rest_days") or []
-        rest_norm = _norm_days(rest) if _norm_days else sorted(
-            {str(d).strip().lower()[:3] for d in rest if str(d).strip()})
-        work_days = [d for d in ALL if d not in set(rest_norm)]
-        if not work_days or len(work_days) == 7:
-            # no rest days recorded (or all 7 are rest) -> default to Mon–Fri
-            work_days = ["mon", "tue", "wed", "thu", "fri"] if not rest_norm else work_days
-        if len(work_days) == 7:
-            schedule = {"type": "daily"}
-            schedule_type = "daily"
-        else:
-            schedule = {"type": "weekdays", "days": work_days}
-            schedule_type = "weekly"
+        # Focus score over the day's work blocks, banked over the week as a
+        # weekly aggregate like Eat clean (scored the days you do focused work).
         habits.append({
             "id": "deep-work", "name": "Deep work", "direction": "at_least",
-            "schedule": schedule, "schedule_type": schedule_type,
+            # Weekly aggregate (scored daily, banked over the week; max 7, pass 5).
+            "schedule_type": "weekly", "eod_only": True,
             "target_count": None, "priority": "high",
-            "unit": "", "measure_target": 0.75, "archived": False,
+            "unit": "", "measure_target": 5, "archived": False,
             "notes": "",  # default scored habit — scoring in lib/habits.sh + /habits spec
             "scoring": {"type": "focus_ratio",
                         "work_categories": ["work"],
