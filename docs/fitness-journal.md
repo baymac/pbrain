@@ -1,13 +1,13 @@
 # /fitness-journal
 
-Adaptive daily fitness journal. Asks your current state (energy, soreness, sleep window, stress), **pre-selects today's workout from your fixed weekly schedule** (gym, football, swimming, yoga — whatever you do), and generates a session tailored to it. For gym days, runs the block/day rotation with progressive overload pulled from recent sessions and your gym activity profile — including training-gap handling when you've been away.
+A flexible daily fitness **logger**. You describe your session in plain words — "swam 2k in 45 min", "bench 3×8 at 60kg then squats", "easy yoga, 20 min" — and it derives that activity's **KPIs**, tolerates whatever you leave out, and writes the day's entry. It never prescribes a workout: after logging, it **offers** to help you plan your own session (sets / distance / duration targets). Casual or serious, full data or a one-liner — both work.
 
 All base config lives in the **versioned profile store** under your tracking dir:
 
 ```
 $VAULT_DIR/fitness/daily-tracking/.profile/
 ├── fitness-profile.vN.md     # overall profile: sleep window, steps/day, health-tracker metrics
-├── fitness-library.vN.md     # activity list + occurrence (N×/week|month) + stable metadata
+├── fitness-library.vN.md     # activity list + occurrence (N×/week|month) + stable metadata + per-activity KPIs
 └── activities/<slug>.vN.md   # per-activity profile: fixed days, goals, focus areas, equipment
 ```
 
@@ -17,13 +17,19 @@ Profiles are markdown with a fenced JSON block; a **committed** version is final
 
 Acts as a full-stack fitness coach the first time you run it.
 
-**Step 1 — Overall profile + library.** Asks your sleep window (bed time, wake time — hours inferred), steps per day, optional health-tracker metrics (Whoop / Garmin / Apple Health), then your activities. For each activity: occurrence per week or month and **fixed days of the week**. Days are assigned non-conflicting — gym defaults to 4×/week (e.g. Mon/Tue/Thu/Fri), other activities spread over free days; you can override any assignment. Equipment, location, typical time, and duration are captured once here.
+**Step 1 — Overall profile + library.** Asks your sleep window (bed time, wake time — hours inferred), steps per day, optional health-tracker metrics (Whoop / Garmin / Apple Health), then your activities. For each activity: occurrence per week or month, **fixed days of the week**, and **which KPIs to log** (gym → sets; swimming → distance + duration; dance/yoga/meditation → minutes; team sport → duration + notes — sensible defaults suggested, you trim or add). Days are assigned non-conflicting — gym defaults to 4×/week (e.g. Mon/Tue/Thu/Fri), other activities spread over free days; you can override any assignment. Equipment, location, typical time, and duration are captured once here.
 
-**Step 2 — Per-activity profiles.** Re-run `/fitness-journal`. For each library activity without a profile, it interviews you (current state, goals, focus areas) and writes a personalised profile. The gym profile keeps the parseable block/day structure the daily session generator consumes.
+**Step 2 — Per-activity profiles.** Re-run `/fitness-journal`. For each library activity without a profile, it interviews you (current state, goals, focus areas) and writes a personalised profile. If you want one, the gym profile can keep an **optional** Block/Day reference plan — surfaced only when you ask for planning help, never auto-prescribed.
 
 If you add a new activity to the library later, the next run detects the missing profile and only interviews you about that one.
 
 After step 2, the command suggests running `/diet-journal` to set up the nutrition side.
+
+## Per-activity KPIs
+
+Each activity in the library carries a `kpis` list — the things worth logging for it. KPI types: `sets` (exercise/reps/weight — renders a Log table), `distance`, `duration`, `number`, `rating` (1–10), `text`. They're **user-extensible**: tell the logger "also track RPE for gym" and it appends the KPI in place.
+
+KPIs are **backward-compatible** — if an activity has no `kpis` yet (e.g. a library from before this feature), the logger derives sensible defaults from the activity type on the fly and offers once to save them. No migration, nothing breaks.
 
 ## Migrating from older pbrain
 
@@ -33,13 +39,29 @@ If you had the old setup (`fitness-activities.json`, `Gym Plan.md`, `fitness/pla
 
 After setup, every run:
 
-1. Asks your state in one batch — energy, soreness/pain/injury, **sleep as bed time + wake time + quality** (hours inferred, midnight crossing handled), stress, bodyweight. The session file records `sleep_bed`, `sleep_wake`, `sleep_quality`, `sleep_hours` in its frontmatter (`/plan-my-day` reads your wake time from here so it doesn't re-ask).
-2. Proposes today's activity from your fixed days ("Today is Thu — your schedule says Gym. Go with that, or override?"). The full menu plus Recovery / Walk / Rest stays available.
-3. Asks 2–4 follow-ups tailored to the chosen activity (kickoff/location for football, time available for gym — equipment is never re-asked; it's in the profile).
-4. Applies adaptive coaching (downgrade on bad sleep + soreness + stress; flag neglected muscle groups or focus areas).
-5. **Training-gap rule (gym):** 7–13 days since your last gym session → weights stay the same, no progression, focus on form. 14+ days → deload: −20% on all last logged weights (rounded to 2.5kg) with a note in the session. Under 7 days → normal progressive overload.
-6. Generates the session in your tracking format. Non-gym activities get a per-activity rating matrix for post-session review.
-7. Suggests `/diet-journal` once the session is saved — only if today's diet entry doesn't already exist.
+1. **Quick, skippable check-in** — energy, soreness (pre-filled from your recent sessions — "right knee 6/10 after football last night"), sleep (bed/wake/quality), stress, bodyweight. Answer some, all, or none — or say **`skip`**. If you skip, it asks once whether to skip the check-in from now on; say yes and it won't ask again (a standing preference is saved). If you just say what you did or are planning, it goes straight to logging.
+2. **Today's picture + one question** — a tight read of where you stand (the weekday/date from your computer's clock, whether it's a fixed training day, what's owed or carried over, your most recent relevant session), then a single question: *"planning to do {the owed/scheduled session}, or something else?"* No long menu. Then it parses your description into KPIs — resolving the activity against your library and filling what you mentioned (e.g. "ran 5k easy" → distance 5 km, intensity easy); anything you don't mention is left blank.
+3. **Folds in your state** — infers sleep hours and records `sleep_bed`, `sleep_wake`, `sleep_quality`, `sleep_hours` in frontmatter (`/plan-my-day` and the Sleep-well habit read these). If a flag stands out (short sleep, high soreness, low energy) it says so in one line and may suggest scaling back — never blocks, never prescribes.
+4. **Offers to plan** (never prescribes) — if you want, it sketches sets/distance/duration targets for *your* plan, drawing on the activity profile's focus areas. For gym it can surface your optional Block/Day reference and a "you've been away N days, ease back in" hint. You own the plan.
+5. **Writes the entry** — frontmatter (keeping `activity:`/`focus:`/`sleep_*`/`status`), a KPI summary line, and up to two sections: **`## Planned`** (your targets) and **`## Logged`** (your actuals). Reconciles your fitness-habit reminders to what you actually did.
+6. Suggests `/diet-journal` once the session is saved — only if today's diet entry doesn't already exist.
+
+Re-run it later the same day to log the actuals against your plan, add more, correct a number, log a second activity, or ask for plan help — it updates the entry in place.
+
+### Planned vs Logged
+
+An entry carries up to two sections:
+
+- **`## Planned`** — what you set out to do (target sets × reps × weight, or distance/duration goals). Present whenever there's a plan.
+- **`## Logged`** — what you actually did. Appears once you've done (or started) the session.
+
+The flow follows your reality:
+
+- **Plan ahead, not done yet** → just `## Planned`, `status: planned`.
+- **Logged directly / done** → both sections — the logger explodes your description into the targets you aimed at and the actuals you hit — `status: completed` (or `partial` if you fell short).
+- **At close** → `/end-of-day` flips a still-`planned` entry to `completed` (session happened) or `skipped`, filling `## Logged` from what you report.
+
+The "Train" habit scores planned-vs-actual straight from these two sections.
 
 ## Managing profiles
 
@@ -70,4 +92,4 @@ A draft (`committed: false`) is editable; iterate freely. Committing freezes it 
 /fitness-journal
 ```
 
-If today's entry already exists, it's shown and you're asked if you want to update the "Log your sets here" section.
+If today's entry already exists, it's shown and you're asked what to update — add to the session, correct a KPI, log a second activity, or get help planning the rest.
