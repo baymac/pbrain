@@ -1584,18 +1584,34 @@ fi
 # PULL runs first so PUSH never double-handles a row. Degrades silently without
 # Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
 # "SYNCED pulled=<n> pushed=<n> swept=<n>". Run by plan-my-day (morning, no sweep)
-# + end-of-day (with --sweep).
+# + end-of-day (with --sweep). --date takes a YYYY-MM-DD value (order-independent
+# with --sweep); a missing/flag-shaped or unparseable date exits 2 loudly rather
+# than silently sweeping the wrong day (PB-43).
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "reminders-sync" ]]; then
   shift || true
   RS_DATE="$TODAY"; RS_SWEEP=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --date)  RS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --date)
+        # A bare --date, or --date immediately followed by another flag, must
+        # NOT swallow the next token (or nothing) as the date — that would
+        # silently sweep the wrong day. Require an explicit non-flag value.
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+          echo "ERROR: reminders-sync --date requires a YYYY-MM-DD value" >&2
+          exit 2
+        fi
+        RS_DATE="$2"; shift 2 ;;
       --sweep) RS_SWEEP=1; shift ;;
       *) shift ;;
     esac
   done
+  # Fail loudly on an unparseable date rather than operating on a bogus/wrong
+  # day — critical because --sweep DELETES that day's reminders. (PB-43)
+  if ! python3 -c 'import sys,datetime; datetime.date.fromisoformat(sys.argv[1])' "$RS_DATE" 2>/dev/null; then
+    echo "ERROR: reminders-sync got an invalid date: '$RS_DATE' (expected YYYY-MM-DD)" >&2
+    exit 2
+  fi
   [[ -f "$PROFILE_FILE" ]] || exit 0
 
   _hr_name_for_id() {  # <habit_id> → display name (or empty)
