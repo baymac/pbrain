@@ -22,3 +22,6 @@ __pycache__/
 # Local Plane self-host stack (docker-compose + plane.env with secrets);
 # created/managed by /init-plane + /project-manager, never committed.
 plane-app/
+
+# Serena MCP tool metadata/cache (editor tooling, not project work)
+.serena/
