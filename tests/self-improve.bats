@@ -121,6 +121,16 @@ make_dev_repo() {
   [[ "$output" == *"explicit per-change yes"* ]]
 }
 
+@test "PB-37: a profile-owning command folds COMMAND prefs into the profile (in place, no version)" {
+  run pbrain_emit_self_improve diet-journal "/v/fitness/diet-profile.v2.md" "diet profile"
+  [ "$status" -eq 0 ] && [[ "$output" == *"fold into this command's profile"* && "$output" == *"do NOT mint a new profile version"* && "$output" == *'"prefs"'* ]]
+}
+
+@test "PB-37: a profile-less command keeps COMMAND prefs in the flat prefs.md" {
+  run pbrain_emit_self_improve journal
+  [ "$status" -eq 0 ] && [[ "$output" == *"PREFERENCE (COMMAND) -> consolidate into"* && "$output" == *"journal/prefs.md"* && "$output" != *"fold into this command's profile"* ]]
+}
+
 @test "no plan args means no PLAN UPDATE section" {
   run pbrain_emit_self_improve journal
   [[ "$output" != *"PLAN UPDATE"* ]]

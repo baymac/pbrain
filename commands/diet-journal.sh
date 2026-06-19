@@ -50,7 +50,7 @@ unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 # Surface this user's standing preferences for /diet-journal (emits nothing if none set).
-pbrain_emit_prefs "diet-journal" || true
+pbrain_emit_prefs "diet-journal" "${PBRAIN_DIET_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}")" diet-profile)}" || true
 
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"

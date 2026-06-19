@@ -115,7 +115,7 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
-pbrain_emit_prefs "habits" || true
+pbrain_emit_prefs "habits" "${PBRAIN_HABITS_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_HABIT_TRACK_DIR:-$VAULT_DIR/life/habit-tracking}")" habits-profile)}" || true
 pbrain_db_init || true
 
 PROFILE_FILE="$(pbrain_habits_profile_file)"

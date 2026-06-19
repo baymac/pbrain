@@ -31,6 +31,21 @@
 # The companion writer side lives in lib/self-improve.sh, which is what
 # captures new preferences into these files (consolidate-on-write).
 #
+# PB-37 — prefs in profiles. Commands that own a versioned profile keep their
+# standing prefs INSIDE that profile, not in a flat <cmd>/prefs.md: a captured
+# pref is placed in whatever field/section it semantically belongs to, or — when
+# nothing fits — a top-level "prefs" array in the profile's JSON. The semantic
+# fields are consumed by the command itself when it loads its profile, so here
+# (the read side) we only surface the generic "prefs" array, with the same
+# override framing, so a standing preference is applied prominently. Callers pass
+# the resolved latest-profile path as the optional 2nd arg:
+#
+#   pbrain_emit_prefs <command-name> [profile-file]
+#
+# A command WITHOUT a profile, or whose profile carries no "prefs" array, falls
+# back to the flat <cmd>/prefs.md exactly as before. The global file is always
+# read regardless.
+#
 # Env knobs:
 #   PBRAIN_PREFS_DIR   override the prefs ROOT (default $VAULT_DIR/.pbrain).
 #                      Layout inside is always <root>/_global/prefs.md and
@@ -41,9 +56,43 @@
 # so a fault here must not take the command down. Call sites still append
 # `|| true` as a belt-and-suspenders guard.
 
+# pbrain_prefs_from_profile <profile-file>
+# Print the top-level "prefs" entries of a versioned profile, one markdown bullet
+# per entry. Reads the first fenced ```json block (falling back to the whole file
+# as raw JSON). Self-contained (does not depend on lib/profile.sh, so it works
+# when prefs.sh is sourced standalone in tests). Never errors.
+pbrain_prefs_from_profile() {
+  local file="${1:-}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  python3 - "$file" <<'PYEOF' 2>/dev/null || true
+import sys, re, json
+try:
+    t = open(sys.argv[1], encoding="utf-8").read()
+except Exception:
+    sys.exit(0)
+m = re.search(r"```json\s*\n(.*?)```", t, re.S)
+raw = m.group(1) if m else t
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.exit(0)
+if not isinstance(d, dict):
+    sys.exit(0)
+prefs = d.get("prefs")
+items = []
+if isinstance(prefs, list):
+    items = [str(x).strip() for x in prefs if str(x).strip()]
+elif isinstance(prefs, str) and prefs.strip():
+    items = [prefs.strip()]
+for it in items:
+    print("- " + it)
+PYEOF
+}
+
 pbrain_emit_prefs() {
-  local cmd prefs_root global_file prefs_file global_contents contents
+  local cmd profile_file prefs_root global_file prefs_file global_contents contents profile_prefs
   cmd="${1:-}"
+  profile_file="${2:-}"
   [[ -n "$cmd" ]] || return 0
 
   # No override and no vault → nothing to read (unit tests source this file
@@ -71,6 +120,26 @@ pbrain_emit_prefs() {
       printf '%s\n' "$global_contents"
       printf '%s\n' "--- END USER PREFERENCES (global) ---"
       printf '%s\n' ""
+    fi
+  fi
+
+  # PB-37 — profile-owning commands keep their standing prefs inside the profile.
+  # If a profile file was passed and its JSON carries a non-empty top-level
+  # "prefs" array, surface those (with the override framing) and stop; otherwise
+  # fall through to the flat <cmd>/prefs.md (profile-less commands, or a profile
+  # with no prefs array yet — e.g. before the 0011 migration has run).
+  if [[ -n "$profile_file" && -f "$profile_file" ]]; then
+    profile_prefs="$(pbrain_prefs_from_profile "$profile_file" 2>/dev/null || true)"
+    if [[ -n "${profile_prefs//[[:space:]]/}" ]]; then
+      printf '%s\n' "--- USER PREFERENCES for /$cmd ---"
+      printf '%s\n' "Standing preferences this user has set for this command. Apply them"
+      printf '%s\n' "throughout this session; they override the command's defaults wherever"
+      printf '%s\n' "they conflict. Source: $profile_file (profile \"prefs\")"
+      printf '%s\n' ""
+      printf '%s\n' "$profile_prefs"
+      printf '%s\n' "--- END USER PREFERENCES ---"
+      printf '%s\n' ""
+      return 0
     fi
   fi
 
