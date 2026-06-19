@@ -13,7 +13,25 @@ profile current_focus + this week's/month's goals are there for re-tying rows.
    bed). Re-tie any changed row's Tie column to a current_focus item, a category, or
    "—". If a row maps to a current_focus goal, set/refresh `focus_today` in the
    frontmatter accordingly.
-4. Re-show the updated table, confirm, then write the whole file back to the same
+   PRESERVE STRUCTURE WHEN RE-FLOWING (do NOT silently drop what the user didn't ask
+   to remove):
+   - A 90-min work block is ALWAYS followed by a `break_min` break before the next
+     work block (working_style.break_min, default 30). When the day compresses,
+     SHRINK the work blocks to make room — never delete the break. Two back-to-back
+     work rows with no break between them is a bug.
+   - Meal → workout/walk gaps and the post-lunch nap/rest block stay intact.
+   - Only the rows the user explicitly named change; every other anchor keeps its
+     shape. If a compression forces an unasked change, SURFACE it ("to fit X I had to
+     also Y — ok?") rather than doing it silently.
+4. ANCHOR PLACEMENT — read the profile, don't guess. Before placing the night walk
+   (or any daily_anchor), read its time from the plans profile: `daily_anchors.walk_time`
+   and the `typical_day` `walk` slot define where it goes (the walk is anchored AFTER
+   dinner by default). Place it there the FIRST time. Do not move an anchor to a
+   convenient gap and then chase it across multiple reschedules — that churns the
+   one-shot reminders. Settle the full timeline on paper, THEN let the HABIT SCAN
+   block align reminders ONCE at the end. Never reschedule a reminder mid-edit while
+   the timeline is still moving.
+5. Re-show the updated table, confirm, then write the whole file back to the same
    output_file in place. Do NOT create a second file.
 
 Notes:
