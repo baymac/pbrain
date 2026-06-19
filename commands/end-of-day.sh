@@ -346,7 +346,9 @@ without re-asking. Use the Edit tool on each file.
     movement mentioned elsewhere):
 
   • If the planned session happened → flip frontmatter "status: planned" to
-    "status: completed". Don't touch the logged sets the user already filled.
+    "status: completed" and fill the "## Logged" section with the actuals the user
+    reports (against the targets in "## Planned"). Don't touch "## Planned" or any
+    "## Logged" actuals the user already filled.
   • If the planned session was skipped → frontmatter "status: skipped" with a
     one-line reason in the body.
   • If the user mentions ADDITIONAL movement beyond the planned session (walks,

@@ -49,6 +49,8 @@ EOF
 }
 
 write_library() {
+  # Gym carries an explicit kpis array; swimming below (added in a kpis test) is
+  # deliberately left WITHOUT kpis to exercise the derive-default fallback.
   mkdir -p "$STORE"
   cat > "$STORE/fitness-library.v1.md" <<EOF
 ---
@@ -64,8 +66,52 @@ committed: true
 {"created": "$TODAY", "activities": [
   {"id": "gym", "name": "Gym", "occurrence": {"per": "week", "times": 4},
    "days": ["Mon", "Tue", "Thu", "Fri"], "equipment": "full gym",
-   "typical_time": "17:00", "duration_min": 75, "notes": ""}]}
+   "typical_time": "17:00", "duration_min": 75, "notes": "",
+   "kpis": [{"id": "sets", "label": "Sets", "type": "sets", "unit": null}]}]}
 \`\`\`
+EOF
+}
+
+write_library_no_kpis() {
+  # A library whose activity predates KPIs — the daily flow must derive defaults.
+  mkdir -p "$STORE"
+  cat > "$STORE/fitness-library.v1.md" <<EOF
+---
+type: fitness-library
+date: $TODAY
+version: 1
+committed: true
+---
+
+# Fitness library
+
+\`\`\`json
+{"created": "$TODAY", "activities": [
+  {"id": "swimming", "name": "Swimming", "occurrence": {"per": "week", "times": 2},
+   "days": ["Mon", "Tue", "Thu", "Fri"], "equipment": "pool",
+   "typical_time": "07:00", "duration_min": 45, "notes": ""}]}
+\`\`\`
+EOF
+}
+
+write_swim_activity_profile() {
+  local days="${1:-$DOW}"
+  mkdir -p "$STORE/activities"
+  cat > "$STORE/activities/swimming.v1.md" <<EOF
+---
+activity: Swimming
+created: $TODAY
+days: [$days]
+occurrence: "2/week"
+equipment: pool
+version: 1
+committed: true
+---
+
+# Swimming — Profile
+
+## Current state
+Comfortable 1.5k freestyle.
 EOF
 }
 
@@ -217,12 +263,11 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"training_gap_band: unknown"* ]]
 }
 
-@test "equipment question is gone from the daily flow" {
+@test "equipment is not re-asked in the daily flow" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  [[ "$output" != *"equipment unavailable"* ]]
   [[ "$output" == *"do NOT ask about it"* ]]
 }
 
@@ -231,19 +276,84 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  [[ "$output" == *"sleep_bed:"* ]]
-  [[ "$output" == *"sleep_wake:"* ]]
-  [[ "$output" == *"sleep_hours:"* ]]
+  [[ "$output" == *"sleep_bed:"* && "$output" == *"sleep_wake:"* && "$output" == *"sleep_hours:"* ]]
 }
 
-@test "existing entry today short-circuits to the existing block" {
+@test "daily flow opens with a skippable readiness check-in, logger-framed" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *"flexible LOGGER"* && "$output" == *"Quick check-in"* \
+     && "$output" == *"LOGGER, not an interrogation"* \
+     && "$output" == *"straight to logging"* ]]
+}
+
+@test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *"PER-ACTIVITY KPIs"* && "$output" == *'"derived": false'* ]]
+}
+
+@test "library activity without kpis gets archetype defaults derived on the fly" {
+  write_overall_profile
+  write_library_no_kpis
+  write_swim_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *'"derived": true'* && "$output" == *'"type": "distance"'* ]]
+}
+
+@test "session emits an authoritative date_human and forbids guessing the weekday" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  local human; human="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+  [[ "$output" == *"date_human: $human"* && "$output" == *"NEVER compute or guess the day of the week"* ]]
+}
+
+@test "check-in offers skip and can persist a skip preference" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *"or say 'skip'"* && "$output" == *"Skip the quick check-in"* \
+     && "$output" == *"fitness-journal/prefs.md"* ]]
+}
+
+@test "phase 2 is today's picture with one question, not a menu dump" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *"TODAY'S PICTURE"* && "$output" == *"no menu dump"* \
+     && "$output" == *"something else?"* ]]
+}
+
+@test "session template carries Planned + Logged sections and completed-status vocab" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  [[ "$output" == *"## Planned"* && "$output" == *"## Logged"* \
+     && "$output" == *"status: planned | completed | partial | skipped"* ]]
+}
+
+@test "existing entry today routes to update mode" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   mkdir -p "$TRACKING"
   echo "session content" > "$TRACKING/$TODAY.md"
   run FIT
-  [[ "$output" == *"FITNESS_JOURNAL_EXISTING"* ]]
+  [[ "$output" == *"FITNESS_JOURNAL_EXISTING"* && "$output" == *"What's the update"* ]]
+}
+
+@test "fresh setup library template includes a kpis field" {
+  run FIT
+  [[ "$output" == *"FITNESS_JOURNAL_SETUP_PROFILE"* && "$output" == *'"kpis":'* ]]
 }
 
 # ── profile subcommand ───────────────────────────────────────────────────────

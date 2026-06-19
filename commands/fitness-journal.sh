@@ -2,22 +2,31 @@
 set -euo pipefail
 
 # fitness-journal.sh
-# Adaptive daily fitness journal — picks today's workout from your fixed
-# activity schedule and generates a session in markdown.
+# Flexible daily fitness journal — a low-friction LOGGER. The user says what they
+# did in plain words; we parse it into the activity's per-activity KPIs, tolerate
+# partial/missing data, and write the day's file. We never prescribe a workout —
+# we only OFFER to help the user plan their OWN.
 #
 # Base config lives in the VERSIONED PROFILE STORE (lib/profiles.sh) under
 # the tracking dir:
 #   <tracking-dir>/.profile/fitness-profile.vN.md   — overall fitness profile
 #       (sleep bed/wake times + hours, steps/day, health-tracker metrics)
 #   <tracking-dir>/.profile/fitness-library.vN.md   — activity library
-#       (activities + stable metadata + occurrence per week|month)
+#       (activities + stable metadata + occurrence per week|month + per-activity
+#        `kpis` — what to log for each, e.g. gym→sets, swim→distance, dance→min)
 #   <tracking-dir>/.profile/activities/<slug>.vN.md — per-activity profiles
-#       (fixed days-of-week, goals, focus areas; gym keeps its Block/Day
-#        parseable structure; equipment is captured here ONCE)
+#       (fixed days-of-week, goals, focus areas; gym MAY keep its Block/Day
+#        tables as an OPTIONAL planning reference; equipment captured here ONCE)
 #
-# First run bootstraps all three via interview; daily runs pre-select today's
-# activity from the fixed days (user can override), apply training-gap rules
-# (no progression after 7-13 idle days, deload after 14+), and log the session.
+# KPIs are USER-EXTENSIBLE (the profile defines which KPIs each activity has)
+# and BACKWARD-COMPATIBLE: when a library activity has no `kpis`, the daily flow
+# derives sensible archetype defaults on the fly and offers to save them — no
+# migration required.
+#
+# First run bootstraps the profile + library + per-activity profiles via
+# interview; daily runs open with "what did you do today?", parse the
+# description into the activity's KPIs, and log it. The training-gap band and
+# fixed-day schedule survive only as soft HINTS for the optional plan offer.
 #
 # `fitness-journal.sh profile show|new|commit [base]` manages the profiles:
 # drafts are editable, committed versions are final (changes mint the next
@@ -48,7 +57,14 @@ ACT_STORE="$STORE/activities"
 
 TODAY="$(date +%Y-%m-%d)"
 DOW="$(date +%a)"
+# Authoritative, fully-spelled local date — the LLM must copy this verbatim and
+# never compute the weekday itself (it gets it wrong). %e is space-padded day
+# (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
+TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
 OUT_FILE="$TRACKING_DIR/$TODAY.md"
+# Prefs root — same resolution lib/prefs.sh uses (so a "skip the check-in"
+# standing pref written here is re-injected by pbrain_emit_prefs next run).
+PREFS_DIR="${PBRAIN_PREFS_DIR:-$VAULT_DIR/.pbrain}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
 mkdir -p "$TRACKING_DIR"
@@ -237,7 +253,7 @@ Step 5 — Record the migration so it never re-runs:
   bash "$_SCRIPT_DIR/../lib/migrations.sh" record 0003_fitness_profiles
 
 Step 6 — Confirm: "Fitness profiles migrated → $STORE. Re-run /fitness-journal
-to plan today's session." Stop here.
+to log today's session." Stop here.
 MIGRATE
   exit 0
 fi
@@ -296,6 +312,14 @@ short batches (not one wall of questions):
     Mon/Tue/Thu/Fri), spread other activities across the remaining days; two
     activities only share a day if the user explicitly wants that. Also ask
     equipment access, usual location, typical start time, typical duration.
+  - What do you want to LOG for each activity (its KPIs)? Suggest sensible
+    defaults and let the user trim or add: gym → sets (exercise/reps/weight);
+    swimming → distance (km) + duration (min); running → distance + duration +
+    intensity; cycling → distance + duration; dancing / yoga / meditation →
+    duration (min); team sport → duration + notes; Apple Fitness+ / home →
+    duration + workout type. Keep it light — the user can skip KPIs any day, and
+    add more later. KPI types are one of: sets, number, distance, duration,
+    rating (1–10), text.
 
 Step 2 — Write BOTH files (mkdir -p "$STORE" first), committed v1:
 
@@ -334,15 +358,26 @@ Step 2 — Write BOTH files (mkdir -p "$STORE" first), committed v1:
     {"id": "<slug>", "name": "<Name>", "shortcut": "<2-3 letters>",
      "occurrence": {"per": "week", "times": N},
      "days": ["Mon", "Thu"], "equipment": "...", "location": "...",
-     "typical_time": "HH:MM", "duration_min": N, "notes": "..."}]}
+     "typical_time": "HH:MM", "duration_min": N, "notes": "...",
+     "kpis": [{"id": "<slug>", "label": "<Display>",
+               "type": "sets|number|distance|duration|rating|text",
+               "unit": "<unit or null>"}]}]}
   \`\`\`
 
   - <slug> = lowercase, non-alphanumerics → "-" (e.g. "Apple Fitness+" →
     "apple-fitness").
+  - \`kpis\` = what to log for that activity (from Batch B). Examples:
+    gym → [{"id":"sets","label":"Sets","type":"sets","unit":null}];
+    swimming → [{"id":"distance","label":"Distance","type":"distance","unit":"km"},
+                {"id":"duration","label":"Duration","type":"duration","unit":"min"}];
+    yoga → [{"id":"duration","label":"Duration","type":"duration","unit":"min"}].
+    A \`sets\`-type KPI renders the per-exercise Log table; the others render as a
+    KPI row (value or "—" when not logged). KPIs are optional and extensible.
   - Do NOT include "Rest day", "Recovery", or "Walk/cardio" as activities —
     those are always offered automatically.
-  - The library is a LIVING document — new activities are appended in place
-    later; the version only bumps on a structural rebuild.
+  - The library is a LIVING document — new activities (and new KPIs of a known
+    type on an existing activity) are appended in place later; the version only
+    bumps on a structural rebuild.
 
 Step 3 — Confirm: "Profile + library saved. Now I'll build a per-activity
 profile for each activity — re-run /fitness-journal to continue."
@@ -440,17 +475,21 @@ PER-ACTIVITY GUIDANCE (starting points, adapt to the user)
     - Session length. (Days/week + equipment come from the library.)
     - Experience level (months/years lifting) + current main lifts if known.
     - Primary goal: hypertrophy / strength / general fitness / sport support.
-    Then build a structured profile with:
+    - Do they want a structured reference plan to follow, or do they prefer to
+      just log whatever they do each session? (This is a LOGGER — never force a
+      plan on them.)
+    Build a current-state + goals + focus-areas profile either way. If — and
+    ONLY if — the user wants a structured reference plan, ALSO include an
+    OPTIONAL Block/Day reference they can consult when they ask for planning
+    help (we surface it on request; we never auto-prescribe a session from it):
     - 2 blocks (Block 1 weeks 1–4, Block 2 weeks 5–8) with progression intent.
     - A/B/C/D day split covering all major muscle groups across the week,
-      extra volume for flagged weak areas (first slot, compound focus).
+      extra volume for flagged weak areas.
     - Per day: muscle group order + exercises with sets × reps + rest target.
-    - Warmup + cooldown templates.
-    - Progression rule (e.g. add 2.5kg when all reps clean; deload after 4w).
-    - Notes on weak areas and how the split addresses them.
-    The Block/Day structure MUST stay parseable by the session generator:
+    - A progression note (e.g. add 2.5kg when all reps clean; deload after a gap).
+    Keep that reference in this parseable shape so it's easy to read back:
 
-    ## Block 1 (Weeks 1–4)
+    ## Block 1 (Weeks 1–4)   ← OPTIONAL reference only
 
     ### Day A — {Focus}
     | Exercise | Sets × Reps | Notes |
@@ -524,32 +563,26 @@ PROFILE FILE FORMAT (every activity)
   ## Notes
   - {coach notes: injuries, interactions with other activities, recovery}
 
-  (GYM additionally carries the parseable ## Block / ### Day tables described
-  above, between "## Weekly structure" and "## Focus areas".)
+  (GYM MAY additionally carry the OPTIONAL parseable ## Block / ### Day tables
+  described above, between "## Weekly structure" and "## Focus areas" — only when
+  the user wanted a structured reference plan. It is a reference to consult on
+  request, never an auto-generated prescription.)
 
 WHEN ALL PROFILES ARE WRITTEN
 
   Tell the user:
     "All activity profiles saved under $ACT_STORE.
      Next, run /diet-journal to set up the food side — nutrition is half of
-     recovery. Then run /fitness-journal again to plan today's session."
+     recovery. Then run /fitness-journal again to log today's session."
 PROFILES
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# PHASE 2 — daily session flow (profiles all in place).
+# PHASE 2 — daily LOGGER flow (profiles all in place). We compute the shared
+# context (schedule hint, gap hint, recent sessions, activity profiles, KPIs)
+# first, then branch: UPDATE an existing entry, or LOG a new one.
 # ---------------------------------------------------------------------------
-if [[ -f "$OUT_FILE" ]]; then
-  echo "FITNESS_JOURNAL_EXISTING"
-  echo "file: $OUT_FILE"
-  echo ""
-  cat "$OUT_FILE"
-  echo ""
-  echo "---"
-  echo "Today's entry already exists. Show it to the user and ask if they want to update the 'Log your sets here' section or add notes."
-  exit 0
-fi
 
 # Pre-select today's activity from the fixed days in the activity profiles
 # (highest committed version per slug; frontmatter `days:` list, matched on
@@ -604,7 +637,9 @@ PYEOF
 [[ -n "${PRESELECTED//[[:space:]]/}" ]] || PRESELECTED="(none scheduled today)"
 
 # Training-gap detection: days since the last GYM session (a session file
-# whose frontmatter carries `day: <A-D>`). Bands drive the progression rule.
+# whose frontmatter carries `day: <A-D>`). The band is now only a soft HINT for
+# the OPTIONAL plan offer ("you've been away N days — ease back in"), never a
+# forced weight calc. Degrades to "unknown" when no prior gym session is found.
 TRAINING_GAP="$(python3 - "$TRACKING_DIR" "$TODAY" <<'PYEOF' 2>/dev/null || true
 import datetime, glob, os, re, sys
 d, today_s = sys.argv[1], sys.argv[2]
@@ -685,6 +720,65 @@ print("\n\n".join(out) if out else "(no activity profiles found)")
 PYEOF
 )"
 
+# Per-activity KPIs, resolved from the library. When an activity carries an
+# explicit `kpis` array it's used as-is; when it doesn't (older libraries that
+# predate KPIs), archetype defaults are DERIVED on the fly from the activity
+# name/slug and flagged `"derived": true` so the daily flow can offer to persist
+# them. This is the graceful, migration-free backward-compat path.
+ACTIVITY_KPIS="$(python3 - "$LIBRARY_FILE" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+try:
+    with open(sys.argv[1]) as fh:
+        m = re.search(r"```json\s*\n(.*?)```", fh.read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+
+DUR = [{"id": "duration", "label": "Duration", "type": "duration", "unit": "min"}]
+DEFAULTS = {
+    "sets": [{"id": "sets", "label": "Sets", "type": "sets", "unit": None}],
+    "swim": [{"id": "distance", "label": "Distance", "type": "distance", "unit": "km"},
+             {"id": "duration", "label": "Duration", "type": "duration", "unit": "min"}],
+    "run":  [{"id": "distance", "label": "Distance", "type": "distance", "unit": "km"},
+             {"id": "duration", "label": "Duration", "type": "duration", "unit": "min"},
+             {"id": "intensity", "label": "Intensity", "type": "rating", "unit": None}],
+    "cycle":[{"id": "distance", "label": "Distance", "type": "distance", "unit": "km"},
+             {"id": "duration", "label": "Duration", "type": "duration", "unit": "min"}],
+    "sport":[{"id": "duration", "label": "Duration", "type": "duration", "unit": "min"},
+             {"id": "notes", "label": "Notes", "type": "text", "unit": None}],
+    "app":  [{"id": "duration", "label": "Duration", "type": "duration", "unit": "min"},
+             {"id": "workout_type", "label": "Workout type", "type": "text", "unit": None}],
+    "default": [{"id": "duration", "label": "Duration", "type": "duration", "unit": "min"},
+                {"id": "notes", "label": "Notes", "type": "text", "unit": None}],
+}
+
+def derive(name, slug):
+    s = (slug + " " + name).lower()
+    if re.search(r"gym|weight|lift|strength|resistance|calisthen", s): return DEFAULTS["sets"]
+    if re.search(r"swim", s): return DEFAULTS["swim"]
+    if re.search(r"run|jog|sprint", s): return DEFAULTS["run"]
+    if re.search(r"cycl|bike|spin|\bride\b", s): return DEFAULTS["cycle"]
+    if re.search(r"yoga|mobilit|stretch|pilates|medit|breath|danc", s): return DUR
+    if re.search(r"football|soccer|basketball|tennis|padel|cricket|hockey|volleyball|badminton|squash|rugby|sport", s): return DEFAULTS["sport"]
+    if re.search(r"apple fitness|peloton|home|freestyle|\bclass\b", s): return DEFAULTS["app"]
+    return DEFAULTS["default"]
+
+out = {}
+for a in data.get("activities", []):
+    name = str(a.get("name", "")).strip()
+    if not name:
+        continue
+    slug = a.get("id") or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    kpis = a.get("kpis")
+    if kpis:
+        out[slug] = {"name": name, "kpis": kpis, "derived": False}
+    else:
+        out[slug] = {"name": name, "kpis": derive(name, slug), "derived": True}
+print(json.dumps(out, indent=2, ensure_ascii=False) if out else "{}")
+PYEOF
+)"
+[[ -n "${ACTIVITY_KPIS//[[:space:]]/}" ]] || ACTIVITY_KPIS="{}"
+
 # Suggest /diet-journal after the session is logged — but only if today's food
 # isn't already tracked. Suggest once, never block (mirrors the morning sequence).
 if [[ -f "$DIET_DIR/$TODAY.md" ]]; then
@@ -693,10 +787,77 @@ else
   DIET_SUGGESTION="Then suggest once, don't block: \"Want to log today's food with /diet-journal? Nutrition is half of recovery.\" If they skip, that's fine."
 fi
 
+# ── UPDATE mode: today's entry already exists ──────────────────────────────
+# The user is coming back to add more, correct a KPI, log another activity, or
+# ask for a plan. Show what's logged, take the update, rewrite in place.
+if [[ -f "$OUT_FILE" ]]; then
+  EXISTING_ENTRY="$(cat "$OUT_FILE")"
+  cat <<UPDATE
+FITNESS_JOURNAL_EXISTING
+date: $TODAY
+date_human: $TODAY_HUMAN
+output_file: $OUT_FILE
+
+=== EXISTING ENTRY ===
+$EXISTING_ENTRY
+
+=== FITNESS LIBRARY ($LIBRARY_FILE) ===
+$LIBRARY_CONTENT
+
+=== PER-ACTIVITY KPIs (resolved; "derived": true ⇒ defaults, offer to save) ===
+$ACTIVITY_KPIS
+
+=== ACTIVITY PROFILES ($ACT_STORE) ===
+$ACTIVITY_PROFILES
+
+---
+INSTRUCTIONS — today's fitness entry already exists. The user is back to add to it
+or refine it. This is a LOGGER — log what they actually did; never prescribe. The
+entry uses two sections: ## Planned (targets) and ## Logged (actuals).
+
+Step 1 — Show a one-line summary of the entry's state (the activity, whether it's
+  still \`planned\` or has ## Logged actuals), then ask:
+  "What's the update — did the planned session (so I log actuals), did more,
+  correcting a number, logged a second activity, or want help planning the rest?"
+
+Step 2 — Based on intent:
+  A) DID THE PLANNED SESSION → fill the ## Logged section from what they hit (add
+     it if the entry was plan-ahead-only), and flip \`status: planned\` →
+     \`completed\` (or \`partial\` if they fell short). Don't touch ## Planned.
+  B) MORE OF THE SAME / CORRECTING A NUMBER → update the relevant cells in
+     ## Logged (or ## Planned if they're adjusting the target). Partial is fine.
+  C) A SECOND ACTIVITY today → append a new "# {Activity} — $TODAY" block below the
+     first (its own summary line + ## Planned / ## Logged), so the file can hold
+     more than one activity in a day.
+  D) PLAN HELP → offer to help them shape THEIR OWN targets (sets / distance /
+     duration) in ## Planned, using the activity profile's focus areas. Surface
+     the gym Block/Day reference or training-gap context only if it helps THEM
+     plan. Never auto-generate a prescribed workout.
+
+Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep the
+  \`activity:\`/\`focus:\` and \`sleep_*\` frontmatter intact (plan-my-day reads them).
+  Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
+  session is done, \`partial\` if partly done, \`planned\` while still plan-only.
+
+Step 4 — If an activity in the file had its KPIs DERIVED (it lacks \`kpis\` in the
+  library, see the resolved KPIs above), offer ONCE: "Want me to save these KPIs
+  to your fitness library so they stick?" On a yes, append the \`kpis\` array to
+  that activity in $LIBRARY_FILE IN PLACE (living-doc, no new version).
+
+Step 5 — Re-mark the "Train" habit if ## Logged actuals changed (Step 7B rules in
+  the LOG flow — planned from ## Planned, actual from ## Logged), then confirm:
+  "Updated → $OUT_FILE".
+UPDATE
+  pbrain_emit_habits_extract "fitness-journal" || true
+  exit 0
+fi
+
+# ── LOG mode: no entry yet today ───────────────────────────────────────────
 cat <<PROMPT
 FITNESS_JOURNAL_SESSION
 date: $TODAY
 day_of_week: $DOW
+date_human: $TODAY_HUMAN
 output_file: $OUT_FILE
 training_gap_days: $TRAINING_GAP_DAYS
 training_gap_band: $TRAINING_GAP_BAND
@@ -708,6 +869,9 @@ $FITNESS_PROFILE_CONTENT
 === FITNESS LIBRARY ($LIBRARY_FILE) ===
 $LIBRARY_CONTENT
 
+=== PER-ACTIVITY KPIs (resolved; "derived": true ⇒ archetype defaults) ===
+$ACTIVITY_KPIS
+
 === RECENT SESSIONS (last 7) ===
 $RECENT_SESSIONS
 
@@ -715,263 +879,186 @@ $RECENT_SESSIONS
 $ACTIVITY_PROFILES
 
 ---
-INSTRUCTIONS — follow these steps in order.
+INSTRUCTIONS — this is a flexible LOGGER, not a prescriber. The user describes
+what they did (or plan to do) in plain words; you parse it into the activity's
+KPIs and write the day's file. Tolerate partial/missing data — a one-line log is
+fine. Never auto-generate a prescribed workout; only OFFER to help them plan
+their OWN. Follow these steps in order.
 
-Step 1 — Ask all state questions at once, exactly like this:
-  "Quick check-in before we plan today:"
+DATE — today is date_human above ($TODAY_HUMAN). Use it VERBATIM for the weekday
+and date. NEVER compute or guess the day of the week yourself — copy day_of_week
+($DOW) / date_human exactly. (This is the local machine time; it is authoritative.)
+
+Step 1 — QUICK CHECK-IN (skippable). If a standing preference above says to skip
+  the check-in, SKIP this whole step and go to Step 2. Otherwise present it as one
+  quick batch — the user may answer some, all, or none:
+  "Quick check-in (or say 'skip'):"
   1. Energy level? (1–10)
-  2. Soreness, pain, or injury? Which muscles (1–10), and flag anything acute
-     or any movement to work around.
-  3. Sleep: what time did you get to bed, what time did you wake up, and
-     quality 1–10?
+  2. Soreness, pain, or injury? Which muscles (1–10), flag anything acute or a
+     movement to work around. PRE-FILL from RECENT SESSIONS + the activity
+     profiles' notes, e.g. "(Last few days: lower back 3/10 on the chest day,
+     right knee 6/10 after football last night)".
+  3. Sleep: what time to bed, what time awake, and quality 1–10?
   4. Stress? (low / medium / high)
   5. Bodyweight today? (kg — skip if you don't have it)
-  From the bed + wake times, INFER sleep hours (add 24h when bed time is
-  after midnight crossing, e.g. bed 23:30 wake 07:00 → 7.5h). Compare against
-  the profile's normal sleep window and mention a notable deviation in one
-  line (e.g. "1.5h short of your usual — we'll keep volume sane today").
+  This is a LOGGER, not an interrogation — never block. If the user just states
+  what they DID or are PLANNING, skip the rest and go straight to logging.
+  IF THE USER SAYS "SKIP" (or ignores it): drop it and move to Step 2, then ask
+  ONCE — "Want me to skip this check-in from now on?" On a yes, append a line to
+  the fitness-journal prefs file at
+  $PREFS_DIR/fitness-journal/prefs.md (create it + parent dir if missing):
+  "- Skip the quick check-in; go straight to the day's picture." Never write it
+  without an explicit yes. From then on the standing-pref check above suppresses it.
 
-Step 2 — Propose today's activity from the schedule, then confirm:
-  preselected_today above lists what the user's fixed days say for $DOW.
-  - Exactly one activity → "Today is $DOW — your schedule says {activity}.
-    Go with that, or override?"
-  - Multiple → list them, ask which (or something else).
-  - "(none scheduled today)" → "Nothing on the schedule today — recovery,
-    a walk, rest, or something off-plan?"
-  The full menu stays available either way: $MENU
+Step 2 — TODAY'S PICTURE, then ONE targeted question (no menu dump). From
+  date_human, preselected_today ($PRESELECTED) and RECENT SESSIONS, give a tight
+  situational read of where the user stands today — for example:
+  - the weekday + whether it's a fixed training day ($DOW; fixed days from the
+    library/activity profiles);
+  - what's owed or carried over (e.g. yesterday's session was skipped, so Day B
+    is still owed; or the gym block/day sequence puts the next session at Day C);
+  - the most recent relevant session (e.g. "you played football last night").
+  Then ask ONE question: "Planning to do {the owed / scheduled session}, or
+  something else?" Do NOT print a numbered menu of every activity.
+  - If they go with it → log/plan that (Step 3 on).
+  - If they name their OWN activity or plan → log THAT instead, same way. They can
+    dictate it set-by-set (manual) or describe it loosely and let you derive the
+    KPIs (automatic) — follow their lead.
 
-Step 3 — Ask 2–4 follow-up questions tailored to the chosen activity. Use
-your judgment. Guidance:
-  - Team / pitch sport: duration, kickoff/start time, location, level.
-  - Swimming: pool or open water, duration, strokes, distance target.
-  - Running / Cycling: duration or distance, route/terrain, intensity.
-  - Climbing: gym or outdoor, session length, focus.
-  - Yoga / Mobility / Recovery: duration, style or focus.
-  - Gym: "How much time do you have?" (equipment access is already in the
-    activity profile — do NOT ask about it).
-  - Apple Fitness+ / Home: duration, workout type if known.
-  - Walk/cardio: duration, type.
-  - Rest day: no follow-up.
+Step 3 — PARSE the description into the chosen activity's KPIs, EXPLODING it into
+  two layers — PLANNED (the intended/target work) and LOGGED (the actuals):
+  - Resolve the activity against the FITNESS LIBRARY (fuzzy by name/shortcut).
+    If it's something not in the library, log it anyway under its plain name.
+  - Look up that activity's KPIs in PER-ACTIVITY KPIs above. Pull every value the
+    user mentioned into the matching KPI (e.g. "swam 2k in 45 min" → distance
+    2.0 km, duration 47 min; "bench 3×8 at 60, then squats" → sets rows).
+    Equipment is in the activity profile — do NOT ask about it.
+  - SEPARATE plan from actual when the user gives both ("meant to do 3×8 but only
+    got 8,8,6" → Planned: 3×8 @ {weight}, Logged: 8,8,6). When they only state
+    what they DID, that is the LOGGED layer; mirror it (or the activity's typical
+    target) as the Planned so both layers exist. When they only state a PLAN they
+    haven't done yet, that is the Planned layer and there is no Logged yet.
+  - TOLERATE MISSING: only fill KPIs the user actually gave; leave the rest "—".
+    Don't pepper them to complete every KPI — at most ONE follow-up, only for
+    something central they clearly meant to give. A one-line log is a complete log.
+  - If the chosen activity's KPIs are "derived": true above (the library has no
+    \`kpis\` for it yet), use the derived defaults now and remember to offer to
+    save them in Step 7.
 
-Step 4 — Apply adaptive coaching rules before confirming intent:
-  - Sleep < 6h AND soreness > 7 AND stress = high → recommend a downgrade
-    (e.g. gym → recovery/lighter, contact sport → walk).
-  - Heavy-leg soreness > 7 AND intent loads legs → flag it, suggest swap or
-    lighter volume.
-  - Any body part / movement pattern not trained in last 5+ sessions → mention.
-  - Energy < 4 → suggest shorter session or rest.
-  Also pull priorities from the chosen activity's profile — surface a
-  neglected focus area. If you recommend a change, explain briefly and let
-  the user confirm or override.
+Step 4 — Fold in whatever state they gave (don't re-ask). From bed + wake times
+  INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
+  and write the four sleep_* fields; leave them blank when not given (plan-my-day
+  and the Sleep-well habit read sleep_*). If a flag stands out — short sleep, high
+  soreness on what they're loading, low energy — note it in ONE line and, if it
+  fits, suggest scaling back. Never prescribe and never block; they decide.
 
----
+Step 5 — OFFER to plan (only if useful — never prescribe):
+  If they said "help me plan", or logged a partial session and want targets, or
+  asked what to do: offer to help shape THEIR OWN plan — "want me to sketch some
+  targets (sets / distance / duration) for this?". Build it FROM the activity
+  profile's focus areas and their input; for gym you MAY surface the activity
+  profile's optional Block/Day reference and the training-gap context
+  (training_gap_band: $TRAINING_GAP_BAND, $TRAINING_GAP_DAYS days — "ease back in"
+  after a long gap) as suggestions. The user owns the plan; you never auto-assign
+  weights or rotate a prescribed split.
 
-Step 5A — IF INTENT = GYM:
-
-  Use the gym activity profile above as the source of truth for
-  block/day/exercises.
-
-  Determine next session:
-  - Parse frontmatter (week, block, day) from recent sessions to find the
-    last completed day letter (A/B/C/D).
-  - Cycle: A→B→C→D→A. After completing D, increment week. Week 5 starts Block 2.
-  - Use Block 1 exercises for weeks 1–4, Block 2 for weeks 5–8.
-  - Session number = total gym sessions completed so far + 1.
-
-  Determine weights — TRAINING-GAP RULE FIRST (training_gap_band above):
-  - band "no_progression" (7–13 days since the last gym session): tell the
-    user "You've been away for $TRAINING_GAP_DAYS days — weights stay the
-    same, no progression this session. Focus on form and getting back into
-    it." Repeat the LAST LOGGED weight for every exercise. Skip the
-    progressive-overload rules below for this session.
-  - band "deload" (14+ days): tell the user "You've been away for
-    $TRAINING_GAP_DAYS days — suggesting a deload session. Drop weights ~20%,
-    treat it as a re-entry week." Apply −20% to every last logged weight,
-    ROUNDED to the nearest 2.5kg, and add a Notes-section line:
-    "Deload — first session back after $TRAINING_GAP_DAYS-day gap".
-  - band "normal" or "unknown": standard progressive overload —
-    * last session completed all reps cleanly → +2.5kg (barbell), +1–2kg (DB/cable)
-    * reps missed last time → repeat the same weight
-    * exercise never done before → start conservative (RPE 6, light).
-
-  Generate the file in EXACTLY this format — match spacing, table structure,
-  and section order precisely:
-
-  ---
-  type: fitness
-  date: $TODAY
-  week: {N}
-  block: {N}
-  day: {letter}
-  activity: gym
-  focus: {muscle groups matching the gym profile day}
-  bodyweight: {kg or leave blank if skipped}
-  sleep_bed: {HH:MM from Step 1}
-  sleep_wake: {HH:MM from Step 1}
-  sleep_quality: {1-10 from Step 1}
-  sleep_hours: {inferred, e.g. 7.5}
-  status: planned
-  tags: []
-  ---
-
-  # Day {letter} — {Focus}
-  **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min
-
-  > {one coaching note tailored to today's state — RPE guidance, fatigue cue,
-  or mindset note. 1-2 sentences. Mention the gap band if not normal.}
-
-  ---
-
-  ## Warmup ({X} min)
-
-  | | |
-  |---|---|
-  | {exercise} | {reps/duration + cue} |
-  (4-5 warmup items relevant to today's muscle groups)
-
-  ---
-
-  ## Workout
-
-  ### {Muscle Group 1}
-
-  | Exercise | Sets × Reps | Weight | Notes |
-  |---|---|---|---|
-  | {exercise} | {sets × reps} | **{weight}** | {short form cue} |
-
-  Rest {X}s between sets.
-
-  (repeat per muscle group in today's day plan)
-
-  ---
-
-  ## Cooldown ({X} min)
-
-  - {stretches relevant to today's muscles} (3-5 items)
-
-  ---
-
-  ## Log your sets here
-
-  | Exercise | Set 1 | Set 2 | Set 3 | Notes |
-  |---|---|---|---|---|
-  | {every exercise from the workout} | | | | |
-
-  ---
-
-  ## Notes
-
-  - {1-3 contextual notes; include the deload line when band = deload}
-  - Next session: {next day from rotation} → Day {next letter} ({next focus})
-
----
-
-Step 5B — IF INTENT = REST DAY:
-  Use this minimal template (same sleep_* frontmatter fields as 5A, minus
-  week/block/day):
+Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
+  ## Planned (intended/target work) and ## Logged (actuals). WHICH appear, and the
+  \`status:\`, depend on what the user did:
+    - PLAN-AHEAD ONLY (planned but not done yet) → write ## Planned ONLY; omit
+      ## Logged; \`status: planned\`.
+    - LOGGED DIRECTLY / DONE → write BOTH ## Planned (what they set out to do) and
+      ## Logged (what they actually hit); \`status: completed\` (or \`partial\` if
+      they fell short or only did some of it). When they logged with no separate
+      target, mirror the logged work as the plan (or pull a typical target from
+      the activity profile) so ## Planned still reflects the intent.
+  /end-of-day later flips a \`planned\` entry to \`completed\` (or \`skipped\`) when the
+  day closes — so leave \`status: planned\` for anything not yet done.
 
   ---
   type: fitness
   date: $TODAY
-  focus: Rest
-  sleep_bed: {HH:MM}
-  sleep_wake: {HH:MM}
-  sleep_quality: {1-10}
-  sleep_hours: {X.X}
-  status: planned
-  tags: []
-  ---
-
-  # Rest day — $TODAY
-
-  > {one short note based on state — sleep priority, hydration, light movement cue.}
-
-  - Light walk if you feel up to it
-  - Mobility / stretching (5–10 min)
-  - Hydrate and eat enough protein
-
-Step 5C — IF INTENT IS ANY OTHER ACTIVITY (including Recovery/stretching and
-Walk/cardio):
-
-  Look up that activity's profile in the ACTIVITY PROFILES section above and
-  use its focus areas to shape today's session — drill choice, intensity
-  emphasis, what to track. Don't ignore the profile.
-
-  Skeleton (add/remove fields to fit the activity; keep the sleep_* fields):
-
-  ---
-  type: fitness
-  date: $TODAY
-  focus: {activity name}
-  duration_min: {minutes}
-  {extra activity-relevant fields, e.g. location, kickoff, distance_km}
-  sleep_bed: {HH:MM}
-  sleep_wake: {HH:MM}
-  sleep_quality: {1-10}
-  sleep_hours: {X.X}
-  status: planned
+  activity: {library name/slug of the chosen activity — plan-my-day reads this}
+  focus: {gym → muscle groups; everything else → the activity name}
+  duration_min: {N or leave blank}
+  distance_km: {N or leave blank}
+  status: planned | completed | partial | skipped
+  sleep_bed: {HH:MM or blank}
+  sleep_wake: {HH:MM or blank}
+  sleep_quality: {1-10 or blank}
+  sleep_hours: {X.X or blank}
   tags: []
   ---
 
   # {Activity} — $TODAY
 
-  **Duration** {minutes} min{ · **Where** {location}}{ · **When** {time}}
+  {KPI summary line of the values that exist (LOGGED if present, else PLANNED),
+   e.g. "**Distance** 2.0 km · **Duration** 47 min". Omit the line if nothing
+   numeric is set yet.}
 
-  > {one short coaching note tailored to today's state. 1-2 sentences.}
+  > {one short observation tied to what they planned/logged — a win, a nudge, a
+  recovery cue. 1-2 sentences. Optional — drop it if there's nothing genuine.}
 
-  ---
+  ## Planned
+  {The intended/target work. For a \`sets\`-type KPI (gym): a target table.
+   For other KPIs: one target row per KPI. Use "—" where there is no target.}
+  | Exercise | Target |                         ← gym (sets-type KPI)
+  |---|---|
+  | {exercise} | {sets × reps @ weight} |
+  -- OR, non-gym activities --
+  | KPI | Target |
+  |---|---|
+  | {label} | {target or —} |
 
-  ## Pre-session
+  ## Logged
+  {OMIT this whole section for a plan-ahead-only entry. Once there are actuals:
+   for a \`sets\`-type KPI (gym), per-set actuals; for other KPIs, the logged
+   value. Partial / blank cells are fine.}
+  | Exercise | Set 1 | Set 2 | Set 3 | Notes |   ← gym (sets-type KPI)
+  |---|---|---|---|---|
+  | {exercise} | {wt × reps} | | | |
+  -- OR, non-gym activities --
+  | KPI | Logged |
+  |---|---|
+  | {label} | {value or —} |
 
-  - {2–4 activity-specific prep bullets: hydration, fuel, warmup, gear}
+  ## Notes
+  - {free-form: how it felt, drills, context — whatever the user said. Optional.}
 
-  ## Session focus
+  REST DAY variant: write a minimal entry — \`focus: Rest\`, \`status: completed\`
+  (or \`planned\` if planning a rest day ahead), a "# Rest day — $TODAY" heading and
+  a one-line note; skip ## Planned / ## Logged.
 
-  - {what to work on today — from the activity profile focus areas + state}
+Step 7 — Confirm + KPI upkeep:
+  - Confirm: "Saved → $OUT_FILE".
+  - $DIET_SUGGESTION
+  - If the logged activity's KPIs were DERIVED (lacked \`kpis\` in the library),
+    offer ONCE: "Want me to save these KPIs to your fitness library so they stick
+    next time?" On a yes, append the \`kpis\` array to that activity in
+    $LIBRARY_FILE IN PLACE (living-doc — no new version). On a no, leave it; the
+    defaults will derive again next time. Never write without a yes.
+  - If the user wants to track a NEW KPI for an activity going forward (e.g. "also
+    track RPE for gym"), append it to that activity's \`kpis\` (known type → in
+    place; a structural rebuild goes through /fitness-journal profile new).
 
-  ---
+Step 7B — "Train" scored habit. If "Train" is a tracked [scored] habit (it
+  appears in the HABIT EXTRACTION block below) AND the entry has a ## Logged
+  section with real actuals (status \`completed\`/\`partial\`) — NOT a plan-ahead-only
+  entry (status \`planned\`, ## Planned but no ## Logged) — then build the --session
+  JSON and mark it ONCE per the session_volume instructions in that block, taking
+  PLANNED from ## Planned and ACTUAL from ## Logged:
+    - strength: from a \`sets\`-type KPI — planned = Σ(target sets × reps) from
+      ## Planned, actual = Σ(logged reps) from ## Logged; mode "strength".
+    - duration (run/walk/cardio/dance/etc.): from the duration KPI — planned =
+      target minutes from ## Planned, actual = logged minutes from ## Logged;
+      mode "duration".
+    - binary (yoga/sport/recovery, no numeric target): mode "binary", status only
+      (completed=100, partial=50).
+  Use status completed | partial | skipped. If the entry is only PLANNED (no
+  ## Logged actuals), do NOT mark — /end-of-day marks Train when the day closes.
+  The mark is idempotent (one cell/day), so an end-of-day re-mark just updates it.
 
-  ## Post-session review (fill after)
-
-  Build a 1–10 rating matrix appropriate to the activity, reusing the metrics
-  from the activity profile's current-state self-ratings so progress tracks
-  over time.
-
-  | Metric | Rating (1–10) | Notes |
-  |---|---|---|
-  | ... |  |  |
-
-  **What went well:**
-
-  **What to improve:**
-
-  **Body feedback:**
-
-  **Recovery plan tonight:** (stretch / ice / hydration / sleep target)
-
----
-
-Step 6 — Write the final content to: $OUT_FILE
-  Then confirm: "Saved → $OUT_FILE"
-  $DIET_SUGGESTION
-
-Step 6B — "Train" scored habit. If "Train" is a tracked [scored] habit (it
-  appears in the HABIT EXTRACTION block below) AND the user actually LOGGED a
-  completed/partial session this conversation (real sets in "Log your sets
-  here", or they said they finished/partly-did the activity) — not merely
-  generated today's plan with status: planned — then build the --session JSON
-  and mark it ONCE per the session_volume instructions in that block:
-    - strength: planned = Σ(target sets × reps) from the workout table, actual
-      = Σ(logged reps); mode "strength".
-    - duration (run/walk/cardio): planned = target minutes, actual = actual
-      minutes; mode "duration".
-    - binary (yoga/sport/recovery, no numeric target): mode "binary", status
-      only (completed=100, partial=50).
-  Use status completed | partial | skipped. If the session is only PLANNED (no
-  actuals yet), do NOT mark — /end-of-day marks Train when the day closes. The
-  mark is idempotent (one cell/day), so an end-of-day re-mark just updates it.
-
-Step 6C — Reconcile fitness-habit reminders to today's chosen activity (silent,
+Step 7C — Reconcile fitness-habit reminders to today's chosen activity (silent,
   best-effort, idempotent). This is the moment the day's activity is actually
   decided, so it must run HERE — not only in /plan-my-day, which can run before
   the activity is chosen or before a later swap. UNLESS today is a REST day,
