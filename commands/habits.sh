@@ -1028,7 +1028,7 @@ if [[ "$SUB" == "rollup" ]]; then
     esac
   done
   ROLL="$(pbrain_habits_rollup "$R_DATE" || true)"
-  if [[ -n "${ROLL//[[:space:]]/}" ]]; then
+  if [[ "$ROLL" =~ [^[:space:]] ]]; then
     echo "$ROLL"
   else
     echo "(no habit data — set up tracking with /habits)"
@@ -1330,7 +1330,7 @@ for h in (data.get("habits") or []):
     break
 PYEOF
 )"
-  if [[ -z "${HINFO//[[:space:]]/}" ]]; then
+  if [[ ! "$HINFO" =~ [^[:space:]] ]]; then
     echo "habits: no habit with id $RM_ID" >&2; exit 1
   fi
   RM_NAME="$(printf '%s' "$HINFO" | cut -f1)"
@@ -1741,7 +1741,7 @@ PYEOF
     # /remind reminders and other days are never touched; skip anything already
     # tracked (handled above). Best-effort — silent if the helper is unavailable.
     APP_LIST="$(pbrain_reminders_run list 2>/dev/null || true)"
-    if [[ -n "${APP_LIST//[[:space:]]/}" ]]; then
+    if [[ "$APP_LIST" =~ [^[:space:]] ]]; then
       ORPHANS="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RS_DATE" "$APP_LIST" <<'PYEOF' 2>/dev/null || true
 import json, re, sys, sqlite3
 profile, db, date, app_list = sys.argv[1:5]
@@ -2406,7 +2406,7 @@ _habits_seed_defaults || true
 
 # Validate the profile JSON.
 PROFILE_JSON="$(pbrain_habits_json || true)"
-if [[ -z "${PROFILE_JSON//[[:space:]]/}" ]]; then
+if [[ ! "$PROFILE_JSON" =~ [^[:space:]] ]]; then
   cat <<ERR
 HABITS_CONFIG_ERROR
 profile_file: $PROFILE_FILE
@@ -2513,7 +2513,7 @@ pbrain_habit_refresh "$TODAY" >/dev/null 2>&1 || true
 TRACK_FILE="$(pbrain_habit_track_file "$TODAY")"
 STATUS_JSON="$(pbrain_habits_status "$TODAY" || true)"
 ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
-[[ -n "${ROLLUP//[[:space:]]/}" ]] || ROLLUP="(no events logged yet)"
+[[ "$ROLLUP" =~ [^[:space:]] ]] || ROLLUP="(no events logged yet)"
 
 cat <<DASH
 HABITS_DASHBOARD

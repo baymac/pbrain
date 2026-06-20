@@ -1716,7 +1716,7 @@ pbrain_emit_habits_extract() {
   cmd="${1:-}"
   [[ -n "$cmd" ]] || return 0
   json="$(pbrain_habits_json)"
-  [[ -n "${json//[[:space:]]/}" ]] || return 0
+  [[ "$json" =~ [^[:space:]] ]] || return 0
 
   # Habits flagged eod_only are confirmed/scored at /end-of-day (or via their own
   # reminder) from what ACTUALLY happened across the day — never marked mid-day
@@ -1870,7 +1870,7 @@ print("\n".join(out))
   printf '%s\n' "    --done '[\"Morning vitamin D\", \"Magnesium (night)\"]'"
   printf '%s\n' "score = done-weight / total-weight on a 0–1 scale (e.g. 2 of 3 equal items = 0.67)."
   printf '%s\n' "List ONLY what was done; omit the rest. Never guess the score yourself."
-  if [[ -n "${scored_rules//[[:space:]]/}" ]]; then
+  if [[ "$scored_rules" =~ [^[:space:]] ]]; then
     printf '%s\n' "Classification rules per scored habit — use EXACTLY each habit's own"
     printf '%s\n' "definition below to count its good/bad units (the definition states which"
     printf '%s\n' "meals/occasions count toward good vs bad — do not assume all of them do):"
@@ -1890,7 +1890,7 @@ print("\n".join(out))
   printf '%s\n' "actually mention. Marking is idempotent (one cell per habit per day), so"
   printf '%s\n' "re-running is safe. If nothing was evidenced, do nothing and stay silent."
   printf '%s\n' "Surface at most one short line summarising what you marked (or nothing)."
-  if [[ -n "${deferred//[[:space:]]/}" ]]; then
+  if [[ "$deferred" =~ [^[:space:]] ]]; then
     printf '%s\n' ""
     printf '%s\n' "END-OF-DAY ONLY — do NOT mark these now: $deferred. They are confirmed/"
     printf '%s\n' "scored at /end-of-day (or when their own reminder is ticked) from what"
@@ -1940,7 +1940,7 @@ pbrain_emit_habits_scan() {
   cmd="${1:-}"
   [[ -n "$cmd" ]] || return 0
   json="$(pbrain_habits_json)"
-  [[ -n "${json//[[:space:]]/}" ]] || return 0   # silent without a habits profile
+  [[ "$json" =~ [^[:space:]] ]] || return 0   # silent without a habits profile
 
   today="$(date +%Y-%m-%d)"
   cmd_path="$(pbrain_habits_cmd)"

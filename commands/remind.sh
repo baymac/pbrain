@@ -147,7 +147,7 @@ case "$SUB" in
         *) shift ;;
       esac
     done
-    [[ -n "${R_LIST//[[:space:]]/}" ]] && export PBRAIN_REMINDERS_LIST="$R_LIST"
+    [[ "$R_LIST" =~ [^[:space:]] ]] && export PBRAIN_REMINDERS_LIST="$R_LIST"
 
     if [[ -z "${R_TEXT//[[:space:]]/}" ]]; then
       echo "remind: add requires --text" >&2; exit 1

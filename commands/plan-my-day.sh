@@ -662,7 +662,7 @@ print("\n".join(lines))
 PYEOF
 RECENT_FITNESS_ACTIVITY="$(python3 "$_RF_PY" "$FITNESS_DIR" "$TODAY" 2>/dev/null || true)"
 rm -f "$_RF_PY"
-[[ -n "${RECENT_FITNESS_ACTIVITY//[[:space:]]/}" ]] || RECENT_FITNESS_ACTIVITY="(no fitness logged in the last 4 days)"
+[[ "$RECENT_FITNESS_ACTIVITY" =~ [^[:space:]] ]] || RECENT_FITNESS_ACTIVITY="(no fitness logged in the last 4 days)"
 
 # Whether the committed plans profile carries a typical_day template — drives
 # Step 1b.5's graceful degradation (fall back to from-scratch planning + a soft
@@ -735,7 +735,7 @@ print("\n".join(lines))
 PYEOF
 RECENT_DAY_DIGEST="$(python3 "$_RD_PY" "$PLAN_DIR" "$TODAY" 2>/dev/null || true)"
 rm -f "$_RD_PY"
-[[ -n "${RECENT_DAY_DIGEST//[[:space:]]/}" ]] || RECENT_DAY_DIGEST="(no previous plans)"
+[[ "$RECENT_DAY_DIGEST" =~ [^[:space:]] ]] || RECENT_DAY_DIGEST="(no previous plans)"
 
 # Carry-forward from the most recent PRIOR day plan — /end-of-day writes a
 # "### Carry-forward" list (not-done tasks) + leaves "## Task log" rows whose
@@ -794,7 +794,7 @@ for it in items[:12]:
 PYEOF
 CARRY_FORWARD="$(python3 "$_CF_PY" "$PLAN_DIR" "$TODAY" 2>/dev/null || true)"
 rm -f "$_CF_PY"
-[[ -n "${CARRY_FORWARD//[[:space:]]/}" ]] || CARRY_FORWARD="(none)"
+[[ "$CARRY_FORWARD" =~ [^[:space:]] ]] || CARRY_FORWARD="(none)"
 
 # Weekly-review nudge: Mondays only. Measures the calendar span since the last
 # weekly review covered through (parsed from the review's "Dates: X → Y" line,
@@ -892,11 +892,11 @@ PYEOF
 # recurrences expanded for today. These are HARD time anchors the day is built
 # around. No-op (empty) if osascript/Calendar is unavailable.
 CALENDAR_TODAY="$(pbrain_calendar_today "$TODAY" || true)"
-[[ -n "${CALENDAR_TODAY//[[:space:]]/}" ]] || CALENDAR_TODAY="(none)"
+[[ "$CALENDAR_TODAY" =~ [^[:space:]] ]] || CALENDAR_TODAY="(none)"
 # Sync recent habit-tracking md into the DB so the rollup reflects them.
 pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
-[[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+[[ "$HABITS_ROLLUP" =~ [^[:space:]] ]] || HABITS_ROLLUP="(no habit data)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || echo "$VAULT_DIR/life/habit-tracking/$TODAY.md")"
@@ -909,7 +909,7 @@ if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
   # Habit↔reminder upkeep (best-effort, silent, degrades without Reminders access):
   # ensure today's one-shots exist for linked habits, then pull any the user
   # already ticked off in the Reminders app back into today's tracker.
-  if [[ -n "${HABITS_CMD//[[:space:]]/}" ]]; then
+  if [[ "$HABITS_CMD" =~ [^[:space:]] ]]; then
     bash "$HABITS_CMD" reminders-ensure --date "$TODAY" >/dev/null 2>&1 || true
     bash "$HABITS_CMD" reminders-sync   --date "$TODAY" >/dev/null 2>&1 || true
     # Activity-aware reconciliation (deterministic, best-effort, silent): when
@@ -923,7 +923,7 @@ if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
     fi
     pbrain_habits_sync_range 1 >/dev/null 2>&1 || true   # re-mirror any pulled marks
     HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
-    [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+    [[ "$HABITS_ROLLUP" =~ [^[:space:]] ]] || HABITS_ROLLUP="(no habit data)"
   fi
 fi
 HABITS_TODAY_MD="$(cat "$HABITS_TRACK_FILE" 2>/dev/null || echo "MISSING")"
