@@ -413,7 +413,7 @@ for a in data.get("activities", []):
 PYEOF
 )"
 
-if [[ -z "${ACTIVITY_ROWS//[[:space:]]/}" ]]; then
+if [[ ! "$ACTIVITY_ROWS" =~ [^[:space:]] ]]; then
   cat <<ERR
 FITNESS_JOURNAL_CONFIG_ERROR
 library_file: $LIBRARY_FILE
@@ -438,7 +438,7 @@ while IFS=$'\t' read -r _name _slug; do
   fi
 done <<< "$ACTIVITY_ROWS"
 
-if [[ -n "${MISSING_PROFILES//[[:space:]]/}" ]]; then
+if [[ "$MISSING_PROFILES" =~ [^[:space:]] ]]; then
   cat <<PROFILES
 FITNESS_JOURNAL_SETUP_ACTIVITY_PROFILES
 library_file: $LIBRARY_FILE
@@ -779,7 +779,7 @@ for a in data.get("activities", []):
 print(json.dumps(out, indent=2, ensure_ascii=False) if out else "{}")
 PYEOF
 )"
-[[ -n "${ACTIVITY_KPIS//[[:space:]]/}" ]] || ACTIVITY_KPIS="{}"
+[[ "$ACTIVITY_KPIS" =~ [^[:space:]] ]] || ACTIVITY_KPIS="{}"
 
 # Suggest /diet-journal after the session is logged — but only if today's food
 # isn't already tracked. Suggest once, never block (mirrors the morning sequence).

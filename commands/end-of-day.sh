@@ -110,7 +110,7 @@ CLOSED="$(already_closed "$PLAN_FILE")"
 # Sync recent habit-tracking md into the DB so the rollup reflects today's marks.
 pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
-[[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]] || HABITS_ROLLUP="(no habit data)"
+[[ "$HABITS_ROLLUP" =~ [^[:space:]] ]] || HABITS_ROLLUP="(no habit data)"
 if [[ -f "$(pbrain_habits_profile_file)" ]]; then HABITS_SETUP_NEEDED=no; else HABITS_SETUP_NEEDED=yes; fi
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 HABITS_TRACK_FILE="$(pbrain_habit_track_file "$TODAY" 2>/dev/null || true)"

@@ -577,7 +577,7 @@ on run argv
 end run
 APPLESCRIPT
 )"
-  [[ -n "${dump//[[:space:]]/}" ]] || return 0
+  [[ "$dump" =~ [^[:space:]] ]] || return 0
   # Stage 2 — expand occurrences for the target day. The dump is passed as argv
   # (NOT stdin): the heredoc already occupies python's stdin as the program text.
   python3 - "$y" "$mo" "$d" "$dump" <<'PYEOF' 2>/dev/null || true

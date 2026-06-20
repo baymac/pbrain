@@ -2880,6 +2880,40 @@ EOF
   grep -q '"activity": "meditation"' "$PBRAIN_HABITS_PROFILE_FILE"
 }
 
+# --- PB-42 regression: the ride-along extractor must not be O(n^2) ---------
+# pbrain_emit_habits_extract runs on EVERY pbrain command. Its emptiness guard
+# used `${json//[[:space:]]/}`, a global pattern substitution that is O(n^2) in
+# bash 3.2: on a ~16KB habits profile it took ~20s PER command. The fix is the
+# O(n) regex test `[[ $json =~ [^[:space:]] ]]`. This test builds a large but
+# valid profile and asserts the extractor finishes well under a budget the old
+# idiom could never meet (it would take minutes on this input).
+@test "PB-42: emit_habits_extract stays fast on a large profile (no O(n^2) whitespace strip)" {
+  python3 - "$PBRAIN_HABITS_PROFILE_FILE" <<'PY'
+import json, sys
+habits = []
+for i in range(400):
+    habits.append({
+        "name": "Habit number %d with a reasonably long descriptive name" % i,
+        "id": "habit-%d" % i,
+        "kind": "build", "direction": "at_least",
+        "schedule_type": "daily", "target_count": 1,
+        "priority": "medium", "archived": False,
+        "notes": "padding notes for realistic size " * 6,
+    })
+data = {"habits": habits}
+body = "---\ntype: habits-profile\n---\n```json\n" + json.dumps(data, indent=2) + "\n```\n"
+open(sys.argv[1], "w").write(body)
+PY
+  pbrain_db_init >/dev/null 2>&1 || true
+  bytes="$(wc -c < "$PBRAIN_HABITS_PROFILE_FILE" | tr -d ' ')"
+  start="$(date +%s)"
+  pbrain_emit_habits_extract habits >/dev/null 2>&1 || true
+  elapsed="$(( $(date +%s) - start ))"
+  # Profile is genuinely large (>40KB) AND the emitter finished in well under
+  # the budget. The old O(n^2) idiom took minutes on this size; new code <1s.
+  [ "$bytes" -gt 40000 ] && [ "$elapsed" -lt 8 ]
+}
+
 # --- reminders-sync arg-parsing guards (PB-43) -----------------------------
 # reminders-sync must parse --date/--sweep order-independently and fail LOUDLY
 # on a missing/flag-shaped/unparseable date — a wrong-day --sweep DELETES that

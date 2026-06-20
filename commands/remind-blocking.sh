@@ -288,7 +288,7 @@ if lines:
     print("\n".join(lines))
 PYEOF
 )"
-    if [[ -n "${LISTED//[[:space:]]/}" ]]; then
+    if [[ "$LISTED" =~ [^[:space:]] ]]; then
       echo "$LISTED"
     else
       echo "(no active blocking reminders)"
@@ -430,7 +430,7 @@ PYEOF
   *)
     RAW="$*"
     LISTED="$(bash "$SELF" list 2>/dev/null | sed '1d' || true)"
-    [[ -n "${LISTED//[[:space:]]/}" ]] || LISTED="(no active blocking reminders)"
+    [[ "$LISTED" =~ [^[:space:]] ]] || LISTED="(no active blocking reminders)"
     cat <<ENTRY
 REMIND_BLOCKING_ENTRY
 now: $NOW_DT ($DOW)

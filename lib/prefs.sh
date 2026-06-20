@@ -109,7 +109,7 @@ pbrain_emit_prefs() {
   if [[ -f "$global_file" ]]; then
     # Read the file; bail silently on any read error. Whitespace-only == empty.
     global_contents="$(cat "$global_file" 2>/dev/null || true)"
-    if [[ -n "${global_contents//[[:space:]]/}" ]]; then
+    if [[ "$global_contents" =~ [^[:space:]] ]]; then
       printf '%s\n' "--- USER PREFERENCES (global — all pbrain commands) ---"
       printf '%s\n' "Standing preferences this user has set for ALL pbrain commands. Apply"
       printf '%s\n' "them throughout this session; they override command defaults AND any"
@@ -130,7 +130,7 @@ pbrain_emit_prefs() {
   # with no prefs array yet — e.g. before the 0011 migration has run).
   if [[ -n "$profile_file" && -f "$profile_file" ]]; then
     profile_prefs="$(pbrain_prefs_from_profile "$profile_file" 2>/dev/null || true)"
-    if [[ -n "${profile_prefs//[[:space:]]/}" ]]; then
+    if [[ "$profile_prefs" =~ [^[:space:]] ]]; then
       printf '%s\n' "--- USER PREFERENCES for /$cmd ---"
       printf '%s\n' "Standing preferences this user has set for this command. Apply them"
       printf '%s\n' "throughout this session; they override the command's defaults wherever"
@@ -151,7 +151,7 @@ pbrain_emit_prefs() {
   contents="$(cat "$prefs_file" 2>/dev/null || true)"
 
   # Treat whitespace-only files as empty — emit nothing.
-  [[ -n "${contents//[[:space:]]/}" ]] || return 0
+  [[ "$contents" =~ [^[:space:]] ]] || return 0
 
   printf '%s\n' "--- USER PREFERENCES for /$cmd ---"
   printf '%s\n' "Standing preferences this user has set for this command. Apply them"

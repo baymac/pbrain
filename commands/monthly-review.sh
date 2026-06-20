@@ -106,7 +106,7 @@ echo "--- END WEEKLY REVIEWS ---"
 pbrain_habits_sync_range 35 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
-if [[ -n "${HABITS_ROLLUP//[[:space:]]/}" ]]; then
+if [[ "$HABITS_ROLLUP" =~ [^[:space:]] ]]; then
   echo ""
   echo "--- HABITS (this month vs each habit's criteria) ---"
   echo "$HABITS_ROLLUP"
