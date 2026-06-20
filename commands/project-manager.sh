@@ -54,6 +54,11 @@ set -euo pipefail
 #                         Create a new issue in an existing project.
 #   project-create --name N [--shortcut s]
 #                         Create a new Plane project and add it to the registry.
+#   workdir [<ref> --path <abs> [--kind conductor|repo] [--base-branch b]
+#           [--isolation worktree|branch]] | workdir <ref> --clear
+#                         Per-project working location for /plan-my-work
+#                         `task execute` (where that project's tasks run). No
+#                         args = list. Stored in plane.json projects[].work.
 #   --- richer write / lookup verbs (the catalogue the NL router targets) ---
 #   <plain words>         Natural-language instruction → routed to the verbs below
 #                         (or explicit: route <words>). E.g. "bump PB-26 to high,
@@ -177,7 +182,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -197,7 +202,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -209,7 +214,7 @@ fi
 # Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|enrich|move|priority|timeline|completed|issue|project-create)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|spec|enrich|move|priority|timeline|completed|issue|project-create|workdir)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — this needs a configured Plane instance."
@@ -491,6 +496,25 @@ PYEOF
     envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/explode-walk.txt"
     ;;
 
+  # ===== spec/approval gate (PB-45): draft + approve ONE issue's plan =========
+  spec)
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag ref)}"
+    [[ -n "$ref" ]] || { echo "Usage: /project-manager spec <URL|PB-26|seq|name> [--project R] [--read]" >&2; exit 1; }
+    echo "PM_SPEC"
+    python3 "$PLANE" spec "$ref" ${F_project:+--project "$F_project"} || true
+    echo ""
+    # --read (or executor mode, e.g. /plan-my-work task execute) = JSON only: emit
+    # the plan + approval state without the interactive Socratic walk.
+    if _has_bool read || [[ -n "${PBRAIN_PM_CALLER:-}" ]]; then
+      :
+    else
+      PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+      export PM_SELF
+      envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/spec-walk.txt"
+    fi
+    ;;
+
   enrich)
     _parse_args "$@"
     echo "PM_ENRICH"
@@ -545,6 +569,24 @@ PYEOF
     python3 "$PLANE" project-create \
       --name "$name" \
       ${F_shortcut:+--shortcut "$F_shortcut"} || true
+    ;;
+
+  # ===== per-project working location (PB-40 `/plan-my-work task execute`) =====
+  # Records where a Plane project's tasks get executed (a pre-existing repo /
+  # Conductor workspace path). Single-writer rule: config writes are a PM verb.
+  #   workdir                              list configured working locations
+  #   workdir <ref> --path <abs> [...]     set (kind|base-branch|isolation)
+  #   workdir <ref> --clear                remove
+  workdir)
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag project)}"
+    echo "PM_WORKDIR"
+    python3 "$PLANE" workdir ${ref:+"$ref"} \
+      ${F_path:+--path "$F_path"} \
+      ${F_kind:+--kind "$F_kind"} \
+      ${F_base_branch:+--base-branch "$F_base_branch"} \
+      ${F_isolation:+--isolation "$F_isolation"} \
+      $(_has_bool clear && printf '%s' --clear) || true
     ;;
 
   completed)

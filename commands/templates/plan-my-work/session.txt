@@ -42,6 +42,12 @@ last_block_end) + bed time from the profile JSON above.
    If a project returns empty, it likely still needs grooming — hand it back to
    step 2 (PM review), don't triage inline. Map tasks → blocks: PREFER one project
    per block; biggest-rock first (priority → est); honor last_block_end.
+   SPEC/APPROVAL GATE (PB-45): each ready row carries `approved` (its plan was
+   reviewed via `/project-manager spec`). Within the same priority, pack APPROVED
+   tasks FIRST — they run through `task execute` with no live planning gate, so
+   they're the lowest-friction wins of the day. Don't hide un-approved tasks (this
+   is a fast path, not a wall), but if the early blocks are all un-approved,
+   mention it: pre-speccing them with `/project-manager spec` would cut hand-holding.
 
 6. WRITE "## Work tracker" into ${OUT_FILE} and (re)label the "## Today at a
    glance" work-block rows. Tracker schema:
@@ -53,6 +59,9 @@ last_block_end) + bed time from the profile JSON above.
      the tie). "—" for no Plane issue.
    - Status starts "planned"; Done at / % complete / Est rating stay blank for
      /end-of-day. "Est rating" later judges whether the estimate held.
+   - Notes: tag each row's plan state from the ready row's `approved` — "✅ plan
+     approved" (fast path) or "⏳ needs spec" (will plan inline at execute). This
+     is what tells you, at a glance, which of today's tasks are pre-specced.
    If plan_exists=no, write a minimal file: frontmatter + short "## Today at a
    glance" (work blocks only) + the tracker + an empty "## How it went". Rewrite
    both tables together; never let them drift.

@@ -91,6 +91,64 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+# --- spec/approval gate (PB-45) ---------------------------------------------
+@test "issue_to_ready carries approved flag from plan-approved label ids" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+states={"s":{"id":"s","group":"unstarted","name":"Todo","sequence":1}}
+approved={"id":"i1","name":"A","state":"s","labels":["L1","Lx"],"parent":None}
+plain   ={"id":"i2","name":"B","state":"s","labels":[{"id":"L2"}],"parent":"p"}
+ra=m.issue_to_ready(approved,"P",states,{},2,None,approved_label_ids={"L1"})
+rb=m.issue_to_ready(plain,  "P",states,{},2,None,approved_label_ids={"L1"})
+assert ra["approved"] is True
+assert rb["approved"] is False and rb["is_sub"] is True
+# no approved ids known -> never approved
+assert m.issue_to_ready(approved,"P",states,{},2,None)["approved"] is False
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "filter_ready approved_only keeps only approved rows" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+items=[
+  {"_group":"unstarted","priority":"high","due":"","id":1,"approved":True},
+  {"_group":"started","priority":"urgent","due":"","id":2,"approved":False},
+]
+assert [x["id"] for x in m.filter_ready([dict(i) for i in items])]==[2,1]
+appr=m.filter_ready([dict(i) for i in items], approved_only=True)
+assert [x["id"] for x in appr]==[1] and all(x["approved"] for x in appr)
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "approved_label_ids matches plan-approved fuzzily and degrades on error" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class Ok:
+    def list_labels(self,p): return [{"id":"L1","name":"Plan-Approved"},{"id":"L2","name":"bug"}]
+class Boom:
+    def list_labels(self,p): raise m.PlaneError("x")
+assert m.approved_label_ids(Ok(),"P")=={"L1"}
+assert m.approved_label_ids(Boom(),"P")==set()
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "spec subcommand is registered in the CLI parser" {
+  run python3 "$PLANE" spec --help
+  [ "$status" -eq 0 ]; [[ "$output" == *"name fragment"* ]]
+}
+
 # --- config + backend switch ------------------------------------------------
 @test "setup writes a 0600 config with backend=plane" {
   run PY setup --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid
@@ -705,4 +763,51 @@ PYEOF
   [[ "$output" == *'"id": "pid"'* ]]   # synthesized one-entry registry from lone project
   run PY projects --sync
   [[ "$output" == *PLANE_ERROR* ]]
+}
+
+# --- PB-40 per-project working location (workdir / workdirs) ----------------
+@test "workdir records a working location, surfaced by workdirs (pure config, no network)" {
+  PY setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  PY workdir pid --path "$TMP" --kind repo --base-branch main >/dev/null
+  run PY workdirs
+  [ "$status" -eq 0 ] && [[ "$output" == *'"pid"'* ]] && [[ "$output" == *"$TMP"* ]] \
+    && grep -q '"work"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+@test "workdir --clear removes the working location" {
+  PY setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  PY workdir pid --path "$TMP" >/dev/null
+  PY workdir pid --clear >/dev/null
+  run PY workdirs
+  [ "$status" -eq 0 ] && [[ "$output" == "{}" ]]
+}
+
+@test "workdir rejects a path that does not exist (no write)" {
+  PY setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PY workdir pid --path "$TMP/does-not-exist"
+  [[ "$output" == *PLANE_ERROR* ]] && ! grep -q '"work"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+@test "projects --sync preserves projects[].work (a sync must not wipe working locations)" {
+  run python3 - "$PLANE" "$TMP" <<'PYEOF'
+import importlib.util, sys, json, argparse
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+workpath = sys.argv[2]
+cfg = {"base_url": "http://127.0.0.1:9", "api_key": "SECRET", "workspace": "ws",
+       "projects": [{"id": "A", "name": "Alpha", "shortcut": "a",
+                     "work": {"path": workpath, "kind": "repo",
+                              "base_branch": "main", "isolation": "worktree"}}]}
+m.save_config(cfg)
+class FakeClient:
+    def list_projects(self):
+        return [{"id": "A", "name": "Alpha Renamed"}]   # remote dropped `work`
+m.make_client = lambda c: FakeClient()
+m.cmd_projects(argparse.Namespace(sync=True))
+saved = json.load(open(m.config_path()))
+work = {p["id"]: p.get("work") for p in saved["projects"]}
+assert work.get("A") and work["A"]["path"] == workpath, work
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
 }

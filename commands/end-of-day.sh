@@ -499,7 +499,10 @@ without re-asking. Use the Edit tool on each file.
     1. PUSH: collect every "## Work tracker" row whose "Plane id" is a real tie
        (contains ":") and whose Status was filled in 3b. Map work-tracker Status →
        Plane status: done→done · partial/in-progress→doing · not started→todo ·
-       n/a/dropped→dropped. Push each row with the project manager (idempotent —
+       n/a/dropped→dropped. (Note: /plan-my-work `task execute` may already have
+       authored in-progress/done rows live mid-day and pushed them to Plane — the
+       mapping handles them idempotently, so this pass just confirms them.)
+       Push each row with the project manager (idempotent —
        skip rows whose Plane status already matches, so you don't thrash):
          bash "${PM_CMD:-/project-manager}" move "<pid>:<iid>" --to <status>
        (for a done row, the manager stamps completed_at automatically.) Relay a

@@ -1,0 +1,131 @@
+---
+INSTRUCTIONS — task execute. You DRIVE today's current-block tasks to Done, one
+at a time, through the full lifecycle: pick → in-progress → spec/approval gate →
+implement → finish → PR → gated-merge → done, then cascade until the day's work
+is exhausted. This is the only pbrain command that touches code, branches, PRs,
+and merges — so be deliberate. Read-only until the user says go; get an explicit
+yes before each [GATE]. NEVER fabricate a PR, a CI result, or a merge.
+
+THE SPEC/APPROVAL GATE (PB-45) is step 4. Issues whose `## Implementation Plan`
+was approved ahead of time (via `/project-manager spec`) take the FAST PATH —
+you implement straight against the recorded plan, no live planning gate. Issues
+without an approved plan FALL BACK to drafting a plan inline with a [GATE], same
+as before. So a pre-specced board runs with far less hand-holding; an un-specced
+one still works. Nothing is blocked — approval is a fast path, not a wall.
+
+You were handed (in the output above):
+  • current_block = ${CURRENT_BLOCK}  (the block whose time range contains now,
+    or the next upcoming; "none" if now is past the last block).
+  • CURRENT BLOCK TASKS — that block's Work-tracker rows with done rows already
+    filtered out (so a re-run resumes the first unfinished task).
+  • WORKING LOCATIONS — plane.json projects[].work: {path,kind,base_branch,
+    isolation} per project. The map may be empty.
+  • TODAY'S PLAN (${OUT_FILE}), the plans profile, and the PROJECT REGISTRY.
+Every Plane write routes through the project manager: ${PM_CMD} (the SOLE writer
+of Plane). One task in-progress at a time.
+
+PRE-FLIGHT.
+  • current_block = none → the day's blocks are all behind you. Say so, then
+    offer CASCADE C (pick up a new project) or stop. Don't invent a block.
+  • current_block set but CURRENT BLOCK TASKS is empty → this block has no
+    unfinished work. Go to CASCADE A (advance to the next block).
+  • Otherwise → the FIRST not-done row is the current task. Name it back in one
+    line (task · project · Plane id · priority · est) and confirm you'll start it.
+
+PER-TASK LIFECYCLE (loop over the current block's not-done rows, top to bottom):
+
+  1. RESOLVE WORKING LOCATION. Look up the task's project in WORKING LOCATIONS.
+     - Absent → [GATE] ask the user for the absolute path to that project's repo
+       / Conductor workspace, and offer to record it for next time:
+         bash "${PM_CMD}" workdir "<project-ref>" --path "<abs>" [--kind conductor|repo] [--base-branch <b>]
+     - Verify the path exists and is a git repo (git -C <path> rev-parse). If not,
+       stop and say so — do NOT create or guess a repo.
+
+  2. [GATE] MARK IN-PROGRESS. On the user's go:
+       bash "${PM_CMD}" move "<tie>" --to doing
+     and set this row's Status = in-progress in "## Work tracker". Exactly one
+     task in-progress at a time.
+
+  3. ISOLATE. Branch off a FRESH base — never a stale HEAD:
+       git -C <path> fetch origin
+       git -C <path> worktree add <wt> -b pbrain/<short-slug> origin/<base_branch>
+     (isolation=branch → `git -C <path> switch -c pbrain/<slug> origin/<base>`
+     instead). Then READ THE TARGET repo's CLAUDE.md / AGENTS.md (its conventions,
+     NOT pbrain's). State the branch + base you used.
+
+  4. PLAN — SPEC/APPROVAL GATE. Read the issue's recorded plan + approval state
+     (read-only, JSON only — the --read flag suppresses the interactive walk):
+       bash "${PM_CMD}" spec "<tie>" --read
+     The PM_SPEC JSON carries `approved`, `has_plan`, and `description` (which
+     holds the ## Implementation Plan when one exists).
+     - approved = true → FAST PATH. The approach was reviewed ahead of time. Read
+       the ## Implementation Plan out of `description` and implement straight
+       against it. Do NOT re-open the approach or ask for a planning [GATE] —
+       state in one line which plan you're following, then go to step 5.
+     - approved = false → FALLBACK (the original behaviour). Draft a tight
+       implementation plan against the TARGET repo's conventions (use the PM_SPEC
+       JSON, or `bash "${PM_CMD}" find "<tie>"`, for context).
+       [GATE] explicit yes before you write ANY code.
+       Then OFFER once, without blocking: "want me to save this as the approved
+       plan so future runs skip this step?" — on yes, run the interactive walk
+       `bash "${PM_CMD}" spec "<tie>"` to record + approve it; on no, just proceed.
+
+  5. IMPLEMENT. Write code to the target repo's conventions. Run its tests /
+     linters / build. Show a tight diff. Iterate until it's green and right.
+
+  6. [GATE] FINISH. Confirm the work is complete → commit in the worktree (a clear
+     message; reference the PB-id). Set this row's % complete = 100. Status STAYS
+     in-progress until the PR merges (it is not done yet).
+
+  7. OPEN PR. Probe `command -v gh` first.
+     - gh present → push the branch, then:
+         gh pr create --fill --base <base_branch>
+       Put the PR url in the row's Notes, and best-effort mirror it to Plane:
+         bash "${PM_CMD}" comment "<tie>" --body "PR: <url>"
+     - gh absent OR push fails → push the branch if you can and hand back the
+       manual compare URL for the user to open the PR themselves. NEVER fake a PR.
+
+  8. [GATE — TYPED CONFIRM, IRREVERSIBLE] GATED MERGE. Double-gated:
+     a) CI green — watch it: `gh pr checks <pr> --watch` (or the manual URL). CI
+        red → STOP, report which check failed, do not merge. The user may
+        explicitly WAIVE a non-blocking check; record that they did.
+     b) A TYPED confirm — ask the user to type the exact word `merge <PB-id>`
+        (not just "yes"). Only with BOTH (green/waived AND the typed word):
+          gh pr merge <pr> --squash --delete-branch
+     Then clean up the worktree (git -C <path> worktree remove <wt>).
+
+  9. MARK DONE (only AFTER the merge lands).
+       bash "${PM_CMD}" move "<tie>" --to done --completed-at <iso8601>
+     Set the row Status = done, Done at = HH:MM, % complete = 100. If a habit like
+     "Work the plan" / "Deep work" is tracked, mark it on completion only:
+       bash "${HABITS_CMD}" mark --habit "<name>" --date ${TODAY}
+
+  10. LOOP to the next not-done row in this block. When the block has no
+      unfinished rows left → CASCADE.
+
+CASCADE — each hand-off is a [GATE] (confirm before continuing):
+  A — BLOCK DONE, more day left. Advance to the NEXT block in "## Today at a
+      glance" (the next time range after current_block). Take its first work task
+      as the new current task and run the lifecycle. If the next block is empty,
+      go to CASCADE B.
+  B — PROJECT-DAY EXHAUSTED (no more planned tasks) but before the day's last
+      block. Offer to pull more ready tasks for the same project:
+        bash "${PM_CMD}" ready --projects <pid>
+      Append the chosen rows to "## Work tracker" and re-flow blocks into the free
+      gaps (the same rules as `task add`: session_length_min blocks, break_min
+      gaps, never past last_block_end). Then resume the lifecycle.
+  C — PROJECT FULLY DONE. Suggest a NEW project NOT already in weekly_pids
+      (${WEEKLY_PIDS}) from the PROJECT REGISTRY. On the user's pick, ensure its
+      working location is recorded (step 1), pull its ready tasks, append + re-flow
+      as in B, and continue.
+
+KEEP THE TABLES IN SYNC. On every status write, rewrite BOTH "## Work tracker"
+AND the "## Today at a glance" work-block rows together (same discipline as
+task add/remove) and save back to ${OUT_FILE}. Never disturb the fixed life
+anchors (calendar, meals, fitness, walk, bed, habit 🔔) or already-done rows.
+The tracker Status column IS the lifecycle state — an in-progress row with a PR
+link in Notes resumes at the merge gate (step 8) on a re-run.
+
+When the day's work is exhausted (or the user stops), give one tight summary:
+what merged, what's still in-progress, and "run /end-of-day to close + reconcile."
+Stop here.

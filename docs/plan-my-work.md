@@ -27,6 +27,23 @@ The `Plane id` column carries the full **tie** (`<project_id>:<issue_id>`) — t
 
 `/plan-my-work task add|remove|list` revises an already-planned day — it rewrites the `## Work tracker` rows and re-flows the `## Today at a glance` work blocks together, never touching the life anchors. (This moved here from `/plan-my-day`.) For a brand-new task it offers to create it in Plane first.
 
+## Executing the plan
+
+`/plan-my-work task execute` is the **execution layer** — the only pbrain command that touches code, branches, PRs, and merges. It walks the **current time block's** tasks to Done, one at a time, then cascades until the day's work is exhausted.
+
+It auto-picks the block whose time range contains *now* (or the next upcoming block; nothing to do once you're past the last block), reads that block's unfinished `## Work tracker` rows (already-`done` rows are skipped, so a re-run resumes the first unfinished task), then for each task runs a supervised lifecycle:
+
+**pick → in-progress → spec/approval gate → implement → finish → PR → gated merge → done.**
+
+- **Spec/approval gate (PB-45).** At the plan step, `task execute` reads the issue's recorded plan + approval (`/project-manager spec "<tie>" --read`). If the plan was **approved** ahead of time (the `plan-approved` label, written via [`/project-manager spec`](project-manager.md)), it **fast-paths** — implementing straight against the recorded `## Implementation Plan` with no live planning gate. If **unapproved**, it **falls back** to drafting a plan inline with a [gate] (exactly as before), then offers to save it as approved for next time. It's a fast path, not a wall — nothing is blocked; pre-speccing just removes the hand-holding. `/plan-my-work` packs approved tasks first and tags each tracker row `✅ plan approved` / `⏳ needs spec`.
+- **Working location.** Each task runs in a *configured, pre-existing* repo or Conductor workspace — `task execute` never spawns one, it `cd`s in and isolates the work on a `git worktree`/branch off a fresh `origin/<base>`. Record the location once with [`/project-manager workdir <project> --path <abs>`](project-manager.md); if it's unset, `task execute` asks for the path and offers to record it. Defaults keep your main checkout safe (`kind=repo`, `isolation=worktree`).
+- **Gates everywhere.** It's read-only until you say go, and asks for an explicit yes before marking in-progress, before writing any code, and before finishing.
+- **Double-gated merge.** The one irreversible step. It opens a PR (`gh pr create --fill`), watches CI, and merges **only** when CI is green (or you explicitly waive a non-blocking check) **and** you type the exact confirm word `merge <PB-id>`. CI red → it stops. No `gh`/CI → it pushes the branch and hands you a manual PR URL; it never fabricates a PR or a merge.
+- **Plane stays in sync.** Status moves `doing` on start and `done` only after the merge lands — every Plane write routed through `/project-manager` (the sole Plane writer). The `## Work tracker` `Status` column *is* the lifecycle state, so it's resume-safe.
+- **Cascade.** When a block is done it advances to the next block; when a project's planned tasks run out (with day left) it offers to pull more ready tasks; when a project is fully done it suggests a new one. Each hand-off is a gate.
+
+`/end-of-day` reconciles the tracker back to Plane afterward (mapping `in-progress → doing` idempotently).
+
 ## Standalone vs in-loop
 
 Run `/plan-my-day` then `/plan-my-work` for the full day. Run `/plan-my-work` alone for a quick "what should I work on for the next few hours" — it computes blocks from now → bed and writes a minimal file. It needs a committed plans profile (for working style + bed time); if there's none, it points you at `/plan-my-day` first.
