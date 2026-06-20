@@ -2913,3 +2913,30 @@ PY
   # the budget. The old O(n^2) idiom took minutes on this size; new code <1s.
   [ "$bytes" -gt 40000 ] && [ "$elapsed" -lt 8 ]
 }
+
+# --- reminders-sync arg-parsing guards (PB-43) -----------------------------
+# reminders-sync must parse --date/--sweep order-independently and fail LOUDLY
+# on a missing/flag-shaped/unparseable date — a wrong-day --sweep DELETES that
+# day's reminders, so a silent default is dangerous.
+
+@test "reminders-sync: --date swallowing the next flag fails loudly (exit 2)" {
+  run HABITS reminders-sync --date --sweep
+  [ "$status" -eq 2 ] && [[ "$output" == *"requires a YYYY-MM-DD value"* ]]
+}
+
+@test "reminders-sync: a bare trailing --date fails loudly (exit 2)" {
+  run HABITS reminders-sync --date
+  [ "$status" -eq 2 ] && [[ "$output" == *"requires a YYYY-MM-DD value"* ]]
+}
+
+@test "reminders-sync: an unparseable date fails loudly, never defaults (exit 2)" {
+  run HABITS reminders-sync --date 2026-13-99
+  [ "$status" -eq 2 ] && [[ "$output" == *"invalid date"* ]]
+}
+
+@test "reminders-sync: a valid --date passes the guard regardless of flag order" {
+  # No profile file => the subcommand exits 0 right after the guard; both
+  # orderings must clear the guard (status 0, no guard error on stderr).
+  run HABITS reminders-sync --sweep --date 2026-06-19
+  [ "$status" -eq 0 ] && [[ "$output" != *"invalid date"* ]]
+}

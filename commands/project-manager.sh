@@ -103,6 +103,7 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 source "$_SCRIPT_DIR/../lib/plane-backup.sh"
+source "$_SCRIPT_DIR/../lib/plane-host.sh"
 
 pbrain_emit_prefs "project-manager" || true
 
@@ -197,7 +198,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode enrich move priority timeline completed issue project-create find update tag comment assign reparent cycle module labels members cycles modules estimates backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -773,6 +774,37 @@ PYEOF
         last="$(ls -1t "$bdir"/plane-*.tar.gz 2>/dev/null | head -1)" || true
         echo "snapshots: ${cnt:-0}"
         [[ -n "$last" ]] && echo "latest: $(basename "$last") ($(pbrain_pbk_human "$(wc -c < "$last" | tr -d ' ')"))"
+        ;;
+    esac
+    ;;
+
+  # ===== host (PB-18): move Plane onto a VPS + repoint pbrain =====
+  host)
+    ACTION="${1:-probe}"; [[ $# -gt 0 ]] && shift || true
+    _parse_args "$@"
+    # Ad-hoc VPS overrides for a user without a backup `vps` block yet.
+    [[ -n "$(_flag vps_host)" ]] && export PLH_VPS_HOST="$(_flag vps_host)"
+    [[ -n "$(_flag vps_port)" ]] && export PLH_VPS_PORT="$(_flag vps_port)"
+    [[ -n "$(_flag ssh_key)" ]]  && export PLH_VPS_KEY="$(_flag ssh_key)"
+    case "$ACTION" in
+      probe|status) echo "PM_HOST_PROBE"; pbrain_plh_probe || true ;;
+      deploy)       echo "PM_HOST_DEPLOY"; pbrain_plh_deploy_guide "$(_flag port)" || true ;;
+      domain)       echo "PM_HOST_DOMAIN"; pbrain_plh_domain_guide "$(_flag domain)" || true ;;
+      vpn)          echo "PM_HOST_VPN"; pbrain_plh_vpn "${POS[0]:-phone}" "$(_flag tunnel)" || true ;;
+      import)       echo "PM_HOST_IMPORT"; pbrain_plh_import "${POS[0]:-latest}" "$(_has_bool yes && echo --yes)" || true ;;
+      wire)
+        echo "PM_HOST_WIRE"
+        base="$(_flag base_url)"
+        [[ -n "$base" ]] || { echo "PLH_ERR host wire needs --base-url <url>"; exit 0; }
+        pbrain_plh_wire "$base" "$(_flag internal_email)" "$(_flag internal_password)" || true ;;
+      *)
+        echo "PM_HOST usage: host probe|deploy|domain|vpn|import|wire"
+        echo "  probe                          read-only VPS state (reachability, docker, plane, wg)"
+        echo "  deploy [--port 1800]           guide: stand Plane up on the VPS (setup.sh is interactive)"
+        echo "  domain [--domain d]            guide: public domain + Caddy auto-TLS"
+        echo "  vpn [name] [--tunnel split]    no-domain access via quick-vpn (reuse existing client or install; shows the client config)"
+        echo "  import [latest] --yes          restore a VPS-resident backup INTO the VPS Plane (destructive)"
+        echo "  wire --base-url URL [--internal-email E --internal-password P]   point pbrain at the remote (password → Keychain)"
         ;;
     esac
     ;;
