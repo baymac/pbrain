@@ -60,6 +60,10 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 REPO_ROOT="$(cd -P -- "$_SCRIPT_DIR/.." && pwd -P)"
 
+# PB-18 VPS-hosting helpers (sources lib/plane-backup.sh itself for the VPS creds).
+# shellcheck source=/dev/null
+[[ -f "$REPO_ROOT/lib/plane-host.sh" ]] && source "$REPO_ROOT/lib/plane-host.sh"
+
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pbrain"
 PLANE_CONFIG="$CONFIG_DIR/plane.json"
 PLANE_HOME="${PBRAIN_PLANE_HOME:-$CONFIG_DIR/plane-selfhost}"
@@ -527,6 +531,47 @@ PYEOF
     echo "  3) revert any time: /init-plane github --remove"
     ;;
 
+  host)
+    # PB-18: move Plane onto a VPS + repoint pbrain. Mirrors /project-manager host
+    # for the vault-free path. Delegates to lib/plane-host.sh.
+    if ! declare -f pbrain_plh_probe >/dev/null 2>&1; then
+      echo "INIT_PLANE_ERROR lib/plane-host.sh not available" >&2; exit 1
+    fi
+    HACTION="${1:-probe}"; [[ $# -gt 0 ]] && shift || true
+    H_NAME=""; H_PORT=""; H_DOMAIN=""; H_TUNNEL=""; H_BASE=""; H_EMAIL=""; H_PW=""; H_YES=no
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --vps-host)        export PLH_VPS_HOST="${2:?}"; shift 2;;
+        --vps-port)        export PLH_VPS_PORT="${2:?}"; shift 2;;
+        --ssh-key)         export PLH_VPS_KEY="${2:?}"; shift 2;;
+        --port)            H_PORT="${2:?}"; shift 2;;
+        --domain)          H_DOMAIN="${2:?}"; shift 2;;
+        --tunnel)          H_TUNNEL="${2:?}"; shift 2;;
+        --base-url)        H_BASE="${2:?}"; shift 2;;
+        --internal-email)  H_EMAIL="${2:?}"; shift 2;;
+        --internal-password) H_PW="${2:?}"; shift 2;;
+        --yes)             H_YES=yes; shift;;
+        --*)               echo "pbrain: unknown flag for /init-plane host: $1" >&2; exit 1;;
+        *)                 [[ -z "$H_NAME" ]] && H_NAME="$1"; shift;;
+      esac
+    done
+    case "$HACTION" in
+      probe|status) echo "INIT_PLANE_HOST_PROBE"; pbrain_plh_probe || true ;;
+      deploy)       echo "INIT_PLANE_HOST_DEPLOY"; pbrain_plh_deploy_guide "$H_PORT" || true ;;
+      domain)       echo "INIT_PLANE_HOST_DOMAIN"; pbrain_plh_domain_guide "$H_DOMAIN" || true ;;
+      vpn)          echo "INIT_PLANE_HOST_VPN"; pbrain_plh_vpn "${H_NAME:-phone}" "$H_TUNNEL" || true ;;
+      import)       echo "INIT_PLANE_HOST_IMPORT"; pbrain_plh_import "${H_NAME:-latest}" "$([[ "$H_YES" == yes ]] && echo --yes)" || true ;;
+      wire)
+        echo "INIT_PLANE_HOST_WIRE"
+        [[ -n "$H_BASE" ]] || { echo "PLH_ERR host wire needs --base-url <url>"; exit 0; }
+        pbrain_plh_wire "$H_BASE" "$H_EMAIL" "$H_PW" || true ;;
+      *)
+        echo "INIT_PLANE_HOST usage: host probe|deploy|domain|vpn|import|wire"
+        echo "  probe | deploy [--port N] | domain [--domain d] | vpn [name] [--tunnel split]"
+        echo "  import [latest] --yes | wire --base-url URL [--internal-email E --internal-password P]" ;;
+    esac
+    ;;
+
   status)
     echo "INIT_PLANE_STATUS"
     echo "docker_running: $(_docker_running && echo yes || echo no)"
@@ -547,7 +592,7 @@ PYEOF
 
   *)
     echo "pbrain: unknown /init-plane subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | vhost | github | status | help" >&2
+    echo "Try: probe | fetch | up | config | vhost | github | host | status | help" >&2
     exit 1
     ;;
 esac

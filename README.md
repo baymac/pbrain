@@ -327,7 +327,7 @@ pbrain/
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer
 │   ├── habit_schedule.py               ← habit schedule engine (is_due, derive_schedule, spacing helpers)
 │   ├── profiles.sh                     ← versioned profile store (.profile dirs: latest/new/commit)
-│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts (0001–0007)
+│   ├── migrations.sh + migrations/     ← vault migration runner + ordered migration scripts (0001–0011)
 │   ├── profile_lock.py                 ← atomic read-modify-write for Habits Profile.md (flock + tempfile-rename)
 │   ├── launchd.sh                      ← shared native-helper build + LaunchAgent helpers (pbrain_swift_build, pbrain_launchagent_install)
 │   ├── plane.py                        ← Plane backend (stdlib urllib, no pip deps); READ/WRITE seams; multi-project config

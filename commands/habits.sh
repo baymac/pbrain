@@ -115,7 +115,7 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
-pbrain_emit_prefs "habits" || true
+pbrain_emit_prefs "habits" "${PBRAIN_HABITS_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_HABIT_TRACK_DIR:-$VAULT_DIR/life/habit-tracking}")" habits-profile)}" || true
 pbrain_db_init || true
 
 PROFILE_FILE="$(pbrain_habits_profile_file)"
@@ -1028,7 +1028,7 @@ if [[ "$SUB" == "rollup" ]]; then
     esac
   done
   ROLL="$(pbrain_habits_rollup "$R_DATE" || true)"
-  if [[ -n "${ROLL//[[:space:]]/}" ]]; then
+  if [[ "$ROLL" =~ [^[:space:]] ]]; then
     echo "$ROLL"
   else
     echo "(no habit data — set up tracking with /habits)"
@@ -1330,7 +1330,7 @@ for h in (data.get("habits") or []):
     break
 PYEOF
 )"
-  if [[ -z "${HINFO//[[:space:]]/}" ]]; then
+  if [[ ! "$HINFO" =~ [^[:space:]] ]]; then
     echo "habits: no habit with id $RM_ID" >&2; exit 1
   fi
   RM_NAME="$(printf '%s' "$HINFO" | cut -f1)"
@@ -1584,18 +1584,34 @@ fi
 # PULL runs first so PUSH never double-handles a row. Degrades silently without
 # Reminders access (PENDING/UNAVAILABLE/ACCESS leave rows untouched). Echoes
 # "SYNCED pulled=<n> pushed=<n> swept=<n>". Run by plan-my-day (morning, no sweep)
-# + end-of-day (with --sweep).
+# + end-of-day (with --sweep). --date takes a YYYY-MM-DD value (order-independent
+# with --sweep); a missing/flag-shaped or unparseable date exits 2 loudly rather
+# than silently sweeping the wrong day (PB-43).
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "reminders-sync" ]]; then
   shift || true
   RS_DATE="$TODAY"; RS_SWEEP=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --date)  RS_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --date)
+        # A bare --date, or --date immediately followed by another flag, must
+        # NOT swallow the next token (or nothing) as the date — that would
+        # silently sweep the wrong day. Require an explicit non-flag value.
+        if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+          echo "ERROR: reminders-sync --date requires a YYYY-MM-DD value" >&2
+          exit 2
+        fi
+        RS_DATE="$2"; shift 2 ;;
       --sweep) RS_SWEEP=1; shift ;;
       *) shift ;;
     esac
   done
+  # Fail loudly on an unparseable date rather than operating on a bogus/wrong
+  # day — critical because --sweep DELETES that day's reminders. (PB-43)
+  if ! python3 -c 'import sys,datetime; datetime.date.fromisoformat(sys.argv[1])' "$RS_DATE" 2>/dev/null; then
+    echo "ERROR: reminders-sync got an invalid date: '$RS_DATE' (expected YYYY-MM-DD)" >&2
+    exit 2
+  fi
   [[ -f "$PROFILE_FILE" ]] || exit 0
 
   _hr_name_for_id() {  # <habit_id> → display name (or empty)
@@ -1741,7 +1757,7 @@ PYEOF
     # /remind reminders and other days are never touched; skip anything already
     # tracked (handled above). Best-effort — silent if the helper is unavailable.
     APP_LIST="$(pbrain_reminders_run list 2>/dev/null || true)"
-    if [[ -n "${APP_LIST//[[:space:]]/}" ]]; then
+    if [[ "$APP_LIST" =~ [^[:space:]] ]]; then
       ORPHANS="$(python3 - "$PROFILE_FILE" "$PBRAIN_DB_FILE" "$RS_DATE" "$APP_LIST" <<'PYEOF' 2>/dev/null || true
 import json, re, sys, sqlite3
 profile, db, date, app_list = sys.argv[1:5]
@@ -2406,7 +2422,7 @@ _habits_seed_defaults || true
 
 # Validate the profile JSON.
 PROFILE_JSON="$(pbrain_habits_json || true)"
-if [[ -z "${PROFILE_JSON//[[:space:]]/}" ]]; then
+if [[ ! "$PROFILE_JSON" =~ [^[:space:]] ]]; then
   cat <<ERR
 HABITS_CONFIG_ERROR
 profile_file: $PROFILE_FILE
@@ -2513,7 +2529,7 @@ pbrain_habit_refresh "$TODAY" >/dev/null 2>&1 || true
 TRACK_FILE="$(pbrain_habit_track_file "$TODAY")"
 STATUS_JSON="$(pbrain_habits_status "$TODAY" || true)"
 ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"
-[[ -n "${ROLLUP//[[:space:]]/}" ]] || ROLLUP="(no events logged yet)"
+[[ "$ROLLUP" =~ [^[:space:]] ]] || ROLLUP="(no events logged yet)"
 
 cat <<DASH
 HABITS_DASHBOARD

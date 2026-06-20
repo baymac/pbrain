@@ -134,6 +134,45 @@ def config_path():
     return os.path.join(base, "pbrain", "plane.json")
 
 
+# Internal-auth password storage (PB-18). Remote/VPS mode authenticates the
+# internal estimates API with the Plane login email+password (the local browser
+# cookie scrape only works against a localhost instance). The password lives in
+# the macOS login Keychain, never in plane.json — plane.json only carries the
+# `internal_password_source: "keychain"` marker + the (non-secret) email.
+KEYCHAIN_SERVICE = "pbrain-plane-internal"
+
+
+def _keychain_get(account, service=KEYCHAIN_SERVICE):
+    """Read a secret from the macOS login Keychain. Returns the string or None
+    (non-macOS, not found, or `security` unavailable)."""
+    if sys.platform != "darwin" or not account:
+        return None
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["security", "find-generic-password", "-w", "-s", service, "-a", account],
+            stderr=subprocess.DEVNULL)
+        return out.decode().rstrip("\n") or None
+    except Exception:
+        return None
+
+
+def _keychain_set(account, secret, service=KEYCHAIN_SERVICE):
+    """Store/replace a secret in the macOS login Keychain (-U updates in place).
+    Returns True on success, False otherwise (incl. non-macOS)."""
+    if sys.platform != "darwin" or not account or not secret:
+        return False
+    import subprocess
+    try:
+        subprocess.check_call(
+            ["security", "add-generic-password", "-U", "-s", service, "-a", account,
+             "-w", secret],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def load_config():
     """Merge the JSON config file (if any) with env overrides. Env wins."""
     cfg = {}
@@ -161,6 +200,12 @@ def load_config():
             cfg[k] = v
     if cfg.get("base_url"):
         cfg["base_url"] = cfg["base_url"].rstrip("/")
+    # Resolve the internal-auth password from the macOS Keychain when plane.json
+    # only carries the marker (PB-18 remote/VPS mode). Env/plaintext still win.
+    if not cfg.get("internal_password") and cfg.get("internal_password_source") == "keychain":
+        kc = _keychain_get(cfg.get("internal_email"))
+        if kc:
+            cfg["internal_password"] = kc
     try:
         cfg["default_est_h"] = float(cfg.get("default_est_h") or 2)
     except (TypeError, ValueError):
@@ -545,6 +590,10 @@ def save_config(cfg):
     # Drop ephemeral, in-memory-only keys (e.g. "_live_estimates", the live-fetched
     # estimate scale) so they never get cached to disk and go stale.
     persistable = {k: v for k, v in cfg.items() if not str(k).startswith("_")}
+    # Never persist the internal password when it lives in the Keychain — only the
+    # marker is stored; load_config re-reads the secret at runtime (PB-18).
+    if persistable.get("internal_password_source") == "keychain":
+        persistable.pop("internal_password", None)
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # secret → 0600
     with os.fdopen(fd, "w") as fh:
         json.dump(persistable, fh, indent=2)
@@ -1864,6 +1913,28 @@ def cmd_setup(args):
         v = getattr(args, k.replace("-", "_"))
         if v:
             cfg[k] = v.rstrip("/") if k == "base_url" else v
+    # Internal-API auth (estimate points). Remote/VPS mode swaps the local
+    # browser-cookie scrape for the Plane login email+password, with the password
+    # kept in the macOS Keychain (PB-18). `--internal-cookie-source none` clears
+    # the browser source so make_client falls through to email/password.
+    if getattr(args, "internal_email", None):
+        cfg["internal_email"] = args.internal_email
+    if getattr(args, "internal_cookie_source", None):
+        if args.internal_cookie_source == "none":
+            cfg.pop("internal_cookie_source", None)
+        else:
+            cfg["internal_cookie_source"] = args.internal_cookie_source
+    if getattr(args, "internal_password", None):
+        register_secret(args.internal_password)
+        email = cfg.get("internal_email")
+        use_kc = (sys.platform == "darwin" and email
+                  and not getattr(args, "internal_password_plain", False))
+        if use_kc and _keychain_set(email, args.internal_password):
+            cfg["internal_password_source"] = "keychain"
+            cfg.pop("internal_password", None)
+        else:
+            cfg["internal_password"] = args.internal_password
+            cfg.pop("internal_password_source", None)
     require(cfg, "base_url", "api_key", "workspace")
     # strip default_est_h back to a plain value for storage
     cfg["default_est_h"] = cfg.get("default_est_h", 2.0)
@@ -1871,6 +1942,12 @@ def cmd_setup(args):
     cfg.setdefault("backend", "plane")
     p = save_config(cfg)
     print("PLANE_CONFIGURED %s backend=%s" % (p, cfg["backend"]))
+    if cfg.get("internal_password_source") == "keychain":
+        print("PLANE_INTERNAL_AUTH email=%s password=keychain(%s)"
+              % (cfg.get("internal_email"), KEYCHAIN_SERVICE))
+    elif cfg.get("internal_email") and cfg.get("internal_password"):
+        print("PLANE_INTERNAL_AUTH email=%s password=plane.json(0600)"
+              % cfg.get("internal_email"))
     return 0
 
 
@@ -2324,6 +2401,12 @@ def build_parser():
     sp = sub.add_parser("setup")
     sp.add_argument("--base-url"); sp.add_argument("--api-key")
     sp.add_argument("--workspace"); sp.add_argument("--project")
+    sp.add_argument("--internal-email")
+    sp.add_argument("--internal-password")
+    sp.add_argument("--internal-password-plain", action="store_true",
+                    help="store the internal password in plane.json (0600) instead of the macOS Keychain")
+    sp.add_argument("--internal-cookie-source", choices=["browser", "none"],
+                    help="'browser' = scrape the local browser cookie (localhost); 'none' = use email/password (remote/VPS)")
     sp.set_defaults(func=cmd_setup)
 
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)

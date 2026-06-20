@@ -53,7 +53,7 @@ unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 # Surface this user's standing preferences for /fitness-journal (emits nothing if none set).
-pbrain_emit_prefs "fitness-journal" || true
+pbrain_emit_prefs "fitness-journal" "$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}")" fitness-profile)" || true
 
 TRACKING_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 STORE="$(pbrain_profile_store "$TRACKING_DIR")"
@@ -66,9 +66,6 @@ DOW="$(date +%a)"
 # (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
 TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
 OUT_FILE="$TRACKING_DIR/$TODAY.md"
-# Prefs root — same resolution lib/prefs.sh uses (so a "skip the check-in"
-# standing pref written here is re-injected by pbrain_emit_prefs next run).
-PREFS_DIR="${PBRAIN_PREFS_DIR:-$VAULT_DIR/.pbrain}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
 mkdir -p "$TRACKING_DIR"
@@ -416,7 +413,7 @@ for a in data.get("activities", []):
 PYEOF
 )"
 
-if [[ -z "${ACTIVITY_ROWS//[[:space:]]/}" ]]; then
+if [[ ! "$ACTIVITY_ROWS" =~ [^[:space:]] ]]; then
   cat <<ERR
 FITNESS_JOURNAL_CONFIG_ERROR
 library_file: $LIBRARY_FILE
@@ -441,7 +438,7 @@ while IFS=$'\t' read -r _name _slug; do
   fi
 done <<< "$ACTIVITY_ROWS"
 
-if [[ -n "${MISSING_PROFILES//[[:space:]]/}" ]]; then
+if [[ "$MISSING_PROFILES" =~ [^[:space:]] ]]; then
   cat <<PROFILES
 FITNESS_JOURNAL_SETUP_ACTIVITY_PROFILES
 library_file: $LIBRARY_FILE
@@ -782,7 +779,7 @@ for a in data.get("activities", []):
 print(json.dumps(out, indent=2, ensure_ascii=False) if out else "{}")
 PYEOF
 )"
-[[ -n "${ACTIVITY_KPIS//[[:space:]]/}" ]] || ACTIVITY_KPIS="{}"
+[[ "$ACTIVITY_KPIS" =~ [^[:space:]] ]] || ACTIVITY_KPIS="{}"
 
 # Suggest /diet-journal after the session is logged — but only if today's food
 # isn't already tracked. Suggest once, never block (mirrors the morning sequence).
@@ -929,11 +926,13 @@ Step 1 — QUICK CHECK-IN (skippable). If a standing preference above says to sk
   This is a LOGGER, not an interrogation — never block. If the user just states
   what they DID or are PLANNING, skip the rest and go straight to logging.
   IF THE USER SAYS "SKIP" (or ignores it): drop it and move to Step 2, then ask
-  ONCE — "Want me to skip this check-in from now on?" On a yes, append a line to
-  the fitness-journal prefs file at
-  $PREFS_DIR/fitness-journal/prefs.md (create it + parent dir if missing):
-  "- Skip the quick check-in; go straight to the day's picture." Never write it
-  without an explicit yes. From then on the standing-pref check above suppresses it.
+  ONCE — "Want me to skip this check-in from now on?" On a yes, fold this standing
+  preference INTO the fitness profile (at $FITNESS_PROFILE_FILE): append
+  "Skip the quick check-in; go straight to the day's picture." to the top-level
+  "prefs" array in its fenced JSON block (create the array if absent), editing the
+  file IN PLACE — do NOT mint a new profile version. Never write it without an
+  explicit yes. From then on the standing-pref check above (re-injected from the
+  profile by pbrain_emit_prefs) suppresses it.
 
 Step 2 — TODAY'S PICTURE, then ONE targeted question (no menu dump). From
   date_human, preselected_today ($PRESELECTED) and RECENT SESSIONS, give a tight

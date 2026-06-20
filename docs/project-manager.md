@@ -95,6 +95,19 @@ A self-hosted Plane keeps all its data in two Docker volumes — Postgres (issue
 
 A snapshot is `plane-YYYYMMDD-HHMMSS.tar.gz` containing `db.dump` (logical `pg_dump`, ~6× smaller than the raw volume), `uploads.tar.gz`, and a `manifest.json` (sizes + sha256). It operates on Docker directly, so it works even before Plane is wired to pbrain. Redis and RabbitMQ are ephemeral and not backed up. Config: `~/.config/pbrain/plane-backup.json` (mode `0600`); the scheduled run logs to `~/.config/pbrain/plane-backup.log`.
 
+## Host on a VPS (`host`, PB-18)
+
+Move the self-hosted Plane off your laptop onto an always-on VPS so the phone can reach it. It **reuses the VPS host/SSH-key from `plane-backup.json`** (the same box your backups already go to); a brand-new user can pass `--vps-host` / `--ssh-key` / `--vps-port` instead. Subcommands:
+
+- `host probe` — read-only state of the VPS (reachable? docker / Plane / WireGuard?).
+- `host deploy [--port 1800]` — **guide** to stand Plane up on the VPS. Plane's `setup.sh` is an interactive menu, so this prints the runbook rather than driving it blind; pin Plane to a non-80/443 port if the box runs other services.
+- `host domain [--domain d]` — **guide** for a public domain + Plane's bundled Caddy auto-TLS (set the DNS A-record and open 80/443 first).
+- `host vpn [name] [--tunnel split]` — no-domain access via your own [quick-vpn](https://github.com/baymac/quick-vpn) (WireGuard). **Reuses** an existing quick-vpn client (creating none), or installs quick-vpn + creates one, then prints the client config/QR for the phone. Full tunnel is the default; `--tunnel split` routes only the VPN subnet. If WireGuard is already running un-managed, it's left untouched.
+- `host import [latest] --yes` — restore a backup tarball that already lives on the VPS **into** the VPS-hosted Plane (`pg_restore` + uploads, over SSH). Destructive — requires `--yes`.
+- `host wire --base-url URL [--internal-email E --internal-password P]` — point pbrain at the remote (`http://<wg-ip>:1800` or `https://<domain>`). For a remote instance it switches the internal estimates API from the local browser-cookie scrape to **email/password**; the password is stored in the **macOS Keychain** (service `pbrain-plane-internal`), never in `plane.json`. This is the only step that changes your active backend — until you run it, local stays primary.
+
+Typical flow: `host probe` → `host deploy` (or `host domain`) → `host vpn` (no-domain) → `host import latest --yes` → `host wire …`.
+
 ## The review walk (dual-mode)
 
 `review` proposes nothing on its own — it scans, then follows the enrichment-walk instructions. **Invoked directly**, it walks the flagged issues **one at a time**, suggests a concrete enrichment per issue, and writes **only on an explicit yes** — never auto-committing a flag you declined. **Invoked by `/plan-my-work`** (executor mode), it grooms fast — infers sensible values as a PM would (description, priority, assignee, relations, sub-tasks, backlog→todo) and applies them in batches without interrogating you, so the morning planner just gets ready work.

@@ -305,6 +305,41 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+# ── real migration: 0011 prefs → profile ──────────────────────────────────
+
+@test "0011 folds a profile-owning command's prefs into the profile prefs array" {
+  mkdir -p "$VAULT_DIR/.pbrain/habits" "$VAULT_DIR/life/habit-tracking/.profile"
+  printf -- '- Eat clean good = mains only\n' > "$VAULT_DIR/.pbrain/habits/prefs.md"
+  cat > "$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md" <<'EOF'
+---
+type: profile
+version: 1
+committed: true
+---
+```json
+{"habits": []}
+```
+EOF
+  local prof="$VAULT_DIR/life/habit-tracking/.profile/habits-profile.v1.md"
+  run pbrain_run_migrations
+  grep -q 'Eat clean good = mains only' "$prof" \
+    && grep -q '"prefs"' "$prof" \
+    && grep -q '^version: 1$' "$prof" \
+    && [ ! -f "$VAULT_DIR/.pbrain/habits/prefs.md" ] \
+    && [ -f "$VAULT_DIR/.pbrain/backup/0011_prefs_to_profile/habits-prefs.md" ] \
+    && [[ "$output" == *"PBRAIN_MIGRATED 0011_prefs_to_profile"* ]]
+}
+
+@test "0011 leaves a profile-less command's prefs.md untouched and is idempotent" {
+  mkdir -p "$VAULT_DIR/.pbrain/weekly-review"
+  printf -- '- keep reviews tight\n' > "$VAULT_DIR/.pbrain/weekly-review/prefs.md"
+  run pbrain_run_migrations
+  # no profile-owning prefs to fold → 0011 records vacuously, weekly-review stays put
+  [ -f "$VAULT_DIR/.pbrain/weekly-review/prefs.md" ] \
+    && [ -f "$LEDGER/0011_prefs_to_profile.done" ] \
+    && [[ "$output" != *"PBRAIN_MIGRATED 0011_prefs_to_profile"* ]]
+}
+
 @test "fresh user: all real migrations record vacuously in one run" {
   run pbrain_run_migrations
   [ "$status" -eq 0 ]
@@ -313,7 +348,8 @@ EOF
             0003_fitness_profiles 0004_diet_profile_combine \
             0005_habits_profile_to_store 0006_food_library_to_store \
             0007_goals_project_reframe 0008_habits_categorize \
-            0009_habit_scores_to_unit_scale 0010_clear_default_scored_notes; do
+            0009_habit_scores_to_unit_scale 0010_clear_default_scored_notes \
+            0011_prefs_to_profile; do
     [ -f "$LEDGER/$id.done" ]
   done
 }

@@ -50,7 +50,7 @@ unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 # Surface this user's standing preferences for /diet-journal (emits nothing if none set).
-pbrain_emit_prefs "diet-journal" || true
+pbrain_emit_prefs "diet-journal" "${PBRAIN_DIET_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}")" diet-profile)}" || true
 
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
@@ -596,7 +596,7 @@ fi
 FITNESS_LIBRARY_FILE="$(pbrain_profile_latest "$FIT_STORE" fitness-library)"
 FITNESS_LIBRARY_CONTENT=""
 [[ -n "$FITNESS_LIBRARY_FILE" ]] && FITNESS_LIBRARY_CONTENT="$(cat "$FITNESS_LIBRARY_FILE" 2>/dev/null || true)"
-[[ -n "${FITNESS_LIBRARY_CONTENT//[[:space:]]/}" ]] || FITNESS_LIBRARY_CONTENT="(no fitness library — anchor meals on the profile meal_times alone)"
+[[ "$FITNESS_LIBRARY_CONTENT" =~ [^[:space:]] ]] || FITNESS_LIBRARY_CONTENT="(no fitness library — anchor meals on the profile meal_times alone)"
 
 MEAL_TIMING_RULES="MEAL TIMING (fitness-anchored): the profile's meal_times are the rest-day
 defaults: $MEAL_TIMES. On a training day, shift the relevant slots around the

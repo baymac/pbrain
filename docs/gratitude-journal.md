@@ -1,6 +1,6 @@
 # /gratitude-journal
 
-Daily gratitude journal — two prompts: a gratitude list and a themed reflection question generated fresh per session (12 themes rotating, with dedup against the last 30 entries).
+Daily gratitude journal — two prompts: a gratitude list and a reflection question generated fresh per session. The reflection question is **grounded in what actually surfaced today** — the gratitude list you just gave plus today's journal entry (`life/daily-tracking/YYYY-MM-DD.md`) — so it follows the thread you're already on rather than picking a random theme. Only when the day is too thin to ground a question (a terse list and no journal yet) does it fall back to a rotated theme. Either way it dedups against the last 30 entries.
 
 Runs **after `/journal`** in the morning sequence. The raw brain dump (including how you're feeling) lands in the journal first, which clears the head; gratitude then grounds you on cleared ground. That's why there's no "how are you feeling" prompt here anymore — the mood is already captured next door.
 
@@ -14,6 +14,7 @@ Opens with a short **timing nudge**: a one-line affirmation if run before noon, 
 |---|---|
 | `PBRAIN_VAULT` | Vault root |
 | `PBRAIN_GRATITUDE_DIR` | Where today's entry is written |
+| `PBRAIN_JOURNAL_DIR` | Where today's journal entry is read from for context |
 
 **Example:**
 
