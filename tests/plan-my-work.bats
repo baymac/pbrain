@@ -152,6 +152,46 @@ EOF
   [[ "$output" == *"Block 1 — focus work"* ]]
 }
 
+@test "PB-53: SESSION flags elapsed work blocks as past, leaves future blocks out" {
+  seed_profile
+  configure_plane
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 10:00–11:00 | Block 1 — focus work | — |
+| 14:00–15:00 | Block 2 — focus work | — |
+
+## How it went
+EOF
+  PBRAIN_NOW=12:00 run PMW
+  [ "$status" -eq 0 ]
+  # now=12:00 → Block 1 (10:00) is past, Block 2 (14:00) is future
+  [[ "$output" == *"past_blocks: Block 1 (10:00–11:00)"* ]]
+  past_line="$(printf '%s\n' "$output" | grep '^past_blocks:')"
+  [[ "$past_line" != *"Block 2"* ]]
+}
+
+@test "PB-53: nothing is past on an early-morning run" {
+  seed_profile
+  configure_plane
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 10:00–11:00 | Block 1 — focus work | — |
+
+## How it went
+EOF
+  PBRAIN_NOW=07:00 run PMW
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"past_blocks: (none)"* ]]
+}
+
 @test "task list/add/remove on a planned day emit PLAN_MY_WORK_TASK" {
   seed_profile
   mkdir -p "$PBRAIN_PLAN_DIR"

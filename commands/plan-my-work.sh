@@ -117,7 +117,8 @@ FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 STORE="$(pbrain_profile_store "$PLAN_DIR")"
 
 TODAY="$(date +%Y-%m-%d)"
-NOW_TIME="$(date +%H:%M)"
+# PBRAIN_NOW lets tests pin "now" (HH:MM) deterministically; falls back to wall clock.
+NOW_TIME="${PBRAIN_NOW:-$(date +%H:%M)}"
 ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
 MONTH_YEAR="$(date +%Y-%m)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
@@ -417,6 +418,42 @@ PY
 echo "PLAN_MY_WORK_SESSION"
 echo "today: $TODAY"
 echo "now_time: $NOW_TIME"
+# PB-53: hand the model a deterministic list of which glance work-block rows are
+# already PAST (start time < now), so elapsed blocks stay ask-only and are never
+# backfilled with fresh task assignments. Blank when no plan exists yet.
+if [[ "$PLAN_EXISTS" == yes ]]; then
+  PAST_BLOCKS="$(NOW_TIME="$NOW_TIME" python3 - "$OUT_FILE" <<'PY'
+import sys, re, os
+now = os.environ.get("NOW_TIME", "")
+def mins(t):
+    m = re.match(r'^\s*(\d{1,2}):(\d{2})', t)
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+now_m = mins(now)
+past = []
+try:
+    with open(sys.argv[1]) as f:
+        for ln in f:
+            if not ln.lstrip().startswith("|"):
+                continue
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            time_cell, action = cells[0], cells[1]
+            # only work blocks (labelled "Block N")
+            if not re.search(r'\bBlock\s*\d', action):
+                continue
+            start_m = mins(time_cell)
+            if start_m is not None and now_m is not None and start_m < now_m:
+                rng = time_cell.split("|")[0].strip()
+                label = re.search(r'(Block\s*\d+)', action)
+                past.append("%s (%s)" % (label.group(1) if label else "Block", rng))
+except Exception:
+    pass
+print("; ".join(past) if past else "(none)")
+PY
+)"
+  echo "past_blocks: $PAST_BLOCKS"
+fi
 echo "iso_week: $ISO_WEEK"
 echo "month_year: $MONTH_YEAR"
 echo "file: $OUT_FILE"
