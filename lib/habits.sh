@@ -1736,7 +1736,9 @@ for h in data.get("habits") or []:
     n = str(h.get("name", "")).strip()
     if not n or h.get("archived"):
         continue
-    if h.get("eod_only") and not eod_phase:
+    # Scored habits need whole-day evidence (diet log, sleep, etc.) to score, so
+    # they are deferred to /end-of-day exactly like eod_only habits (PB-50).
+    if (h.get("eod_only") or isinstance(h.get("scoring"), dict)) and not eod_phase:
         continue
     direction = str(h.get("direction", "")).strip().lower()
     if direction not in ("at_least", "at_most"):
@@ -1766,7 +1768,8 @@ try:
 except Exception:
     sys.exit(0)
 out = [str(h.get("name", "")).strip() for h in (data.get("habits") or [])
-       if h.get("eod_only") and not h.get("archived") and str(h.get("name", "")).strip()]
+       if (h.get("eod_only") or isinstance(h.get("scoring"), dict))
+       and not h.get("archived") and str(h.get("name", "")).strip()]
 print(", ".join(out))
 ' "$cmd" 2>/dev/null || true)"
 
@@ -1788,7 +1791,9 @@ out = []
 for h in data.get("habits") or []:
     if h.get("archived"):
         continue
-    if h.get("eod_only") and not eod_phase:
+    # PB-50: scored habits are deferred to end-of-day; do not surface their
+    # classification rules in mid-day commands where they cannot be marked.
+    if (h.get("eod_only") or isinstance(h.get("scoring"), dict)) and not eod_phase:
         continue
     sc = h.get("scoring")
     if isinstance(sc, dict):
