@@ -184,3 +184,15 @@ pbrain_projects_cycles_json() {
   fi
   echo "[]"
 }
+
+# Per-project working locations (PB-40) as a JSON map {pid: {path,kind,...}}.
+# Pure config read (no API call) — used by /plan-my-work `task execute` to know
+# where each project's tasks run. Degrades to {} when Plane is unconfigured.
+pbrain_projects_workdirs_json() {
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run workdirs)"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "{}"
+    return 0
+  fi
+  echo "{}"
+}

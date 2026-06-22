@@ -63,6 +63,13 @@ STATUS_TO_GROUP = {
 }
 PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "": 4, None: 4}
 
+# The spec/approval gate (PB-45). An issue is "plan-approved" when it carries a
+# label by this name — the signal that its `## Implementation Plan` (written into
+# the issue description by the `spec` walk) has been reviewed and is cleared for
+# `/plan-my-work task execute` to implement against without live planning.
+APPROVED_LABEL = "plan-approved"
+PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the description
+
 
 class PlaneError(Exception):
     pass
@@ -929,12 +936,19 @@ def pick_state_id(states, group, want_name=None):
     return None
 
 
+def issue_labels(issue):
+    """The issue's label ids, whether Plane returned them as bare uuids or objects."""
+    return [l.get("id") if isinstance(l, dict) else l for l in (issue.get("labels") or [])]
+
+
 def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est_h,
-                   uuid_hours=None):
+                   uuid_hours=None, approved_label_ids=None):
     grp = state_group(issue, states_by_id)
     iid = issue.get("id")
     ep = issue.get("estimate_point")
     est_h = uuid_hours[ep] if (ep and uuid_hours and ep in uuid_hours) else default_est_h
+    approved = bool(approved_label_ids) and any(
+        lid in approved_label_ids for lid in issue_labels(issue))
     return {
         "tie": "%s:%s" % (project_id, iid),
         "id": issue.get("sequence_id", iid),
@@ -946,17 +960,38 @@ def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est
         "status": GROUP_TO_STATUS.get(grp, "todo"),
         "priority": issue.get("priority") or "none",
         "is_sub": bool(issue.get("parent")),
+        "approved": approved,
     }
 
 
-def filter_ready(items, include_backlog=False):
+def filter_ready(items, include_backlog=False, approved_only=False):
     groups = READY_GROUPS + (("backlog",) if include_backlog else ())
     ready = [it for it in items if it["_group"] in groups]
+    if approved_only:
+        # The spec/approval gate's opt-in hard filter (PB-45): only issues whose
+        # implementation plan has been approved (carry the plan-approved label)
+        # flow into the day. Off by default — normally we surface `approved` as a
+        # flag and let packing/execute decide, not hide work at selection time.
+        ready = [it for it in ready if it.get("approved")]
     ready.sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 4),
                                it["due"] or "9999-99-99", str(it["id"])))
     for it in ready:
         it.pop("_group", None)
     return ready
+
+
+def approved_label_ids(client, project_id):
+    """IDs of the project's `plan-approved` label(s), matched fuzzily by name.
+    Best-effort: returns an empty set if labels can't be listed for ANY reason
+    (network error, a client without the method), so the gate degrades to
+    'nothing approved' rather than erroring the ready path."""
+    try:
+        labels = client.list_labels(project_id)
+    except Exception:
+        return set()
+    target = _norm(APPROVED_LABEL)
+    return {lab.get("id") for lab in labels
+            if lab.get("id") and _norm(lab.get("name") or "") == target}
 
 
 def build_status_body(status, states, completed_at=None):
@@ -1216,19 +1251,22 @@ def _module_map(client, project_id, enable):
     return out
 
 
-def ready(cfg, client, project_id, include_backlog=False, with_lanes=False):
+def ready(cfg, client, project_id, include_backlog=False, with_lanes=False,
+          approved_only=False):
     states = client.list_states(project_id)
     states_by_id = {s["id"]: s for s in states}
     module_by_issue = _module_map(client, project_id, with_lanes)
     ensure_estimate_scale(cfg, client, project_id)
     uuid_hours = est_uuid_to_hours(cfg, project_id)
+    approved_ids = approved_label_ids(client, project_id)  # spec/approval gate (PB-45)
     items = []
     for issue in client.list_work_items(project_id):
         r = issue_to_ready(issue, project_id, states_by_id, module_by_issue,
-                           cfg["default_est_h"], uuid_hours)
+                           cfg["default_est_h"], uuid_hours,
+                           approved_label_ids=approved_ids)
         r["_group"] = state_group(issue, states_by_id)
         items.append(r)
-    return filter_ready(items, include_backlog=include_backlog)
+    return filter_ready(items, include_backlog=include_backlog, approved_only=approved_only)
 
 
 def resolve(cfg, client, ties):
@@ -1259,7 +1297,8 @@ def _ready_sort(rows):
     return rows
 
 
-def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=False):
+def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=False,
+                approved_only=False):
     """Ready tasks across several projects, each tagged with its project, then
     sorted cross-project by priority → due → id. Reuses ready() per project; a
     project that errors is skipped (best-effort) so one bad project can't fail
@@ -1267,7 +1306,8 @@ def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=Fals
     rows = []
     for pid in project_ids:
         try:
-            rs = ready(cfg, client, pid, include_backlog=include_backlog, with_lanes=with_lanes)
+            rs = ready(cfg, client, pid, include_backlog=include_backlog,
+                       with_lanes=with_lanes, approved_only=approved_only)
         except PlaneError:
             continue
         label = project_label(cfg, pid)
@@ -1390,6 +1430,43 @@ def explode_context(cfg, client, ref, project_ref=None):
         "has_estimate_scale": bool(scale),
         "estimate_points": sorted((scale or {}).get("points", {}).keys(), key=_pt_key) if scale else [],
         "existing_subissues": subs,
+        "project": card["project"], "project_id": pid,
+    }
+
+
+def spec_context(cfg, client, ref, project_ref=None):
+    """Read-only context for the spec/approval gate (PB-45): drafting an
+    `## Implementation Plan` for ONE issue and/or approving it. Resolve `ref` via
+    find_issues; 0 or >1 cards → return candidates so the model disambiguates.
+    Exactly one → fetch the full record so the Socratic walk can see any existing
+    plan and the current approval state. Never writes — the walk applies the plan
+    via `update --edits` (description) and approves via `tag --add plan-approved`."""
+    cards = find_issues(cfg, client, ref, project_ref=project_ref)
+    if len(cards) != 1:
+        return {"status": "none" if not cards else "ambiguous", "candidates": cards}
+    card = cards[0]
+    pid, iid = card["project_id"], card["issue_id"]
+    try:
+        issue = client.get_work_item(pid, iid)
+    except PlaneError as e:
+        return {"status": "error", "error": str(e), "candidates": cards}
+    desc = (issue.get("description_stripped") or "").strip()
+    approved_ids = approved_label_ids(client, pid)
+    approved = bool(approved_ids) and any(
+        lid in approved_ids for lid in issue_labels(issue))
+    return {
+        "status": "ok",
+        "tie": card["tie"], "id": card["id"], "issue_id": iid,
+        "title": issue.get("name", ""),
+        "description": desc,
+        # Raw HTML so the walk can APPEND/replace its own plan section without a
+        # lossy round-trip that would clobber the issue's existing description.
+        "description_html": issue.get("description_html") or "",
+        "has_plan": PLAN_MARKER.lower() in desc.lower(),
+        "approved": approved,
+        "approved_label": APPROVED_LABEL,
+        "priority": issue.get("priority"),
+        "state": card.get("state"),
         "project": card["project"], "project_id": pid,
     }
 
@@ -1907,16 +1984,19 @@ def cmd_states(args):
 def cmd_ready(args):
     cfg = load_config()
     client = make_client(cfg)
+    approved_only = getattr(args, "require_approved", False)
     if getattr(args, "projects", None):
         ids = project_ids_from_arg(cfg, args.projects)
         print(json.dumps(ready_multi(cfg, client, ids, include_backlog=args.include_backlog,
-                                      with_lanes=args.with_lanes), ensure_ascii=False))
+                                      with_lanes=args.with_lanes,
+                                      approved_only=approved_only), ensure_ascii=False))
         return 0
     pid = args.project or cfg.get("project")
     if not pid:
         raise PlaneError("no project id — pass --project/--projects or set it in setup")
     print(json.dumps(ready(cfg, client, pid, include_backlog=args.include_backlog,
-                           with_lanes=args.with_lanes), ensure_ascii=False))
+                           with_lanes=args.with_lanes,
+                           approved_only=approved_only), ensure_ascii=False))
     return 0
 
 
@@ -1934,13 +2014,22 @@ def cmd_projects(args):
         client = make_client(cfg)
         remote = client.list_projects()
         existing = {x["id"]: x for x in normalize_registry(cfg)}
+        # Carry forward per-project config the registry normalizer drops (the
+        # `work` working-location object set via `workdir`) so a sync never wipes
+        # it. Keyed off the RAW projects list, not normalize_registry.
+        raw_prev = {p["id"]: p for p in (cfg.get("projects") or [])
+                    if isinstance(p, dict) and p.get("id")}
         reg = []
         for p in remote:
             pid = p.get("id")
             if not pid:
                 continue
-            reg.append({"id": pid, "name": p.get("name") or pid,
-                        "shortcut": (existing.get(pid, {}).get("shortcut") or "")})
+            entry = {"id": pid, "name": p.get("name") or pid,
+                     "shortcut": (existing.get(pid, {}).get("shortcut") or "")}
+            work = raw_prev.get(pid, {}).get("work")
+            if work:
+                entry["work"] = work
+            reg.append(entry)
         cfg["projects"] = reg
         save_config(cfg)
     print(json.dumps(normalize_registry(cfg), ensure_ascii=False))
@@ -2019,6 +2108,74 @@ def cmd_project_create(args):
     return 0
 
 
+# --- per-project working location (PB-40 `task execute`) --------------------
+# Each projects[] entry may carry an optional `work` object describing where
+# /plan-my-work executes that project's tasks:
+#   {"path": "<abs>", "kind": "conductor|repo",
+#    "base_branch": "main", "isolation": "worktree|branch"}
+# It's plain config (a secret-free local path), so the reads below never touch
+# the network — they just parse plane.json.
+def workdirs_map(cfg):
+    """{pid: work-entry} for every project with a configured working location."""
+    out = {}
+    for p in (cfg.get("projects") or []):
+        if isinstance(p, dict) and p.get("id") and isinstance(p.get("work"), dict):
+            out[p["id"]] = p["work"]
+    return out
+
+
+def cmd_workdirs(args):
+    # Read-only: the working-location map straight from config (no API call).
+    cfg = load_config()
+    print(json.dumps(workdirs_map(cfg), ensure_ascii=False))
+    return 0
+
+
+def cmd_workdir(args):
+    cfg = load_config()
+    # List mode: no project ref → dump the whole map (pure config read).
+    if not getattr(args, "project", None):
+        print(json.dumps(workdirs_map(cfg), ensure_ascii=False))
+        return 0
+    pid = resolve_project_ref(cfg, args.project)
+    if not pid:
+        raise PlaneError("unknown project: %s" % args.project)
+    # Materialize a mutable projects[] list (synthesized from the lone project
+    # when config has only a bare `project` uuid) so we have an entry to attach
+    # `work` to.
+    projs = cfg.get("projects")
+    if not isinstance(projs, list) or not projs:
+        projs = [{"id": p["id"], "name": p["name"], "shortcut": p.get("shortcut", "")}
+                 for p in normalize_registry(cfg)]
+    entry = next((p for p in projs if isinstance(p, dict) and p.get("id") == pid), None)
+    if entry is None:
+        entry = {"id": pid, "name": project_label(cfg, pid), "shortcut": ""}
+        projs.append(entry)
+    if args.clear:
+        entry.pop("work", None)
+        action = "cleared"
+    elif not args.path:
+        # No --path and no --clear → show this one project's work, no write.
+        print(json.dumps({pid: entry.get("work")}, ensure_ascii=False))
+        return 0
+    else:
+        path = os.path.abspath(os.path.expanduser(args.path))
+        if not os.path.isdir(path):
+            raise PlaneError("working path does not exist (or is not a dir): %s" % path)
+        work = dict(entry.get("work") or {})
+        work["path"] = path
+        work["kind"] = args.kind or work.get("kind") or "repo"
+        work["base_branch"] = args.base_branch or work.get("base_branch") or "main"
+        work["isolation"] = args.isolation or work.get("isolation") or "worktree"
+        entry["work"] = work
+        action = "set"
+    cfg["projects"] = projs
+    save_config(cfg)
+    print(json.dumps({"project": pid, "action": action, "work": entry.get("work")},
+                     ensure_ascii=False))
+    return 0
+
+
 # --- the richer write/lookup verbs (the catalogue the NL router targets) -----
 def _one_project(cfg, ref):
     """Resolve a single project ref → uuid, defaulting to the lone/first project."""
@@ -2052,6 +2209,14 @@ def cmd_explode(args):
     cfg = load_config()
     client = make_client(cfg)
     print(json.dumps(explode_context(cfg, client, args.ref, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
+def cmd_spec(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(spec_context(cfg, client, args.ref, project_ref=args.project),
                      ensure_ascii=False))
     return 0
 
@@ -2253,6 +2418,8 @@ def build_parser():
     sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
     sp.add_argument("--include-backlog", action="store_true")
     sp.add_argument("--with-lanes", action="store_true")
+    sp.add_argument("--require-approved", action="store_true",
+                    help="spec/approval gate (PB-45): only plan-approved issues")
     sp.set_defaults(func=cmd_ready)
 
     sp = sub.add_parser("resolve"); sp.add_argument("--ties", required=True); sp.set_defaults(func=cmd_resolve)
@@ -2300,6 +2467,18 @@ def build_parser():
     sp.add_argument("--shortcut", default=None, help="short alias, e.g. 'dj'")
     sp.set_defaults(func=cmd_project_create)
 
+    sp = sub.add_parser("workdir")
+    sp.add_argument("project", nargs="?", help="project uuid|name|shortcut (omit to list)")
+    sp.add_argument("--path", help="absolute path to the working repo/dir")
+    sp.add_argument("--kind", choices=["conductor", "repo"], help="default repo")
+    sp.add_argument("--base-branch", help="default main")
+    sp.add_argument("--isolation", choices=["worktree", "branch"], help="default worktree")
+    sp.add_argument("--clear", action="store_true", help="remove the working location")
+    sp.set_defaults(func=cmd_workdir)
+
+    sp = sub.add_parser("workdirs")  # read-only {pid: work} map, no network
+    sp.set_defaults(func=cmd_workdirs)
+
     # --- richer write/lookup verbs (the catalogue) ---------------------------
     sp = sub.add_parser("find")
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
@@ -2310,6 +2489,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_explode)
+
+    sp = sub.add_parser("spec")
+    sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
+    sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
+    sp.set_defaults(func=cmd_spec)
 
     sp = sub.add_parser("update")
     sp.add_argument("--edits", required=True, help="JSON [{tie,field,value}] (any field family)")

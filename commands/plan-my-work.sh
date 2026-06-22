@@ -117,7 +117,8 @@ FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 STORE="$(pbrain_profile_store "$PLAN_DIR")"
 
 TODAY="$(date +%Y-%m-%d)"
-NOW_TIME="$(date +%H:%M)"
+# PBRAIN_NOW lets tests pin "now" (HH:MM) deterministically; falls back to wall clock.
+NOW_TIME="${PBRAIN_NOW:-$(date +%H:%M)}"
 ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
 MONTH_YEAR="$(date +%Y-%m)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
@@ -184,8 +185,8 @@ PM_CMD="$(pbrain_projects_manager_cmd 2>/dev/null || true)"
 if [[ "${1:-}" == "task" ]]; then
   TASK_ACTION="${2:-list}"
   case "$TASK_ACTION" in
-    add|remove|list) ;;
-    *) echo "usage: plan-my-work.sh task add|remove|list" >&2; exit 2;;
+    add|remove|list|execute) ;;
+    *) echo "usage: plan-my-work.sh task add|remove|list|execute" >&2; exit 2;;
   esac
   if [[ ! -f "$OUT_FILE" ]]; then
     echo "PLAN_MY_WORK_TASK_NO_PLAN"
@@ -195,6 +196,126 @@ if [[ "${1:-}" == "task" ]]; then
     echo "INSTRUCTIONS: There's no day plan for $TODAY yet, so there's no work tracker"
     echo "to edit. Tell the user to run /plan-my-day (lay out the day), then /plan-my-work"
     echo "(fill the blocks) first — the task verb only revises an existing day. Stop here."
+    exit 0
+  fi
+
+  # --- task execute (PB-40) — drive the CURRENT block's tasks to Done --------
+  # The deterministic half lives here: which block contains `now`, and that
+  # block's unfinished Work-tracker rows (done filtered out → resume-safe). The
+  # lifecycle/cascade + every Plane/git/PR/merge step is driven by execute.txt.
+  if [[ "$TASK_ACTION" == execute ]]; then
+    # ONE $()-captured python heredoc (bash-3.2 trap — no apostrophes inside).
+    # Prints two lines: the current block label, then the not-done rows as JSON.
+    EXEC_PARSE="$(python3 - "$OUT_FILE" "$NOW_TIME" <<'PY'
+import sys, re, json
+path, now = sys.argv[1], sys.argv[2]
+try:
+    txt = open(path).read()
+except Exception:
+    txt = ""
+def mins(t):
+    h, m = t.split(":")
+    return int(h) * 60 + int(m)
+try:
+    now_min = mins(now)
+except Exception:
+    now_min = 0
+header = "## Work tracker"
+i = txt.find(header)
+section = ""
+if i != -1:
+    section = txt[i + len(header):]
+    nxt = section.find("\n## ")
+    if nxt != -1:
+        section = section[:nxt]
+cols = ["block", "task", "project", "plane", "priority", "est",
+        "status", "done_at", "pct", "est_rating", "notes"]
+rows = []
+for ln in section.splitlines():
+    s = ln.strip()
+    if not s.startswith("|") or "---" in s:
+        continue
+    cells = [c.strip() for c in s.strip("|").split("|")]
+    if not cells or cells[0].lower() == "block":
+        continue
+    row = {}
+    for idx, name in enumerate(cols):
+        row[name] = cells[idx] if idx < len(cells) else ""
+    rows.append(row)
+rng = re.compile(r"\((\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})\)")
+order = []
+blocks = {}
+for r in rows:
+    lab = r["block"]
+    if lab not in blocks:
+        blocks[lab] = {"label": lab, "start": None, "end": None, "rows": []}
+        order.append(lab)
+    blocks[lab]["rows"].append(r)
+    m = rng.search(lab)
+    if m and blocks[lab]["start"] is None:
+        blocks[lab]["start"] = mins(m.group(1))
+        blocks[lab]["end"] = mins(m.group(2))
+ranged = [blocks[l] for l in order if blocks[l]["start"] is not None]
+current = None
+for b in sorted(ranged, key=lambda b: b["start"]):
+    if b["start"] <= now_min < b["end"]:
+        current = b
+        break
+if current is None:
+    up = [b for b in ranged if b["start"] > now_min]
+    if up:
+        current = sorted(up, key=lambda b: b["start"])[0]
+if current is None and not ranged and order:
+    current = blocks[order[0]]
+label = current["label"] if current else "none"
+tasks = []
+if current:
+    for r in current["rows"]:
+        if (r.get("status") or "").strip().lower() == "done":
+            continue
+        tasks.append(r)
+print(label)
+print(json.dumps(tasks, ensure_ascii=False))
+PY
+)"
+    CURRENT_BLOCK="$(printf '%s\n' "$EXEC_PARSE" | head -1)"
+    CURRENT_TASKS_JSON="$(printf '%s\n' "$EXEC_PARSE" | tail -n +2)"
+    [[ -n "$CURRENT_BLOCK" ]] || CURRENT_BLOCK="none"
+    [[ -n "$CURRENT_TASKS_JSON" ]] || CURRENT_TASKS_JSON="[]"
+    WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
+    PM_CMD="${PM_CMD:-/project-manager}"
+
+    echo "PLAN_MY_WORK_EXECUTE"
+    echo "action: execute"
+    echo "file: $OUT_FILE"
+    echo "today: $TODAY"
+    echo "now_time: $NOW_TIME"
+    echo "current_block: $CURRENT_BLOCK"
+    echo "weekly_pids: ${WEEKLY_PIDS:-(none)}"
+    echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
+    echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
+    echo "plane_web_base: $PLANE_WEB_BASE"
+    echo ""
+    echo "=== CURRENT BLOCK ==="
+    echo "$CURRENT_BLOCK"
+    echo ""
+    echo "=== CURRENT BLOCK TASKS (not-done rows — resume from the first) ==="
+    echo "$CURRENT_TASKS_JSON"
+    echo ""
+    echo "=== WORKING LOCATIONS (plane.json projects[].work) ==="
+    echo "$WORKING_LOCATIONS_JSON"
+    echo ""
+    echo "=== TODAY'S PLAN ($OUT_FILE) ==="
+    cat "$OUT_FILE"
+    echo ""
+    echo "=== PLANS PROFILE (working_style + day shape) ==="
+    echo "$WORK_PROFILE_JSON"
+    echo ""
+    echo "=== PROJECT REGISTRY ==="
+    echo "$REGISTRY_JSON"
+    echo ""
+    export OUT_FILE TODAY NOW_TIME CURRENT_BLOCK CURRENT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
+    envsubst '$OUT_FILE $TODAY $NOW_TIME $CURRENT_BLOCK $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
     exit 0
   fi
 
@@ -297,6 +418,42 @@ PY
 echo "PLAN_MY_WORK_SESSION"
 echo "today: $TODAY"
 echo "now_time: $NOW_TIME"
+# PB-53: hand the model a deterministic list of which glance work-block rows are
+# already PAST (start time < now), so elapsed blocks stay ask-only and are never
+# backfilled with fresh task assignments. Blank when no plan exists yet.
+if [[ "$PLAN_EXISTS" == yes ]]; then
+  PAST_BLOCKS="$(NOW_TIME="$NOW_TIME" python3 - "$OUT_FILE" <<'PY'
+import sys, re, os
+now = os.environ.get("NOW_TIME", "")
+def mins(t):
+    m = re.match(r'^\s*(\d{1,2}):(\d{2})', t)
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+now_m = mins(now)
+past = []
+try:
+    with open(sys.argv[1]) as f:
+        for ln in f:
+            if not ln.lstrip().startswith("|"):
+                continue
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            time_cell, action = cells[0], cells[1]
+            # only work blocks (labelled "Block N")
+            if not re.search(r'\bBlock\s*\d', action):
+                continue
+            start_m = mins(time_cell)
+            if start_m is not None and now_m is not None and start_m < now_m:
+                rng = time_cell.split("|")[0].strip()
+                label = re.search(r'(Block\s*\d+)', action)
+                past.append("%s (%s)" % (label.group(1) if label else "Block", rng))
+except Exception:
+    pass
+print("; ".join(past) if past else "(none)")
+PY
+)"
+  echo "past_blocks: $PAST_BLOCKS"
+fi
 echo "iso_week: $ISO_WEEK"
 echo "month_year: $MONTH_YEAR"
 echo "file: $OUT_FILE"

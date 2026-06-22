@@ -152,6 +152,46 @@ EOF
   [[ "$output" == *"Block 1 — focus work"* ]]
 }
 
+@test "PB-53: SESSION flags elapsed work blocks as past, leaves future blocks out" {
+  seed_profile
+  configure_plane
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 10:00–11:00 | Block 1 — focus work | — |
+| 14:00–15:00 | Block 2 — focus work | — |
+
+## How it went
+EOF
+  PBRAIN_NOW=12:00 run PMW
+  [ "$status" -eq 0 ]
+  # now=12:00 → Block 1 (10:00) is past, Block 2 (14:00) is future
+  [[ "$output" == *"past_blocks: Block 1 (10:00–11:00)"* ]]
+  past_line="$(printf '%s\n' "$output" | grep '^past_blocks:')"
+  [[ "$past_line" != *"Block 2"* ]]
+}
+
+@test "PB-53: nothing is past on an early-morning run" {
+  seed_profile
+  configure_plane
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 10:00–11:00 | Block 1 — focus work | — |
+
+## How it went
+EOF
+  PBRAIN_NOW=07:00 run PMW
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"past_blocks: (none)"* ]]
+}
+
 @test "task list/add/remove on a planned day emit PLAN_MY_WORK_TASK" {
   seed_profile
   mkdir -p "$PBRAIN_PLAN_DIR"
@@ -207,4 +247,86 @@ EOF
   # the inline heredoc is gone — task-add.txt is emitted, and creation hands off to PM.
   [[ "$output" == *"INSTRUCTIONS — task add"* && "$output" == *"<link | PB-26 | name fragment>"* \
      && "$output" == *"project-manager.sh"* ]]
+}
+
+# --- task execute (PB-40 — the execution layer) -----------------------------
+# A planned day with a full-day block (always contains `now`), one done row and
+# one planned row in its Work tracker. Used by the execute happy-path test.
+seed_plan_for_execute() {
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
+# Plan
+
+## Today at a glance
+
+| 00:00–23:59 | Block 1 (00:00–23:59) | ship | — |
+
+## Work tracker
+
+| Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Block 1 (00:00–23:59) | early done | Lettuce | pid:done1 | high | 1h | done | 09:00 | 100 | | |
+| Block 1 (00:00–23:59) | ship login | Lettuce | pid:abc | high | 2h | planned | | | | |
+
+## How it went
+EOF
+}
+
+@test "task execute → PLAN_MY_WORK_EXECUTE + current block + not-done tasks + working locations" {
+  seed_profile
+  configure_plane
+  seed_plan_for_execute
+  # Record a working location for the lone project (pure config write, no network).
+  python3 "$REPO_ROOT/lib/plane.py" workdir pid --path "$TMP" >/dev/null
+  run PMW task execute
+  [ "$status" -eq 0 ]
+  # Isolate the CURRENT BLOCK TASKS json line so done-filtering is checked there,
+  # not in the full plan dump (which echoes the done row too).
+  tasks="$(printf '%s\n' "$output" | grep -A1 '=== CURRENT BLOCK TASKS' | tail -1)"
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* && "$output" == *"current_block: Block 1 (00:00"* \
+     && "$tasks" == *"ship login"* && "$tasks" != *"early done"* \
+     && "$output" == *"WORKING LOCATIONS"* && "$output" == *"$TMP"* \
+     && "$output" == *"INSTRUCTIONS — task execute"* ]]
+}
+
+@test "task execute on a day with no plan → PLAN_MY_WORK_TASK_NO_PLAN (no Plane needed)" {
+  seed_profile   # no plan file today, no plane.json — the task guard fires first
+  run PMW task execute
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_TASK_NO_PLAN"* ]]
+}
+
+@test "task execute → current_block none when now is past the day's last block" {
+  seed_profile
+  configure_plane
+  # Build a block that safely ENDS before now (guard the first minute of the day).
+  now_min=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
+  if [ "$now_min" -lt 2 ]; then skip "too close to midnight to place a past block"; fi
+  end=$(( now_min - 1 )); start=$(( end - 1 )); [ "$start" -lt 0 ] && start=0
+  printf -v range '%02d:%02d–%02d:%02d' $((start/60)) $((start%60)) $((end/60)) $((end%60))
+  mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<EOF
+# Plan
+
+## Today at a glance
+
+| $range | Block 1 ($range) | ship | — |
+
+## Work tracker
+
+| Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Block 1 ($range) | ship login | Lettuce | pid:abc | high | 2h | planned | | | | |
+
+## How it went
+EOF
+  run PMW task execute
+  [ "$status" -eq 0 ] && [[ "$output" == *"current_block: none"* ]]
+}
+
+@test "task <unknown> action → usage error (execute is accepted, garbage is not)" {
+  seed_profile
+  seed_plan_with_tracker
+  run PMW task frobnicate
+  [ "$status" -eq 2 ] && [[ "$output" == *"add|remove|list|execute"* ]]
 }

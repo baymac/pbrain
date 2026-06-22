@@ -66,8 +66,11 @@ CATALOGUE — every verb is:  ${PM_SELF} <verb> …
         refreshes on expiry (macOS), or persist a cookie / login. --import-json: offline fallback.
   review --projects <R,...>                     thin-issue scan + enrichment walk
   explode <ref>                                 Socratic break-down of ONE issue into sub-issues
+  spec <ref>                                    spec/approval gate: draft+approve ONE issue's ## Implementation Plan
+                                                (approved → /plan-my-work task execute skips its live planning gate).
+                                                spec <ref> --read = JSON only (plan + approval state, no walk).
   progress --projects <R,...>                   per-project progress
-  ready --projects <R,...>                      ready work items
+  ready --projects <R,...> [--require-approved]  ready work items (--require-approved = plan-approved only)
 
 Prefer `update --edits` when changing several fields on one issue, or the same
 field across many issues — it's a single API batch (one creation-guard + one

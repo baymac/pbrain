@@ -35,6 +35,10 @@ last_block_end) + bed time from the profile JSON above.
    day's blocks deterministically (leftover → highest-priority chosen project)
    with the alloc_helper shown above. N = the empty work blocks in "Today at a
    glance" (plan_exists=yes) or the standalone count from step 1.
+   PAST BLOCKS ARE EXCLUDED: count only blocks whose start time is ≥ now_time. A
+   block that already started or ended is PAST — it is NOT part of N and gets no
+   fresh allocation (see step 5). On a first-thing-in-the-morning run nothing is
+   past; on a mid/late-day run, exclude every elapsed block.
 
 5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects — ALWAYS pass the
    explicit project list:
@@ -42,6 +46,17 @@ last_block_end) + bed time from the profile JSON above.
    If a project returns empty, it likely still needs grooming — hand it back to
    step 2 (PM review), don't triage inline. Map tasks → blocks: PREFER one project
    per block; biggest-rock first (priority → est); honor last_block_end.
+   PAST BLOCKS ARE ASK-ONLY: never auto-assign, pull, or backfill a task into a
+   block whose start time is < now_time. Trust the user about what already
+   happened — if an elapsed block is unlabeled or unfinished, ASK what they
+   actually did in it and record their answer; do not invent an assignment. Only
+   current and future blocks (start ≥ now_time) receive pulled tasks.
+   SPEC/APPROVAL GATE (PB-45): each ready row carries `approved` (its plan was
+   reviewed via `/project-manager spec`). Within the same priority, pack APPROVED
+   tasks FIRST — they run through `task execute` with no live planning gate, so
+   they're the lowest-friction wins of the day. Don't hide un-approved tasks (this
+   is a fast path, not a wall), but if the early blocks are all un-approved,
+   mention it: pre-speccing them with `/project-manager spec` would cut hand-holding.
 
 6. WRITE "## Work tracker" into ${OUT_FILE} and (re)label the "## Today at a
    glance" work-block rows. Tracker schema:
@@ -53,9 +68,16 @@ last_block_end) + bed time from the profile JSON above.
      the tie). "—" for no Plane issue.
    - Status starts "planned"; Done at / % complete / Est rating stay blank for
      /end-of-day. "Est rating" later judges whether the estimate held.
+   - Notes: tag each row's plan state from the ready row's `approved` — "✅ plan
+     approved" (fast path) or "⏳ needs spec" (will plan inline at execute). This
+     is what tells you, at a glance, which of today's tasks are pre-specced.
    If plan_exists=no, write a minimal file: frontmatter + short "## Today at a
    glance" (work blocks only) + the tracker + an empty "## How it went". Rewrite
    both tables together; never let them drift.
+   ON A MID/LATE-DAY RE-RUN: preserve existing rows for PAST blocks as-is (their
+   Status reflects what the user reports, per step 5) — only (re)write the rows
+   for current and future blocks. Never overwrite or backfill an elapsed block's
+   row with a fresh assignment.
 
 7. Confirm in one tight read: the chosen projects, the block→task assignment, and
    "run /end-of-day to close + reconcile to Plane." Stop here.

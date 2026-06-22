@@ -1,0 +1,90 @@
+---
+INSTRUCTIONS — interactive SPEC / approval gate (PB-45). PM_SPEC above is a JSON
+object for ONE issue. The job: draft a tight `## Implementation Plan` onto the
+issue (so it can be reviewed and APPROVED ahead of time), and — when the user
+signs off — mark it approved. An approved plan is what lets `/plan-my-work task
+execute` implement WITHOUT live planning: the slop + hand-holding both drop
+because the approach was reviewed before any code is written. This is a Socratic
+walk (same spirit as /discuss): ONE question at a time, pull the thread, don't
+pre-solution. Read-only until the user says go. NEVER write code here — this
+command only plans and approves; implementation happens in `task execute`.
+
+BRANCH ON `status` FIRST
+  • "none"      → the ref matched nothing. Say so; offer to create it
+                  (${PM_SELF} issue --project <R> --title "<t>"). Stop.
+  • "ambiguous" → several matches in `candidates` (tie·id·title·project). Show a
+                  tight shortlist, ask which one, then re-run
+                  ${PM_SELF} spec "<that PB-id>" and continue.
+  • "error"     → relay `error` plainly, help fix, don't loop.
+  • "ok"        → proceed. You have: tie, id, title, description, description_html,
+                  has_plan, approved, approved_label, priority, state, project.
+
+STEP 0 — READ THE CONTEXT SILENTLY, THEN BRANCH ON STATE
+  Absorb the title + current description. Do NOT dump the JSON back. Then:
+    • approved = true → the plan is ALREADY approved. Say so in one line and ask
+      whether they want to RE-SPEC it (re-open the plan; re-approve after) or just
+      stop. Don't silently rewrite an approved plan.
+    • has_plan = true (but not approved) → a draft plan already exists. Offer to
+      REVIEW/REFINE it toward approval rather than starting from scratch. Summarize
+      the existing plan in a line or two, then go to STEP 2 (confirm) or STEP 1 if
+      it needs real work.
+    • neither → fresh. One short opening line naming the task, then STEP 1.
+
+STEP 1 — THE SOCRATIC INTERVIEW (one question at a time)
+  Mechanism:
+    • If the AskUserQuestion tool is available, ask ONE question per call, with
+      2–4 concrete suggested `options` drawn from THIS issue's context (the tool
+      auto-adds a free-form "Other" — never add your own "Other" option).
+      multiSelect only when several answers can genuinely co-apply.
+    • If AskUserQuestion is NOT available (e.g. the Codex CLI), fall back to plain
+      conversational questions — still one at a time, exactly like /discuss.
+  Rules (same as /discuss): each question follows from the last answer — pull the
+  thread, don't introduce a new one. No advice, no reflexive validation. Don't ask
+  what the user already told you (it's in the description). Keep it SHORT — a spec
+  is 4–6 questions, not an interrogation; the goal is a plan good enough to
+  implement against, not a design doc.
+
+  The thread to pull, roughly in this order — but follow the user, not the list:
+    a) DONE — what does "done" look like? The concrete outcome / acceptance check.
+    b) APPROACH — the shape of the solution. The one real decision, if there is one.
+    c) TOUCHPOINTS — which files / modules / surfaces get touched (best-effort).
+    d) RISKS — the unknowns, the thing most likely to go wrong, any dependency.
+    e) OUT OF SCOPE — what this issue explicitly does NOT do.
+    f) VERIFY — how the change will be checked (tests / build / manual).
+  Stop when the plan is good enough to hand to an implementer: "Enough to build
+  from, or is there a piece we're missing?"
+
+STEP 2 — SYNTHESIZE & CONFIRM (no writes yet)
+  Replay the plan back, telegraphic, as the `## Implementation Plan` you'll write:
+    - Done: <acceptance outcome>
+    - Approach: <the shape; the decision made>
+    - Touchpoints: <files/modules>
+    - Risks: <unknowns / deps>
+    - Out of scope: <non-goals>
+    - Verify: <how it's checked>
+  Get an explicit yes. If they tweak, fold it in and re-confirm. Never auto-commit.
+  Then ask the SEPARATE approval question plainly: "Approve this plan now (so
+  execute can pick it up), or leave it as a draft for later?" Approval is its own
+  decision — a plan can be saved without being approved.
+
+STEP 3 — APPLY
+  (a) WRITE THE PLAN into the description. PRESERVE the existing description and add
+      (or replace) only the plan section. Build the new description_html from
+      `description_html` above:
+        • no existing `## Implementation Plan` → append the plan section after the
+          current html.
+        • already has one → replace from that heading to the end, keep everything
+          before it.
+      Write the plan as HTML (`<h2>Implementation Plan</h2>` + a list), so Plane
+      renders it. Then:
+        ${PM_SELF} update --edits '[{"tie":"<tie>","field":"description","value":"<full new description_html>"}]'
+  (b) APPROVE — ONLY if the user said approve in STEP 2:
+        ${PM_SELF} tag "<tie>" --add plan-approved
+      (add the `plan-approved` label — `approved_label` in the context). The
+      label auto-creates on first use. If they chose draft-only, skip this and say
+      the plan is saved but NOT yet approved (won't be picked up by execute).
+
+STEP 4 — REPORT
+  One line: plan written · approved? (yes/draft) · the PB-id. If approved, note it
+  will flow into `/plan-my-work task execute` without a live planning gate. Relay
+  any PLANE_ERROR plainly; don't loop.

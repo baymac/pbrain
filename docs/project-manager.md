@@ -49,6 +49,7 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `find <ref> [--project R]` | Resolve an issue by URL, id (`PB-26`), bare sequence, or **fuzzy name** → candidate cards `{tie, id, title, state, project}`. The resolver behind plain-language editing. |
 | `review --projects a,b` | **Read-only** scan for thin issues (flags ⊆ `no_description \| no_priority`). Absent fields are "can't assess," not thin. Followed by the dual-mode enrichment-walk instructions. |
 | `explode <ref> [--project R]` | **Read-only** context for breaking ONE issue down. Resolves the ref, then prefetches its description + existing sub-issues + estimate scale and emits a **Socratic walk** (see below). |
+| `spec <ref> [--project R] [--read]` | The **spec/approval gate** (PB-45). A **Socratic walk** that drafts a tight `## Implementation Plan` into the issue description and, on explicit approval, adds the `plan-approved` label. An approved issue lets `/plan-my-work task execute` skip its live planning gate (fast path). `--read` emits JSON only (plan + approval state, no walk) — how `task execute` reads it. |
 | `enrich` / `update --edits '<json>'` | The generic write path: `[{tie,field,value}]`. `field` ∈ description · title · priority · target_date/due · start_date · estimate · assignees(name\|uuid) · tag/untag/labels · state · parent · cycle · module · comment · link · subissue · relation:&lt;type&gt;. One batch shares a creation-guard + cache. |
 | `move <tie> --to <status>` | Status (`todo\|doing\|done\|blocked\|dropped`). |
 | `priority <tie> --value <p>` | Priority (`urgent\|high\|medium\|low\|none`). |
@@ -114,6 +115,19 @@ Typical flow: `host probe` → `host deploy` (or `host domain`) → `host vpn` (
 ## Exploding a task (interactive break-down)
 
 Where `review` scans many thin issues and infers, `explode <ref>` takes the ONE issue you name and breaks it down **with** you — a Socratic, one-question-at-a-time walk in the spirit of `/discuss` and `/journal`'s open questions. It uses the `AskUserQuestion` tool (suggested options drawn from the issue, plus a free-form answer; it falls back to plain conversation where that tool isn't available, e.g. the Codex CLI) to draw out what "done" looks like, the natural seams to split on, ordering/dependencies, sizing (toward ~30m–1h sub-issues), and what's out of scope. It prefetches the issue's existing sub-issues so it never proposes a duplicate. Once you confirm, it writes the refined parent **description** plus each child as a `subissue` in one batch, then reports a compact table. Drive it in plain words too — "break down PB-24 into sub-issues" routes here.
+
+## Working locations (for `/plan-my-work task execute`)
+
+`/plan-my-work task execute` needs to know **where** each Plane project's tasks get implemented. `workdir` records that — a per-project working location stored in `plane.json` (`projects[].work`):
+
+```
+/project-manager workdir                                    # list configured locations
+/project-manager workdir pb --path ~/code/pbrain            # set (repo at that path)
+/project-manager workdir pb --path ~/code/pbrain --kind conductor --base-branch main
+/project-manager workdir pb --clear                         # remove
+```
+
+The path must already exist — `task execute` `cd`s into it and isolates work on a `git worktree`/branch; it never creates or spawns a repo/workspace. Fields: `path` (absolute), `kind` (`repo` default, or `conductor`), `base_branch` (default `main`), `isolation` (`worktree` default, or `branch`) — the defaults keep your main checkout untouched. As a config write it's a `/project-manager` verb (the single-writer rule), and `projects --sync` preserves it.
 
 ## Environment
 

@@ -98,6 +98,14 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *"PM_NOT_CONFIGURED"* ]]
 }
 
+@test "spec verb (PB-45) is a recognized verb and is Plane-gated when unset" {
+  # Recognized → config-gated (not handed to the NL router, which would emit PM_ROUTE).
+  run PM spec PB-1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_NOT_CONFIGURED"* ]]
+  [[ "$output" != *"PM_ROUTE"* ]]
+}
+
 # --- ops: token emission + graceful degrade ---------------------------------
 @test "projects prints PM_PROJECTS and the synthesized registry" {
   PM config --api-key SECRET --workspace ws --project pid >/dev/null
