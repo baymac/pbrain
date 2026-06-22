@@ -1371,6 +1371,73 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
     return out
 
 
+def groom_run(cfg, client, project_ids, apply=False):
+    """Headless mechanical grooming for the daily loop (PB-46).
+
+    The DETERMINISTIC half of `/project-manager review`, runnable off the
+    interactive session (scheduled background agent) so the board is groomed
+    before `/plan-my-work` runs. Per project, for every top-level issue:
+
+      - well-formed BACKLOG issue (no thinness flags, not a sub-task) →
+        TRIAGE: propose backlog→todo. Applied only when `apply=True`; otherwise
+        reported as a dry-run proposal.
+      - thin issue (any thinness flag) → QUEUE into `needs_review` — these need
+        model judgement (description/estimate/priority) and are NEVER auto-edited
+        here; the interactive `review` / `spec` walks own them.
+
+    Pure of side effects when apply=False. With apply=True the only write is the
+    conservative backlog→todo state move (build_status_body), mirroring the move
+    verb. Never raises for a single project — a project that errors is skipped so
+    one bad project can't sink the nightly run. Returns a JSON-able report dict.
+    """
+    report = {"generated_for": list(project_ids), "applied": bool(apply),
+              "projects": [], "triaged": [], "needs_review": [], "errors": []}
+    for pid in project_ids:
+        label = project_label(cfg, pid)
+        try:
+            states = client.list_states(pid)
+            states_by_id = {s["id"]: s for s in states}
+            has_scale = bool(ensure_estimate_scale(cfg, client, pid))
+            issues = list(client.list_work_items(pid))
+        except PlaneError as e:
+            report["errors"].append({"project_id": pid, "project": label, "error": str(e)})
+            continue
+        counts = {"triaged": 0, "needs_review": 0, "skipped": 0}
+        for issue in issues:
+            if issue.get("parent"):
+                counts["skipped"] += 1
+                continue
+            iid = issue.get("id")
+            grp = state_group(issue, states_by_id)
+            seq = issue.get("sequence_id", iid)
+            title = issue.get("name", "")
+            flags = thinness_flags(issue, has_estimate_scale=has_scale)
+            if flags:
+                report["needs_review"].append(
+                    {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
+                     "id": seq, "title": title, "group": grp, "flags": flags})
+                counts["needs_review"] += 1
+                continue
+            if grp == "backlog":
+                row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
+                       "id": seq, "title": title, "from": "backlog", "to": "todo"}
+                if apply:
+                    try:
+                        body = build_status_body("todo", states)
+                        client.update_work_item(pid, iid, body)
+                        row["ok"] = True
+                    except PlaneError as e:
+                        row["ok"] = False
+                        row["error"] = str(e)
+                report["triaged"].append(row)
+                counts["triaged"] += 1
+            else:
+                counts["skipped"] += 1
+        report["projects"].append(
+            {"project_id": pid, "project": label, "counts": counts})
+    return report
+
+
 def explode_context(cfg, client, ref, project_ref=None):
     """Read-only context for INTERACTIVELY exploding ONE issue into sub-issues.
     Resolve `ref` via find_issues; 0 or >1 cards → return the candidates so the
@@ -2053,6 +2120,15 @@ def cmd_review(args):
     return 0
 
 
+def cmd_groom(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = project_ids_from_arg(cfg, args.projects)
+    print(json.dumps(groom_run(cfg, client, ids, apply=args.apply),
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_enrich(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -2434,6 +2510,12 @@ def build_parser():
     sp = sub.add_parser("review")
     sp.add_argument("--projects"); sp.add_argument("--include-backlog", action="store_true")
     sp.set_defaults(func=cmd_review)
+
+    sp = sub.add_parser("groom")  # PB-46 headless mechanical grooming
+    sp.add_argument("--projects")
+    sp.add_argument("--apply", action="store_true",
+                    help="apply the conservative backlog→todo triage (default: dry-run report)")
+    sp.set_defaults(func=cmd_groom)
 
     sp = sub.add_parser("enrich"); sp.add_argument("--edits", required=True)
     sp.set_defaults(func=cmd_enrich)

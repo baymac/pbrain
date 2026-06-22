@@ -109,6 +109,7 @@ unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 source "$_SCRIPT_DIR/../lib/plane-backup.sh"
 source "$_SCRIPT_DIR/../lib/plane-host.sh"
+source "$_SCRIPT_DIR/../lib/pm-groom.sh"  # PB-46 headless mechanical grooming
 
 pbrain_emit_prefs "project-manager" || true
 
@@ -183,7 +184,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -203,7 +204,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -255,6 +256,7 @@ case "$SUB" in
     echo "backup_scheduled: $(pbrain_launchagent_loaded "$PBK_LABEL" && echo yes || echo no)"
     echo "backup_dest: ${PBK_DEST:-local}"
     echo "backup_time: ${PBK_TIME:-03:30}"
+    echo "groom_scheduled: $(pbrain_launchagent_loaded "$PMG_LABEL" && echo yes || echo no)"
     bk_dir="${PBK_LOCAL_DIR:-$(pbrain_pbk_default_dir)}"; [[ "${PBK_DEST:-local}" == external ]] && bk_dir="${PBK_EXTERNAL_DIR:-$bk_dir}"
     echo "backup_count: $(ls -1 "$bk_dir"/plane-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
     ;;
@@ -688,6 +690,52 @@ PYEOF
       $(_has_bool from_browser && printf '%s' --from-browser) \
       $(_has_bool create && printf '%s' --create) \
       $(_has_bool replace && printf '%s' --replace) || true
+    ;;
+
+  # ===== headless mechanical grooming (PB-46) ===============================
+  # The deterministic half of `review`, runnable off the interactive session so
+  # /plan-my-work finds a pre-triaged board. Actions:
+  #   run [--projects csv] [--apply]  — scan + write the dated report (run = the
+  #                                     scheduled/headless entry; default dry-run
+  #                                     unless --apply; the LaunchAgent uses --apply)
+  #   status                          — schedule + today's report status
+  #   enable [--time HH:MM] [--projects csv] — install the daily LaunchAgent
+  #   disable                         — remove the LaunchAgent
+  groom)
+    ACTION="${1:-status}"; [[ $# -gt 0 ]] && shift || true
+    _parse_args "$@"
+    case "$ACTION" in
+      run)
+        echo "PM_GROOM"
+        # Build argv explicitly (empty-array-safe under bash 3.2 + set -u).
+        if [[ -n "${F_projects:-}" ]] && _has_bool apply; then
+          pmg_run --projects "$F_projects" --apply || true
+        elif [[ -n "${F_projects:-}" ]]; then
+          pmg_run --projects "$F_projects" || true
+        elif _has_bool apply; then
+          pmg_run --apply || true
+        else
+          pmg_run || true
+        fi
+        ;;
+      status)
+        pmg_status || true
+        ;;
+      enable)
+        echo "PM_GROOM_ENABLE"
+        pmg_schedule_install "${F_time:-06:40}" "${F_projects:-}" || true
+        echo "scheduled: $(pmg_plist)"
+        ;;
+      disable)
+        echo "PM_GROOM_DISABLE"
+        pmg_schedule_uninstall || true
+        echo "removed: $PMG_LABEL"
+        ;;
+      *)
+        echo "Usage: /project-manager groom <run|status|enable|disable> [--projects csv] [--time HH:MM] [--apply]" >&2
+        exit 1
+        ;;
+    esac
     ;;
 
   # ===== Plane backup / snapshot (PB-17) ====================================

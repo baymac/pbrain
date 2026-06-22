@@ -14,13 +14,25 @@ last_block_end) + bed time from the profile JSON above.
      above. Write a minimal file (a short work-only glance + the tracker).
 
 2. READY-CHECK — delegate grooming to /project-manager (separation of concern).
-   The tasks you pull must be well-formed, but you don't groom them here. If this
-   week's goal projects have thin or still-in-backlog issues, hand grooming to the
-   PM in EXECUTOR mode (it owns every Plane write):
+   The tasks you pull must be well-formed, but you don't groom them here.
+   FIRST check for a FRESH background groom report (PB-46): the scheduled
+   `groom` agent does the mechanical half (backlog→todo triage + thin-issue
+   queue) headlessly, off this session, so the board may already be triaged.
+     bash "${PM_CMD}" groom status
+   - today_report present → a fresh report exists. SKIP the live review call;
+     read the report's "Needs review" list and surface it in one line (these are
+     the thin issues the background pass could NOT auto-fix — they still want a
+     `/project-manager review`/`spec` walk, but don't block planning on them).
+   - today_report (none) → fall back to the live review below (no regression).
+   If this week's goal projects have thin or still-in-backlog issues AND no fresh
+   report exists, hand grooming to the PM in EXECUTOR mode (it owns every Plane
+   write):
      PBRAIN_PM_CALLER=plan-my-work bash "${PM_CMD}" review --projects "${WEEKLY_PIDS}"
    PM enriches (description/priority/assignee/relations/sub-tasks) and triages
    backlog → todo, then reports. If weekly_pids is empty, ask which projects to
-   pull from. Do NOT enrich issues inline.
+   pull from. Do NOT enrich issues inline. (Tip: `bash "${PM_CMD}" groom enable
+   --projects "${WEEKLY_PIDS}"` schedules the daily background pass so future
+   runs skip live grooming entirely.)
 
 3. PROGRESS REPORT (weekly primary + monthly context). From progress_json + this
    week's goals (each with allocation_percent + plane_project):
