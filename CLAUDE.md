@@ -55,6 +55,30 @@ Exempt (never trigger the check): `/journal`, `/gratitude-journal`, `/init-obsid
 
 ---
 
+## Linking a Claude Code chat to a filed issue ("ref chat")
+
+When you file a `/project-manager` Plane issue from a Claude Code session **and** the user says to reference the chat (e.g. "ref chat", "ref this chat", "reference the cc session", or any equivalent), append a reference to the **current session's transcript path** at the **bottom of the issue description**, as the last line, in this exact form:
+
+```
+---
+Claude Code chat ref: <full path to the current session .jsonl>
+```
+
+Resolve the path to the live session transcript, which on macOS is:
+
+```
+~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl
+```
+
+— where `<sanitized-cwd>` is the working directory with `/` replaced by `-` (e.g. `-Users-parichay-dev`) and `<session-id>` is this session's UUID. Verify the file exists before writing the line (`find ~/.claude/projects -name '<session-id>.jsonl'`); if it can't be resolved, say so rather than guessing.
+
+Rules:
+- The ref goes **in the description body** (last line), not as a comment — `update --edits` with a `description` field replaces the whole field, so re-send the full existing description with the ref line appended.
+- Only add it when the user asks ("ref chat" or similar) — never automatically on every issue.
+- One ref line per issue; if one already exists, replace it rather than stacking.
+
+---
+
 ## Repository layout (monorepo)
 
 Each file carries its own implementation detail in its header comment / docstring; the lines below are one-clause pointers. Slash-command behavior is in the index further down + each `commands/<cmd>.md`.
