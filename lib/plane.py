@@ -71,6 +71,20 @@ APPROVED_LABEL = "plan-approved"
 PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the description
 
 
+def strip_html(html):
+    """Crude HTML → plain text for comment bodies (PB-61) when the API gives no
+    pre-stripped form. Drops tags, collapses whitespace, unescapes the few
+    entities Plane emits. Stdlib only."""
+    if not html:
+        return ""
+    import re
+    import html as _html
+    text = re.sub(r"<(br|/p|/div|/li)\s*/?>", "\n", html, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = _html.unescape(text)
+    return re.sub(r"[ \t]+\n", "\n", text).strip()
+
+
 class PlaneError(Exception):
     pass
 
@@ -770,6 +784,15 @@ class PlaneClient:
     def create_comment(self, project_id, issue_id, comment_html):
         return self._request("POST", "projects/%s/work-items/%s/comments/"
                              % (project_id, issue_id), body={"comment_html": comment_html})
+
+    def list_comments(self, project_id, issue_id):
+        """All comments on a work item, oldest first (so the newest is last).
+        Used by the spec/approval gate (PB-61): user comments are read as
+        AUTHORITATIVE over the description and any model-added plan content."""
+        items = self.list_all("projects/%s/work-items/%s/comments/"
+                              % (project_id, issue_id))
+        items.sort(key=lambda c: c.get("created_at") or "")
+        return items
 
     def create_link(self, project_id, issue_id, url, title=None):
         body = {"url": url}
@@ -1521,6 +1544,25 @@ def spec_context(cfg, client, ref, project_ref=None):
     approved_ids = approved_label_ids(client, pid)
     approved = bool(approved_ids) and any(
         lid in approved_ids for lid in issue_labels(issue))
+    # PB-61: user comments are AUTHORITATIVE — they override the description and
+    # any model-added plan content. Surface them (oldest→newest, so the last
+    # entry is the most recent word) so the executor / spec walk can honour them.
+    comments = []
+    try:
+        raw = sorted(client.list_comments(pid, iid),
+                     key=lambda c: c.get("created_at") or "")
+        for c in raw:
+            body = (c.get("comment_stripped")
+                    or strip_html(c.get("comment_html") or "")).strip()
+            if not body:
+                continue
+            comments.append({
+                "created_at": c.get("created_at") or "",
+                "actor": (c.get("actor_detail") or {}).get("display_name") or "",
+                "body": body,
+            })
+    except PlaneError:
+        comments = []  # comments are best-effort; never block the gate on them
     return {
         "status": "ok",
         "tie": card["tie"], "id": card["id"], "issue_id": iid,
@@ -1530,6 +1572,11 @@ def spec_context(cfg, client, ref, project_ref=None):
         # lossy round-trip that would clobber the issue's existing description.
         "description_html": issue.get("description_html") or "",
         "has_plan": PLAN_MARKER.lower() in desc.lower(),
+        # PB-61: comments win over description/model content; newest is last.
+        # The consumer must re-derive the plan to honour them and flag any
+        # comment that contradicts the description.
+        "comments": comments,
+        "comments_authoritative": True,
         "approved": approved,
         "approved_label": APPROVED_LABEL,
         "priority": issue.get("priority"),

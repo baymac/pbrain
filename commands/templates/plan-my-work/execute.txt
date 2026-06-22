@@ -56,15 +56,25 @@ PER-TASK LIFECYCLE (loop over the current block's not-done rows, top to bottom):
   4. PLAN — SPEC/APPROVAL GATE. Read the issue's recorded plan + approval state
      (read-only, JSON only — the --read flag suppresses the interactive walk):
        bash "${PM_CMD}" spec "<tie>" --read
-     The PM_SPEC JSON carries `approved`, `has_plan`, and `description` (which
-     holds the ## Implementation Plan when one exists).
+     The PM_SPEC JSON carries `approved`, `has_plan`, `description` (which holds
+     the ## Implementation Plan when one exists), and `comments` (the user's
+     comments on the issue, oldest→newest, with `comments_authoritative: true`).
+     - COMMENTS ARE AUTHORITATIVE (PB-61). The `comments` array OVERRIDES the
+       description AND any plan content the model added — on BOTH paths below.
+       Read every comment; the LAST (newest) wins where comments disagree. Build
+       /follow the plan so it honours the comments, not the stale description.
+       If a comment CONTRADICTS the description (or an approved plan), surface it
+       in ONE line before proceeding (e.g. "note: comment says use X, description
+       said Y — going with the comment"), so the stale description gets noticed.
+       Empty `comments` → nothing changes; proceed with the description as before.
      - approved = true → FAST PATH. The approach was reviewed ahead of time. Read
        the ## Implementation Plan out of `description` and implement straight
-       against it. Do NOT re-open the approach or ask for a planning [GATE] —
-       state in one line which plan you're following, then go to step 5.
+       against it (as amended by any authoritative comments above). Do NOT re-open
+       the approach or ask for a planning [GATE] — state in one line which plan
+       you're following (and any comment override), then go to step 5.
      - approved = false → FALLBACK (the original behaviour). Draft a tight
        implementation plan against the TARGET repo's conventions (use the PM_SPEC
-       JSON, or `bash "${PM_CMD}" find "<tie>"`, for context).
+       JSON — incl. `comments` — or `bash "${PM_CMD}" find "<tie>"`, for context).
        [GATE] explicit yes before you write ANY code.
        Then OFFER once, without blocking: "want me to save this as the approved
        plan so future runs skip this step?" — on yes, run the interactive walk
