@@ -149,6 +149,72 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *"name fragment"* ]]
 }
 
+@test "spec_context surfaces user comments as authoritative, newest last (PB-61)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FC:
+    def get_work_item(self,pid,iid):
+        return {"id":"i1","name":"do the thing","description_stripped":"old desc",
+                "description_html":"<p>old desc</p>","labels":[],"priority":"high"}
+    def list_comments(self,pid,iid):
+        # returned out of order on purpose; spec_context must sort oldest->newest
+        return [
+          {"id":"c2","created_at":"2026-06-02T00:00:00Z","comment_stripped":"actually use X"},
+          {"id":"c1","created_at":"2026-06-01T00:00:00Z","comment_html":"<p>first note</p>"},
+          {"id":"c3","created_at":"2026-06-03T00:00:00Z","comment_stripped":"   "},  # blank -> dropped
+        ]
+# isolate from find_issues / label lookups; we only test the comments wiring
+m.find_issues = lambda cfg,client,ref,project_ref=None: [
+    {"tie":"P:i1","id":"PB-1","issue_id":"i1","project":"pb","project_id":"P","state":"Todo"}]
+m.approved_label_ids = lambda client,pid: set()
+res = m.spec_context({"projects":[{"id":"P","name":"pb","shortcut":"pb"}]}, FC(), "PB-1")
+assert res["status"]=="ok", res
+assert res["comments_authoritative"] is True
+bodies=[c["body"] for c in res["comments"]]
+assert bodies==["first note","actually use X"], bodies   # sorted + html-stripped + blank dropped
+assert res["comments"][-1]["body"]=="actually use X"      # newest is last
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "spec_context tolerates a comments-read failure (best-effort) (PB-61)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FC:
+    def get_work_item(self,pid,iid):
+        return {"id":"i1","name":"t","description_stripped":"d","description_html":"<p>d</p>",
+                "labels":[],"priority":"none"}
+    def list_comments(self,pid,iid): raise m.PlaneError("boom")
+m.find_issues = lambda cfg,client,ref,project_ref=None: [
+    {"tie":"P:i1","id":"PB-1","issue_id":"i1","project":"pb","project_id":"P","state":"Todo"}]
+m.approved_label_ids = lambda client,pid: set()
+res = m.spec_context({"projects":[{"id":"P","name":"pb","shortcut":"pb"}]}, FC(), "PB-1")
+assert res["status"]=="ok"
+assert res["comments"]==[]            # failure degrades to empty, gate not blocked
+assert res["comments_authoritative"] is True
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "strip_html drops tags, breaks on block ends, unescapes (PB-61)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.strip_html("")==""
+assert m.strip_html("<p>use &amp; keep</p>")=="use & keep"
+assert m.strip_html("a<br>b").splitlines()==["a","b"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 # --- config + backend switch ------------------------------------------------
 @test "setup writes a 0600 config with backend=plane" {
   run PY setup --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid
