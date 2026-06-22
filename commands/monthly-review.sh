@@ -335,8 +335,5 @@ Hard rules:
 - Do NOT prescribe productivity systems or self-improvement frameworks.
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback). No plan args:
 # Step 4 above owns profile updates with its richer approve-per-item flow.
 pbrain_emit_habits_extract "monthly-review" || true
-pbrain_emit_self_improve "monthly-review" || true

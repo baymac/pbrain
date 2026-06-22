@@ -676,7 +676,4 @@ Hard rules:
 - Do NOT prescribe productivity systems or self-improvement frameworks. The user is reviewing their own life, not buying a course.
 PROMPT
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback). No plan args:
 # Step 4 above owns profile updates with its richer approve-per-item flow.
-pbrain_emit_self_improve "weekly-review" || true

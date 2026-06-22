@@ -943,7 +943,5 @@ meals or have me suggest the next one against remaining macros."
 PROMPT
 
 # Habit extraction: log any tracked habits the user evidenced (silent if no
-# habits profile). Self-improvement: capture standing preferences / quality
-# fixes the user raised this session (silent unless there was genuine feedback).
+# habits profile).
 pbrain_emit_habits_extract "diet-journal" || true
-pbrain_emit_self_improve "diet-journal" "$PROFILE_FILE" "diet profile" || true

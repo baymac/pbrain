@@ -751,4 +751,3 @@ PYEOF
     ;;
 esac
 
-pbrain_emit_self_improve "laptop-tracking" || true

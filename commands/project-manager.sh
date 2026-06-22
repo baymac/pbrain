@@ -962,4 +962,3 @@ print(json.dumps([{k:f.get(k) for k in keys if f.get(k) is not None}
     ;;
 esac
 
-pbrain_emit_self_improve "project-manager" || true

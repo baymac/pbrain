@@ -513,6 +513,5 @@ empty). Decide intent and act via the Bash tool using the absolute path:
 
 Keep it tight. One confirmation line is enough.
 ENTRY
-    pbrain_emit_self_improve "remind-blocking" || true
     ;;
 esac

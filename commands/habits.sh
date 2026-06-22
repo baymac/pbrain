@@ -2603,4 +2603,3 @@ DASH
 # the same run, not only when explicitly asked. Silent if nothing's evidenced.
 pbrain_emit_habits_extract "habits" || true
 
-pbrain_emit_self_improve "habits" "$PROFILE_FILE" "habits profile" || true

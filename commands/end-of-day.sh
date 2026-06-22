@@ -561,6 +561,10 @@ Hard rules:
 PROMPT
 
 # Habit extraction (silent if no habits profile): logs the tracked habits the
-# user evidenced doing/skipping today. Self-improvement capture runs after.
+# user evidenced doing/skipping today.
 pbrain_emit_habits_extract "end-of-day" || true
-pbrain_emit_self_improve "end-of-day" || true
+# PB-47: the scheduled, correction-driven pass. Once a day, at close, mine
+# today's Claude Code session transcripts for corrections the user made to
+# pbrain commands and propose them as preferences (propose->confirm->write).
+# Silent when nothing qualifies or no transcripts exist. Honours --date.
+pbrain_emit_self_improve_batch "$TODAY" || true

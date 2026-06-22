@@ -282,6 +282,3 @@ When all clippings are processed, print a final summary:
   N moved, grouped by top-level dir, listed as relative paths from vault root.
 PROMPT_END
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
-pbrain_emit_self_improve "organize-clippings" || true

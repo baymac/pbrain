@@ -192,7 +192,9 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_DEV_DIR` | all commands | — (see Local dev below) |
 | `PBRAIN_VAULT` | all | iCloud Obsidian path, else auto-created `~/pbrain-vault` |
 | `PBRAIN_NO_AUTOVAULT` | all | unset — set `1` to disable the zero-config `~/pbrain-vault` fallback and hard-fail when no vault is configured |
-| `PBRAIN_SELF_IMPROVE` | all commands (self-improve loop) | `prefs` — also `off` (disable) or `dev` (propose source edits; needs `PBRAIN_DEV_DIR`) |
+| `PBRAIN_SELF_IMPROVE` | self-improve capture | `prefs` — `off` disables capture entirely (back-compat master switch) |
+| `PBRAIN_SELF_IMPROVE_BATCH` | the scheduled end-of-day self-improve pass (PB-47) | `on` — `off` disables just that pass |
+| `PBRAIN_CLAUDE_PROJECTS_DIR` | where the end-of-day pass looks for Claude Code transcripts | `~/.claude/projects` |
 | `PBRAIN_PREFS_DIR` | all commands — preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT/.pbrain` |
 | `PBRAIN_FEEDBACK_DIR` | all commands — quality-fix ROOT (`<cmd>/feedback.md`) | `$VAULT/.pbrain` |
 | `PBRAIN_MIGRATIONS` | all commands — set `0` to disable the vault migration runner | `1` |
@@ -321,7 +323,7 @@ pbrain/
 │   ├── scaffold.sh                     ← standalone vault-scaffold helpers (git init, .gitignore, CLAUDE.md, config); shared by /init-obsidian + vault.sh zero-config fallback
 │   ├── update-check.sh                 ← upgrade nudge (sourced by vault.sh)
 │   ├── prefs.sh                        ← per-command preference injection
-│   ├── self-improve.sh                 ← end-of-session feedback capture
+│   ├── self-improve.sh                 ← scheduled end-of-day feedback capture (PB-47: mines the day's transcripts)
 │   ├── profile.sh                      ← plans-profile JSON extractor
 │   ├── db.sh                           ← shared SQLite store (habit events + reminders)
 │   ├── habits.sh                       ← habits profile/criteria + dated tracking layer

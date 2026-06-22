@@ -498,4 +498,3 @@ export PM_CMD WEEKLY_PIDS OUT_FILE PLANE_WEB_BASE
 envsubst '$PM_CMD $WEEKLY_PIDS $OUT_FILE $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/session.txt"
 
 pbrain_emit_habits_extract "plan-my-work" || true
-pbrain_emit_self_improve "plan-my-work" "$PROFILE_FILE" "plans profile" || true

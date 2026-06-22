@@ -215,4 +215,3 @@ case "$ACTION" in
     ;;
 esac
 
-pbrain_emit_self_improve "vault-backup" || true
