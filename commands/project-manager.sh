@@ -707,7 +707,16 @@ PYEOF
     case "$ACTION" in
       run)
         echo "PM_GROOM"
-        pmg_run ${F_projects:+--projects "$F_projects"} $(_has_bool apply && printf '%s' --apply) || true
+        # Build argv explicitly (empty-array-safe under bash 3.2 + set -u).
+        if [[ -n "${F_projects:-}" ]] && _has_bool apply; then
+          pmg_run --projects "$F_projects" --apply || true
+        elif [[ -n "${F_projects:-}" ]]; then
+          pmg_run --projects "$F_projects" || true
+        elif _has_bool apply; then
+          pmg_run --apply || true
+        else
+          pmg_run || true
+        fi
         ;;
       status)
         pmg_status || true

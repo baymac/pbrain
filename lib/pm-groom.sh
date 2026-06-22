@@ -30,11 +30,17 @@ pmg_report_file() { printf '%s\n' "$(pmg_report_dir)/${1:?date}.md"; }
 pmg_log_file()    { printf '%s\n' "$PMG_CONFIG_DIR/pm-groom.log"; }
 pmg_plist()       { printf '%s\n' "$HOME/Library/LaunchAgents/$PMG_LABEL.plist"; }
 
-# Resolve lib/plane.py relative to this file (works via symlink or direct).
+# This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
+# reliable). Resolving it lazily inside a function is unsafe: by call time
+# BASH_SOURCE may be empty/relative, pointing pmg_plane_py at the wrong path.
+_PMG_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Resolve plane.py (lives alongside this file in lib/). PBRAIN_PLANE_PY overrides
+# for tests; an existing caller-set $PLANE is honoured first.
 pmg_plane_py() {
-  local d
-  d="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-  printf '%s\n' "$d/plane.py"
+  if [[ -n "${PBRAIN_PLANE_PY:-}" ]]; then printf '%s\n' "$PBRAIN_PLANE_PY"; return; fi
+  if [[ -n "${PLANE:-}" && -f "${PLANE:-}" ]]; then printf '%s\n' "$PLANE"; return; fi
+  printf '%s\n' "$_PMG_LIB_DIR/plane.py"
 }
 
 # pmg_today — today's date (YYYY-MM-DD). Overridable via PBRAIN_PMG_DATE (tests).
@@ -58,8 +64,16 @@ pmg_run() {
   out="$(pmg_report_file "$date")"
   mkdir -p "$(pmg_report_dir)" 2>/dev/null || true
 
-  local json rc
-  json="$(python3 "$py" groom ${projects:+--projects "$projects"} $apply 2>>"$(pmg_log_file)")"
+  # Build argv as an ARRAY so the project list stays a single argument and the
+  # --projects flag stays separate from it (a quoted ${var:+...} word-splits
+  # inconsistently across shells and was passing "--projects <csv>" as one arg).
+  local scan_args=(groom)
+  [[ -n "$projects" ]] && scan_args+=(--projects "$projects")
+  [[ -n "$apply" ]] && scan_args+=("$apply")
+
+  local json rc logf; logf="$(pmg_log_file)"
+  mkdir -p "$(dirname "$logf")" 2>/dev/null || true
+  json="$(python3 "$py" "${scan_args[@]}" 2>>"$logf")"
   rc=$?
   if [[ $rc -ne 0 || -z "$json" ]]; then
     return $rc

@@ -198,6 +198,38 @@ SHIM
     && grep -q "no_description" "$report"
 }
 
+@test "pmg_run drives a REAL plane.py groom end-to-end (catches argv-splitting)" {
+  # No scan stub: pmg_run invokes a real plane.py whose make_client/load_config
+  # are monkeypatched to a FakeClient. The --projects flag must reach groom_run
+  # as a separate arg from its value — a quoted ${var:+...} that word-splits
+  # "--projects A" into one token would make argparse reject it and fail here.
+  cat > "$TMP/fakeplane.py" <<PYFAKE
+import importlib.util, sys, os
+spec = importlib.util.spec_from_file_location("realplane", "$PLANE")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FakeClient:
+    def list_states(self, pid):
+        return [{"id":"bk","group":"backlog","default":True},
+                {"id":"td","group":"unstarted","default":True}]
+    def list_work_items(self, pid):
+        return [{"id":"x1","sequence_id":42,"name":"groom me","priority":"high",
+                 "description_stripped":"body","state":"bk"}]
+    def update_work_item(self, pid, iid, body): pass
+m.load_config = lambda: {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
+m.make_client = lambda cfg: FakeClient()
+m.ensure_estimate_scale = lambda cfg,c,pid: None
+sys.exit(m.main())
+PYFAKE
+  run env PBRAIN_PLANE_PY="$TMP/fakeplane.py" bash -c \
+    "source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  report="$TMP/pmg/2026-06-22.md"
+  [ -f "$report" ] \
+    && grep -q "(applied)" "$report" \
+    && grep -q "groom me" "$report" \
+    && grep -q "backlog → todo" "$report"
+}
+
 @test "pmg_report_fresh is true only when a non-empty report exists for the date" {
   source "$REPO_ROOT/lib/pm-groom.sh"
   run pmg_report_fresh 2026-06-22
