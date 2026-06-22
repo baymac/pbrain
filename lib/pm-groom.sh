@@ -16,6 +16,12 @@
 # report under the config dir, and own the daily LaunchAgent (install/uninstall/
 # status), mirroring lib/vault-backup.sh.
 #
+# The report dir (~/.config/pbrain/pm-groom/<date>.md) is a disposable daily
+# cache — NOT the vault, NOT the source of truth (the actual grooming write,
+# backlog→todo, lands in Plane via --apply). Each run prunes to the newest
+# PBRAIN_PMG_KEEP reports (default 14) so it self-bounds instead of growing one
+# .md per day forever.
+#
 # Scheduling rides the shared LaunchAgent helper (lib/launchd.sh): a daily
 # StartCalendarInterval agent runs `project-manager.sh groom run`.
 #
@@ -135,7 +141,24 @@ if errs:
 with open(out, "w") as f:
     f.write("\n".join(lines).rstrip() + "\n")
 PYEOF
+  pmg_prune "$(pmg_report_dir)" "${PBRAIN_PMG_KEEP:-14}"
   echo "$out"
+  return 0
+}
+
+# pmg_prune <dir> <keep> — delete all but the newest <keep> dated reports in
+# <dir>. keep<=0 (or non-numeric) disables pruning. Mirrors pbrain_vbk_prune:
+# the report dir is a disposable daily cache, so it bounds itself instead of
+# growing one .md per day forever. Best-effort, always returns 0.
+pmg_prune() {
+  local dir="${1:-}" keep="${2:-14}"
+  [[ -d "$dir" ]] || return 0
+  case "$keep" in ''|*[!0-9]*) return 0 ;; esac
+  [[ "$keep" -gt 0 ]] || return 0
+  local f
+  ls -1 "$dir"/*.md 2>/dev/null | sort -r | tail -n +"$((keep + 1))" | while IFS= read -r f; do
+    [[ -n "$f" ]] && rm -f "$f" 2>/dev/null && echo "pruned $(basename "$f")" >&2 || true
+  done
   return 0
 }
 

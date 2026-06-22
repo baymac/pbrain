@@ -230,6 +230,54 @@ PYFAKE
     && grep -q "backlog → todo" "$report"
 }
 
+@test "pmg_prune keeps the newest N dated reports and deletes the rest" {
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  mkdir -p "$TMP/pmg"
+  for d in 2026-06-18 2026-06-19 2026-06-20 2026-06-21 2026-06-22; do
+    printf '# report\n' > "$TMP/pmg/$d.md"
+  done
+  pmg_prune "$TMP/pmg" 3
+  # newest 3 kept, oldest 2 gone
+  [ ! -f "$TMP/pmg/2026-06-18.md" ] \
+    && [ ! -f "$TMP/pmg/2026-06-19.md" ] \
+    && [ -f "$TMP/pmg/2026-06-20.md" ] \
+    && [ -f "$TMP/pmg/2026-06-21.md" ] \
+    && [ -f "$TMP/pmg/2026-06-22.md" ]
+}
+
+@test "pmg_prune with keep<=0 or non-numeric disables pruning" {
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  mkdir -p "$TMP/pmg"; printf 'x\n' > "$TMP/pmg/2026-06-22.md"
+  pmg_prune "$TMP/pmg" 0
+  pmg_prune "$TMP/pmg" abc
+  [ -f "$TMP/pmg/2026-06-22.md" ]
+}
+
+@test "pmg_run prunes old reports after writing today's (keep override)" {
+  # Pre-seed 3 old reports, keep=2, then a real run writes today's → keep 2 total.
+  mkdir -p "$TMP/pmg"
+  for d in 2026-06-19 2026-06-20 2026-06-21; do printf '# old\n' > "$TMP/pmg/$d.md"; done
+  cat > "$TMP/fakeplane.py" <<PYFAKE
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("realplane", "$PLANE")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FakeClient:
+    def list_states(self, pid): return [{"id":"bk","group":"backlog","default":True}]
+    def list_work_items(self, pid): return []
+    def update_work_item(self, pid, iid, body): pass
+m.load_config = lambda: {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
+m.make_client = lambda cfg: FakeClient()
+m.ensure_estimate_scale = lambda cfg,c,pid: None
+sys.exit(m.main())
+PYFAKE
+  run env PBRAIN_PLANE_PY="$TMP/fakeplane.py" PBRAIN_PMG_KEEP=2 bash -c \
+    "source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A"
+  [ "$status" -eq 0 ]
+  # today + the single newest old one survive; the rest pruned → exactly 2 files
+  n="$(ls -1 "$TMP/pmg"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+  [ -f "$TMP/pmg/2026-06-22.md" ] && [ "$n" -eq 2 ]
+}
+
 @test "pmg_report_fresh is true only when a non-empty report exists for the date" {
   source "$REPO_ROOT/lib/pm-groom.sh"
   run pmg_report_fresh 2026-06-22
