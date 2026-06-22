@@ -101,6 +101,27 @@ type: habits-profile
 EOF
 }
 
+# PB-50: a SCORED habit with NO explicit eod_only flag — should still be deferred
+# to /end-of-day mid-day (it needs whole-day evidence to score).
+_write_scored_no_flag_profile() {
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
+---
+type: habits-profile
+---
+
+# Habits profile
+
+```json
+{
+  "habits": [
+    { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily", "direction": "at_least", "target_count": 1, "priority": "high" },
+    { "id": "sleep-well", "name": "TEST-SCORED-NOFLAG", "schedule_type": "daily", "direction": "at_least", "priority": "high", "scoring": { "type": "deviation", "window": "23:00-07:00" } }
+  ]
+}
+```
+EOF
+}
+
 _log_event() {  # _log_event <display-name> <date> [count]
   python3 - "$PBRAIN_DB_FILE" "$1" "$2" "${3:-1}" <<'PY'
 import sqlite3, sys, re
@@ -524,6 +545,23 @@ EOF
   run pbrain_emit_habits_extract end-of-day
   [ "$status" -eq 0 ]
   [[ "$output" == *"TEST-EOD-SCORED-NOTE"* && "$output" != *"END-OF-DAY ONLY — do NOT mark"* ]]
+}
+
+@test "PB-50: scored habits without eod_only are still deferred mid-day" {
+  _write_scored_no_flag_profile
+  run pbrain_emit_habits_extract plan-my-day
+  [ "$status" -eq 0 ]
+  # The scored habit appears ONLY in the deferral note; the plain habit is tracked.
+  [[ "$output" == *"Brush at night"* ]]
+  defer_line="$(printf '%s\n' "$output" | grep 'END-OF-DAY ONLY')"
+  [[ "$defer_line" == *"TEST-SCORED-NOFLAG"* ]]
+}
+
+@test "PB-50: scored habits without eod_only are markable at end-of-day" {
+  _write_scored_no_flag_profile
+  run pbrain_emit_habits_extract end-of-day
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TEST-SCORED-NOFLAG"* && "$output" != *"END-OF-DAY ONLY — do NOT mark"* ]]
 }
 
 @test "emit_habits_extract forbids marking from planned/anticipated activity" {
@@ -1765,7 +1803,9 @@ _plant_source_profiles() {
 
 @test "extraction emitter explains meal_ratio and deviation marking" {
   _write_v2_scored_profile
-  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract test-cmd"
+  # Scored-habit marking rules only surface at end-of-day now (PB-50): scored
+  # habits are deferred from mid-day commands where they cannot yet be scored.
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract end-of-day"
   [ "$status" -eq 0 ]
   [[ "$output" == *"--actual-time HH:MM"* ]]
   [[ "$output" == *"clean vs unclean MEALS"* ]]
@@ -2533,7 +2573,9 @@ print('ok')
 
 @test "emit_habits_extract surfaces checklist components + the --done channel" {
   _write_supplements_profile
-  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract habits"
+  # Checklist (Supplements) is a scored habit — its components surface at
+  # end-of-day, where scored habits are markable (PB-50).
+  run bash -c "source '$REPO_ROOT/lib/profile.sh'; source '$REPO_ROOT/lib/db.sh'; source '$REPO_ROOT/lib/habits.sh'; pbrain_emit_habits_extract end-of-day"
   [ "$status" -eq 0 ]
   [[ "$output" == *"--done"* ]]
   [[ "$output" == *"Magnesium (night)"* ]]
