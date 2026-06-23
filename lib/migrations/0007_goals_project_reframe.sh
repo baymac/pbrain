@@ -7,7 +7,7 @@
 #                   allocation_percent, success_looks_like, status, difficulty}
 #
 # The goals tiers become a CEO overview — which Plane PROJECTS are in play this
-# week/month, at what priority, and at what % of importance (allocation_percent
+# week/month, at what priority, and at what % of expected time (allocation_percent
 # summing to 100 across active goals) — no longer task-level detail. The real
 # tasks live in Plane (see /project-manager, /plan-my-work).
 #

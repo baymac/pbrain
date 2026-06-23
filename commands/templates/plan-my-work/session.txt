@@ -43,7 +43,7 @@ PB-85 — STANDALONE TRACKER, NO BLOCKS, NO NUDGES.
    week's goals (each allocation_percent + plane_project):
    - Per weekly goal: name · alloc% · Plane pct · tasks done this week (from this
      week's tracker rows) · flag.
-   - % of the week's importance met = Σ(alloc% · pct) / Σ(alloc%).
+   - % of expected time spent = Σ(alloc% · pct) / Σ(alloc%).
    - FLAGS: "pile-up" (last week's open rows still not done) · "re-evaluate"
      (high alloc%, low pct, no recent activity).
    - One-line monthly read: are the week's goals serving the month's goals?
