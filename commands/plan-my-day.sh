@@ -52,6 +52,7 @@ set -euo pipefail
 #   PBRAIN_FITNESS_DIR       — today's fitness entry + fitness store (cross-ref)
 #   PBRAIN_DIET_DIR          — diet store, for meal times (cross-ref)
 #   PBRAIN_JOURNAL_DIR       — today's daily journal (cross-ref)
+#   PBRAIN_GRATITUDE_DIR     — today's gratitude entry (cross-ref, nudge)
 #   PBRAIN_WEEKLY_DIR        — weekly reviews (Monday nudge cross-ref)
 
 _PB_SRC="${BASH_SOURCE[0]}"
@@ -70,6 +71,7 @@ PLAN_DIR="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}"
 FITNESS_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
+GRATITUDE_DIR="${PBRAIN_GRATITUDE_DIR:-$VAULT_DIR/life/gratitude-journal}"
 WEEKLY_DIR="${PBRAIN_WEEKLY_DIR:-$VAULT_DIR/life/weekly-tracking}"
 STORE="$(pbrain_profile_store "$PLAN_DIR")"
 FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
@@ -435,6 +437,13 @@ fi
 # re-run (which takes the UPDATE path), not only on the fresh-plan path (PB-73).
 DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
 
+# Existence-only flag for the morning-sequence gratitude nudge (PB-66). The nudge
+# must gate STRICTLY on this precomputed flag — never a model-side file check,
+# which mis-resolves the path/date and fires a false "gratitude not logged" nudge
+# even when today's entry exists. Computed here (before the UPDATE branch) so BOTH
+# paths emit it, exactly like DIET_TODAY_EXISTS above.
+GRATITUDE_TODAY_EXISTS="$([[ -f "$GRATITUDE_DIR/$TODAY.md" ]] && echo yes || echo no)"
+
 # UPDATE path — revise today's already-written plan (light, in-place). Triggered
 # by an explicit `update` verb, or by a bare invocation when today's plan exists.
 # Loads ONLY today's plan + the focus lens + this week's/month's goals — no
@@ -462,6 +471,7 @@ if [[ "$MODE" == "update" || ( -z "$MODE" && -f "$OUT_FILE" && "$GLANCE_PRESENT"
   echo "output_file: $OUT_FILE"
   echo "profile_file: $PROFILE_FILE"
   echo "diet_today_exists: $DIET_TODAY_EXISTS"
+  echo "gratitude_today_exists: $GRATITUDE_TODAY_EXISTS"
   echo ""
   echo "=== TODAY'S PLAN (current) ==="
   cat "$OUT_FILE"
@@ -979,6 +989,7 @@ laptop_tracking_cmd: $LAPTOP_CMD
 fitness_sleep: $FITNESS_SLEEP
 diet_meal_times: $DIET_MEAL_TIMES
 diet_today_exists: $DIET_TODAY_EXISTS
+gratitude_today_exists: $GRATITUDE_TODAY_EXISTS
 fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
 fitness_today_activity: ${TODAY_FITNESS_ACTIVITY:-(no fitness entry / focus not set)}
 typical_day_present: $TYPICAL_DAY_PRESENT

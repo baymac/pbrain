@@ -426,6 +426,49 @@ EOF
   [[ "$output" == *"diet_today_exists: yes"* ]]
 }
 
+@test "PLAN path emits gratitude_today_exists: no when today's gratitude entry is absent (PB-66)" {
+  write_plans_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  [[ "$output" == *"gratitude_today_exists: no"* ]]
+}
+
+@test "PLAN path emits gratitude_today_exists: yes when today's gratitude entry is present (PB-66 — no false nudge)" {
+  write_plans_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/life/gratitude-journal"
+  printf '# gratitude\n- thing one\n' > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  [[ "$output" == *"gratitude_today_exists: yes"* ]]
+}
+
+@test "UPDATE path emits gratitude_today_exists so the gratitude nudge gates on the flag, not a file check (PB-66)" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* ]]
+  [[ "$output" == *"gratitude_today_exists: no"* ]]
+}
+
+@test "UPDATE path reports gratitude_today_exists: yes when today's gratitude entry is present (PB-66)" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PLAN" "$PBRAIN_VAULT/life/gratitude-journal"
+  printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
+  printf '# gratitude\n- thing one\n' > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* ]]
+  [[ "$output" == *"gratitude_today_exists: yes"* ]]
+}
+
 @test "PB-85: a pmw-scaffolded file (tracker, no glance) routes to the PLAN path and preserves the tracker" {
   write_plans_profile
   write_libraries
