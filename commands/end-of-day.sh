@@ -103,6 +103,17 @@ already_closed() {
 
 CLOSED="$(already_closed "$PLAN_FILE")"
 
+# PB-85: the plan file may now carry "## Today at a glance" (from /plan-my-day) and
+# "## Work tracker" (from /plan-my-work) INDEPENDENTLY — either, both, or neither.
+# Surface both presences so the close handles all four combos (pmd-only, pmw-only,
+# both, neither) without assuming the other section exists.
+WORK_TRACKER_PRESENT=no
+GLANCE_PRESENT=no
+if [[ -f "$PLAN_FILE" ]]; then
+  grep -q "## Work tracker" "$PLAN_FILE" 2>/dev/null && WORK_TRACKER_PRESENT=yes
+  grep -q "## Today at a glance" "$PLAN_FILE" 2>/dev/null && GLANCE_PRESENT=yes
+fi
+
 # Habits surfacing. No-ops (empty output) until the user opts in. (Reminders are
 # NOT surfaced or fired here: /remind reminders live on Apple Calendar, and
 # /remind-blocking overlays are time-sensitive and self-contained in their own
@@ -152,6 +163,8 @@ iso_week: $ISO_WEEK
 week_end: $WEEK_END
 month_end: $MONTH_END
 plan_file: $PLAN_FILE (exists: $(exists "$PLAN_FILE"), already_closed: $CLOSED)
+glance_present: $GLANCE_PRESENT
+work_tracker_present: $WORK_TRACKER_PRESENT
 weekly_goals_file: ${WEEKLY_GOALS_FILE:-(not set up)}
 plane_configured: $PLANE_CONFIGURED
 weekly_pids: ${WEEKLY_PIDS:-(none)}
@@ -192,10 +205,23 @@ make sure all the day's trackings are complete, then write a lean executive
 summary into the "## How it went" section of the plan file in place. The plan
 file is the single record for the day — no sibling close files.
 
-Step 0 — Preflight:
-  - If plan_file exists == no: tell the user "No /plan-my-day for today — I'll
-    write a free-form close at the top of a new $PLAN_FILE." Skip the Phase B
-    Q1 table walk (there's no table); still run Q2–Q5 and write the summary.
+Step 0 — Preflight. PB-85: "## Today at a glance" (from /plan-my-day) and
+"## Work tracker" (from /plan-my-work) are INDEPENDENT — the day may have either,
+both, or neither. You are handed glance_present and work_tracker_present; close
+whatever exists and never assume the other is there:
+  - plan_file exists == no: tell the user "No plan file for today — I'll write a
+    free-form close at the top of a new $PLAN_FILE." Skip the Q1 table walk
+    (there's no table); still run Q2–Q5 and write the summary.
+  - work_tracker_present == yes, glance_present == no (PMW-ONLY day, e.g. ran
+    /plan-my-work standalone or via task execute): there is no day-shape table —
+    close the WORK side fully (reconcile the tracker, carry-forward, Plane sync in
+    Step 4k) and write the summary from the tracker + the other trackings. Do NOT
+    ask about or fabricate glance blocks. The executive summary still leads with
+    Work since that's the day's recorded shape.
+  - glance_present == yes, work_tracker_present == no (PMD-ONLY day): close the
+    day-shape normally; there is simply no work ledger to reconcile — skip the
+    tracker parts of Q1/3b/3c/4k silently.
+  - both present: full close (the original behaviour).
   - If already_closed == yes: tell the user "Today's plan already has a
     filled-in 'How it went'. Want me to overwrite, append a note, or skip?"
     Wait for direction.
@@ -211,11 +237,12 @@ confirm by exception. Then ask only the gaps in Phase B.
 Step 2 — PHASE B: ask ONLY the gaps, ONE domain per message, waiting for each
 answer. Every question is SPECIFIC — list the actual unresolved items. Do NOT
 ask open-ended reflection questions.
-  Q1) DAILY PLANNING — from "## Today at a glance" + "## Work tracker", take every
-     already-resolved row as-is. For the REST, list them by name and ask in ONE
-     message: "Still open from today's plan — {task / block names}: which got
-     done, partial, not started, or n/a?" If every row is already resolved, skip
-     this question.
+  Q1) DAILY PLANNING — from "## Work tracker" (the task ledger; PB-85: it may be
+     the ONLY planning section present), plus "## Today at a glance" if it exists,
+     take every already-resolved row as-is. For the REST, list them by name and ask
+     in ONE message: "Still open from today's plan — {task / block names}: which got
+     done, partial, not started, or n/a?" If neither section exists, or every row is
+     already resolved, skip this question.
   Q2) FITNESS + SLEEP — combine in ONE message:
      - If the fitness session status is still "planned": "Did today's {activity}
        session happen?"
@@ -290,29 +317,32 @@ reflection — in this exact shape:
   ### Carry-forward
   - {auto-derived in Step 3c — leave the bullets for that step to fill}
 
-Step 3b — Fill BOTH tables. Use the Edit tool on $PLAN_FILE in place.
-  - "## Work tracker": fill the \`Status\`, \`Done at\`, \`% complete\`, and
-    \`Est rating\` columns for each row from Q1 (and the already-resolved rows
-    from Phase A):
-      Task completed → Done at: HH:MM, Status: done, % complete: 100
+Step 3b — Fill the table(s) that exist. Use the Edit tool on $PLAN_FILE in place.
+PB-85: the tracker and the glance are independent — fill whichever are present,
+skip the other SILENTLY (no placeholder, no apology).
+  - "## Work tracker" (standalone ledger; columns: Task | Project | Plane id |
+    Priority | Est | Status | Started | Done at | Time taken | % complete | Links |
+    Notes): fill \`Status\`, \`Done at\`, \`% complete\`, and \`Time taken\` for
+    each row from Q1 (and the already-resolved rows from Phase A):
+      Task completed → Done at: HH:MM, Status: done, % complete: 100,
+        Time taken = (Done at − Started) when both are known
       Task partially done → Status: partial, % complete: {rough %}
       Task not touched → Status: not started
-      Task not applicable today → Status: n/a
-    \`Est rating\` = a terse calibration note on whether the Est held (e.g.
-    "held", "under by ~1h", "over by ~2h") — fill it when you can judge from the
-    Done at / % complete, else leave blank.
-  - "## Today at a glance": prefix each block that actually happened with "✓ "
-    in the Action cell (the table's existing done-row convention). Leave blocks
-    that didn't happen unprefixed.
-  Skip either silently if that section isn't in the plan. (Legacy plans may carry
-  a "## Task log" instead — treat it as the work tracker for reconcile.)
+      Task not applicable / cancelled today → Status: n/a
+    Put any calibration note ("held", "under by ~1h", "over by ~2h") in \`Notes\`.
+    (Legacy plans may carry a "Block" column and/or an "## Task log" — read them
+    by header name; treat "## Task log" as the work tracker for reconcile.)
+  - "## Today at a glance" (only if present): prefix each block that actually
+    happened with "✓ " in the Action cell (the table's existing done-row
+    convention). Leave blocks that didn't happen unprefixed.
 
-Step 3c — CARRY-FORWARD. From the filled "## Work tracker", collect every row with
-Status "not started" or "partial". Write them as the bullets of the
-"### Carry-forward" subsection (from Step 3) — one bullet per carried task,
-phrased as a ready-to-schedule task ("{task} (carried from $TODAY)"). This is
-auto-derived — do NOT ask the user for a "tomorrow seed". If no task slipped,
-write a single "- (nothing carried)" bullet. /plan-my-work reads this next day.
+Step 3c — CARRY-FORWARD. ONLY if work_tracker_present == yes (a pmd-only day has no
+ledger — skip this step entirely). From the filled "## Work tracker", collect every
+row with Status "not started" or "partial". Write them as the bullets of the
+"### Carry-forward" subsection — one bullet per carried task, phrased as a
+ready-to-schedule task ("{task} (carried from $TODAY)"). This is auto-derived — do
+NOT ask the user for a "tomorrow seed". If no task slipped, write a single
+"- (nothing carried)" bullet. /plan-my-work reads this next day.
 
 Step 4 — Propagate the close into the cross-ref files. This is bookkeeping
 the user expects to be automatic — do all of these whenever the inputs apply,
@@ -492,29 +522,40 @@ without re-asking. Use the Edit tool on each file.
     Use the Edit tool to update the JSON block in $WEEKLY_GOALS_FILE in place.
     Only edit if weekly_goals_file is a real path. Skip silently otherwise.
 
-4k) PLANE SYNC + UNPLANNED DETECTION — push today's work-tracker statuses back to
-    Plane and pull in anything you finished in Plane but never planned. Run ONLY
-    IF \`plane_configured\` == yes (skip silently otherwise). All writes are
-    idempotent (set-not-append), so re-running a close is safe.
-    1. PUSH: collect every "## Work tracker" row whose "Plane id" is a real tie
-       (contains ":") and whose Status was filled in 3b. Map work-tracker Status →
+4k) PLANE SYNC + RECONCILE + UNPLANNED — keep the tracker and Plane in agreement,
+    in BOTH directions, then pull in anything you finished in Plane but never
+    planned. Run ONLY IF \`plane_configured\` == yes (skip silently otherwise; also
+    skip the whole step if work_tracker_present == no — a pmd-only day has no ledger
+    to sync). All writes are idempotent (set-not-append), so re-running is safe.
+    1. RECONCILE (PB-85, Plane → tracker): for every "## Work tracker" row whose
+       "Plane id" is a real tie (contains ":"), read its CURRENT Plane state:
+         bash "${PM_CMD:-/project-manager}" find "<pid>:<iid>"
+       If Plane was changed MANUALLY since the row was written and now disagrees,
+       update the TRACKER row to match (Plane is authoritative for a manual change):
+         Plane cancelled → Status: n/a, Notes += "cancelled in Plane"
+         Plane done      → Status: done, % complete: 100, Done at if known,
+                           Notes += "done in Plane"
+       Leave rows that already agree untouched. Relay one line if any were realigned.
+    2. PUSH (tracker → Plane): collect every tie row whose Status was filled in 3b
+       (and not just realigned from Plane in step 1). Map work-tracker Status →
        Plane status: done→done · partial/in-progress→doing · not started→todo ·
        n/a/dropped→dropped. (Note: /plan-my-work `task execute` may already have
        authored in-progress/done rows live mid-day and pushed them to Plane — the
        mapping handles them idempotently, so this pass just confirms them.)
-       Push each row with the project manager (idempotent —
-       skip rows whose Plane status already matches, so you don't thrash):
+       Push each row (idempotent — skip rows whose Plane status already matches):
          bash "${PM_CMD:-/project-manager}" move "<pid>:<iid>" --to <status>
-       (for a done row, the manager stamps completed_at automatically.) Relay a
-       one-line summary of how many were pushed.
-    2. UNPLANNED: read \`completed_in_plane_today\` (JSON array of issues Plane
+       (for a done row, the manager stamps completed_at automatically.)
+    3. UNPLANNED: read \`completed_in_plane_today\` (JSON array of issues Plane
        marked done TODAY). For each whose tie is NOT already a row in the work
-       tracker, APPEND an "unplanned" row: Block "—" | {title} | {project} |
-       {tie} | (priority/est from Plane if known, else —) | done | {completion
-       time or —} | 100 | | "unplanned (done in Plane)". Dedupe against existing
-       ties so re-running never double-adds. These unplanned-done rows also count
-       toward "Work the plan" — re-run that mark in 4e if you added any.
-    Surface ONE line: "Synced N tasks to Plane; M unplanned done pulled in."
+       tracker, APPEND an "unplanned" row matching the standalone schema
+       (Task | Project | Plane id | Priority | Est | Status | Started | Done at |
+       Time taken | % complete | Links | Notes):
+         {title} | {project} | {tie} | (priority/est from Plane if known, else —)
+         | done | — | {completion time or —} | — | 100 | | "unplanned (done in Plane)".
+       Dedupe against existing ties so re-running never double-adds. These
+       unplanned-done rows also count toward "Work the plan" — re-run that mark in
+       4e if you added any.
+    Surface ONE line: "Reconciled R · synced N to Plane · M unplanned pulled in."
 
 4g) LAPTOP USAGE — if \`laptop_report_file\` is a path (not "(none)"), today's
     laptop-usage report was already rendered to that file. Read it and weave ONE

@@ -85,6 +85,17 @@ OUT_FILE="$PLAN_DIR/$TODAY.md"
 
 mkdir -p "$PLAN_DIR"
 
+# PB-85: /plan-my-work may have already created today's file with a standalone
+# "## Work tracker" (and possibly no "## Today at a glance"). When pmd runs after
+# pmw, it must lay the glance + life anchors ABOVE the existing tracker and leave
+# that tracker untouched. Surface both signals so plan.txt knows the situation.
+WORK_TRACKER_PRESENT=no
+GLANCE_PRESENT=no
+if [[ -f "$OUT_FILE" ]]; then
+  grep -q "## Work tracker" "$OUT_FILE" 2>/dev/null && WORK_TRACKER_PRESENT=yes
+  grep -q "## Today at a glance" "$OUT_FILE" 2>/dev/null && GLANCE_PRESENT=yes
+fi
+
 # Daily flow dispatch: `plan` (fresh day) vs `update` (revise today's plan). With
 # no verb, smart-dispatch by file existence below (update if today's plan exists,
 # else plan). The other verbs (profile|task|focus|library) match on $1 directly and
@@ -423,7 +434,12 @@ fi
 # Loads ONLY today's plan + the focus lens + this week's/month's goals — no
 # libraries, no recent-day digest, no planning prompt.
 # ---------------------------------------------------------------------------
-if [[ "$MODE" == "update" || ( -z "$MODE" && -f "$OUT_FILE" ) ]]; then
+# PB-85: a bare invocation updates today only when a real /plan-my-day layout
+# exists (a "## Today at a glance"). A file that /plan-my-work scaffolded carries a
+# "## Work tracker" but NO glance — that is NOT an updatable plan, so fall through
+# to the plan path to lay the day's shape ABOVE the existing tracker. An explicit
+# `update` verb still forces the update path (and errors below if truly empty).
+if [[ "$MODE" == "update" || ( -z "$MODE" && -f "$OUT_FILE" && "$GLANCE_PRESENT" == yes ) ]]; then
   if [[ ! -f "$OUT_FILE" ]]; then
     echo "PLAN_MY_DAY_NO_PLAN_YET"
     echo "date: $TODAY"
@@ -948,6 +964,7 @@ date: $TODAY
 day_of_week: $DOW
 current_time: $NOW_TIME (24h, local)
 output_file: $OUT_FILE
+work_tracker_present: $WORK_TRACKER_PRESENT
 profile_file: $PROFILE_FILE
 weekly_review_signal: $WEEKLY_REVIEW_SIGNAL
 month_boundary_signal: $MONTH_BOUNDARY_SIGNAL
@@ -996,8 +1013,8 @@ PROMPT
 # Planning instructions (the judgment layer) live in the externalized plan.txt,
 # loaded only on this path. envsubst fills the date/command vars via an explicit
 # allow-list; every other $-token (context field names, etc.) stays literal.
-export TODAY DOW ISO_WEEK OUT_FILE REMIND_CMD
-envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD' < "$_SCRIPT_DIR/templates/plan-my-day/plan.txt"
+export TODAY DOW ISO_WEEK OUT_FILE REMIND_CMD WORK_TRACKER_PRESENT
+envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD $WORK_TRACKER_PRESENT' < "$_SCRIPT_DIR/templates/plan-my-day/plan.txt"
 
 # Habit reconcile (silent if no habits profile): scan today's entries across the
 # vault for evidence, mark states, and realign today's one-shot reminders to the

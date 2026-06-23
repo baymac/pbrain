@@ -388,14 +388,31 @@ EOF
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
 
-@test "existing plan today routes to the UPDATE path" {
+@test "existing plan today (with a glance) routes to the UPDATE path" {
   write_goals_profile
   write_libraries
   mkdir -p "$PLAN"
-  echo "plan content" > "$PLAN/$TODAY.md"
+  # PB-85: a bare invocation only updates when a real /plan-my-day layout exists,
+  # i.e. there is a "## Today at a glance". (A pmw-scaffolded file with only a
+  # "## Work tracker" falls through to the plan path — see the next test.)
+  printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
   run PMD
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"TODAY'S PLAN (current)"* && "$output" == *"plan content"* ]]
+}
+
+@test "PB-85: a pmw-scaffolded file (tracker, no glance) routes to the PLAN path and preserves the tracker" {
+  write_plans_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  # /plan-my-work scaffolded today with only a standalone Work tracker, no glance.
+  printf -- '---\ntype: daily-plan\ndate: %s\n---\n\n## Work tracker\n\n| Task | Project | Plane id | Priority | Est | Status | Started | Done at | Time taken | %% complete | Links | Notes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n\n## How it went\n' "$TODAY" > "$PLAN/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  # Lays the day shape (plan path), not the update path, and flags the tracker so
+  # the layout is placed ABOVE it without clobbering.
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  [[ "$output" == *"work_tracker_present: yes"* ]]
 }
 
 @test "plan path emits a compact recent-days digest, not the full prior plans" {
