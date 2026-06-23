@@ -108,6 +108,67 @@ PY
   exit 0
 fi
 
+# --- natural-language "do work" routing (PB-96) -----------------------------
+# Without this, ONLY the literal `task execute …` form reaches the EXECUTE
+# lifecycle; everything else falls through to PLAN_MY_WORK_SESSION, whose step 2
+# delegates grooming/triage to /project-manager. So a plain-words work request
+# like "fix the X bug", "work on PB-96", or just "pb96" used to TRIAGE the board
+# instead of running the plan→implement→PR→close cycle the user actually asked
+# for. Here we normalize such a request into the canonical `task execute <ref>`
+# form so it flows through the EXACT existing EXECUTE path (no duplicated logic):
+#   - a leading action verb (fix/do/work/implement/execute/build/ship/finish/
+#     start/tackle, optionally "work on") → execute, with any PB-ref/seq that
+#     follows it carried through as the target ($3);
+#   - a bare leading PB-ref token (pb96 / PB-96 / 96) → execute that ref;
+#   - `task …` (canonical) and the no-arg / planning form are left untouched, so
+#     `/plan-my-work` with no args still plans the day's work (SESSION).
+# Re-dispatch is deterministic and lives in the .sh (agent-agnostic), so Codex
+# and Claude behave identically.
+if [[ "${1:-}" != "task" && $# -gt 0 ]]; then
+  _PMW_REROUTE="$(python3 - "$@" <<'PY'
+import re, sys
+args = [a for a in sys.argv[1:] if a.strip()]
+if not args:
+    sys.exit(0)
+VERBS = {"fix", "do", "work", "implement", "execute", "build", "ship",
+         "finish", "start", "tackle", "complete", "resolve", "address"}
+# A PB-ref token: full id (pb-96 / pb96 / PB-96), or a bare sequence number.
+REF = re.compile(r"^(?:pb-?)?(\d+)$", re.IGNORECASE)
+def find_ref(tokens):
+    for t in tokens:
+        m = REF.match(t.strip().strip(":#"))
+        if m:
+            # normalize to the hyphenless lowercase form the EXECUTE parser
+            # already understands (matches() strips a leading "pb-").
+            return "pb" + m.group(1)
+    return ""
+first = args[0].strip().lower()
+# "work on PB-96" — treat "on" as a connective after the verb.
+verb_form = first in VERBS
+ref = find_ref(args)
+if verb_form:
+    # An NL work request. Carry through a ref if one is present; otherwise emit
+    # execute with no target so it drives the ledger / cascades (never triages).
+    print("execute")
+    print(ref)
+elif ref and len(args) == 1:
+    # A single bare PB-ref token → execute that ref.
+    print("execute")
+    print(ref)
+# else: print nothing → leave args untouched (planning SESSION form).
+PY
+)"
+  if [[ -n "$_PMW_REROUTE" ]]; then
+    _PMW_REF="$(printf '%s\n' "$_PMW_REROUTE" | sed -n '2p')"
+    if [[ -n "$_PMW_REF" ]]; then
+      set -- task execute "$_PMW_REF"
+    else
+      set -- task execute
+    fi
+  fi
+  unset _PMW_REROUTE _PMW_REF
+fi
+
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 pbrain_emit_prefs "plan-my-work" || true
