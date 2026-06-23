@@ -151,6 +151,15 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"PM_MOVE"* ]]
 }
 
+@test "labels --seed (PB-70) is a recognized verb, emits PM_LABELS, degrades on unreachable Plane" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM labels --seed --projects pid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_LABELS"* ]]
+  [[ "$output" != *"PM_ROUTE"* ]]   # recognized verb, not handed to the NL router
+  [[ "$output" != *"Traceback"* ]]
+}
+
 @test "an unknown first token routes to the NL router (not an error)" {
   # With the router, free text is an instruction, not an error: configured →
   # PM_ROUTE with the words echoed back.

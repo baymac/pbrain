@@ -50,6 +50,8 @@ CATALOGUE — every verb is:  ${PM_SELF} <verb> …
         (estimate value = a point on the project's scale, e.g. "3"/"5"; needs a
          cached scale — see `estimates`. 'none' clears it.)
   labels|members|cycles|modules [--project R]   list (the name→uuid tables)
+  labels --seed [--projects R,...]              seed the convention labels (bug/feature/chore/docs)
+                                                onto the project(s) (default: all); idempotent
   estimates [--project R] [--create [--template fibonacci|linear|squares|tshirt]
             [--type points|categories|time] [--scale a,b,c] [--name N] [--replace]]
             [--hours-per-point N] [--from-browser [--browser brave|chrome|chromium]

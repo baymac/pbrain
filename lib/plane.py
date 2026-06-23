@@ -70,6 +70,19 @@ PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "": 4
 APPROVED_LABEL = "plan-approved"
 PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the description
 
+# Canonical "convention" labels (PB-70). Every project gets these work-item TYPE
+# labels so triage is consistent across the workspace: a `bug` filed via
+# `/project-manager bug` always finds its label, `feature`/`chore`/`docs` classify
+# the rest. Seeded on project create AND backfilled on demand via `labels --seed`.
+# Colors are Plane hex strings. Idempotent: seeding skips any that already exist
+# (fuzzy-deduped by normalised name through resolve_label_refs).
+CONVENTION_LABELS = [
+    {"name": "bug",     "color": "#dc2626"},  # red
+    {"name": "feature", "color": "#16a34a"},  # green
+    {"name": "chore",   "color": "#6b7280"},  # gray
+    {"name": "docs",    "color": "#2563eb"},  # blue
+]
+
 
 def strip_html(html):
     """Crude HTML → plain text for comment bodies (PB-61) when the API gives no
@@ -2030,7 +2043,38 @@ def create_project(cfg, client, name, shortcut=None):
     reg.append({"id": pid, "name": name, "shortcut": shortcut or ""})
     cfg["projects"] = reg
     save_config(cfg)
-    return {"id": pid, "name": name, "shortcut": shortcut or ""}
+    # PB-70: seed the canonical convention labels into the fresh project so triage
+    # (e.g. `bug`) works immediately. Best-effort — a label hiccup must not undo a
+    # created project; surface what happened in the result.
+    seeded = seed_convention_labels(client, pid)
+    return {"id": pid, "name": name, "shortcut": shortcut or "", "labels": seeded}
+
+
+def seed_convention_labels(client, project_id):
+    """Ensure the CONVENTION_LABELS exist on `project_id`. Idempotent: existing
+    labels (fuzzy-matched by normalised name) are left untouched; only missing
+    ones are created, with their canonical color. Returns
+    {"created": [...names...], "existing": [...names...], "error": <str?>}.
+    Never raises — label seeding is best-effort and reported, not fatal."""
+    out = {"created": [], "existing": []}
+    try:
+        existing = client.list_labels(project_id)
+    except PlaneError as e:
+        out["error"] = str(e)
+        return out
+    by_norm = {_norm(l.get("name")): l for l in existing}
+    for spec in CONVENTION_LABELS:
+        name = spec["name"]
+        if _norm(name) in by_norm:
+            out["existing"].append(name)
+            continue
+        try:
+            client.create_label(project_id, name, color=spec.get("color"))
+            out["created"].append(name)
+        except PlaneError as e:
+            out.setdefault("error", "")
+            out["error"] += ("; " if out["error"] else "") + ("%s: %s" % (name, e))
+    return out
 
 
 def move_status(cfg, client, tie, status, completed_at=None):
@@ -2487,6 +2531,27 @@ def cmd_module(args):
 def cmd_labels(args):
     cfg = load_config()
     client = make_client(cfg)
+    # PB-70: `labels --seed` backfills the convention labels onto existing projects.
+    # --projects R,... targets a subset (default: every registry project), so a
+    # workspace that predates the convention can be brought into line in one run.
+    if getattr(args, "seed", False):
+        if getattr(args, "projects", None):
+            refs = [r.strip() for r in args.projects.split(",") if r.strip()]
+            pids = []
+            for r in refs:
+                p = resolve_project_ref(cfg, r)
+                if not p:
+                    raise PlaneError("unknown project: %s" % r)
+                pids.append(p)
+        else:
+            pids = [p["id"] for p in normalize_registry(cfg)]
+        report = {}
+        for pid in pids:
+            report[project_label(cfg, pid)] = seed_convention_labels(client, pid)
+        print(json.dumps({"seeded": report,
+                          "convention": [l["name"] for l in CONVENTION_LABELS]},
+                         ensure_ascii=False))
+        return 0
     pid = _one_project(cfg, args.project)
     print(json.dumps([{"id": l.get("id"), "name": l.get("name"), "color": l.get("color")}
                       for l in client.list_labels(pid)], ensure_ascii=False))
@@ -2750,7 +2815,16 @@ def build_parser():
     sp.add_argument("--tie", required=True); sp.add_argument("--name", required=True)
     sp.set_defaults(func=cmd_module)
 
-    for _name, _fn in (("labels", cmd_labels), ("members", cmd_members),
+    # labels carries extra flags (PB-70 convention-label seeding), so build it on its own.
+    sp = sub.add_parser("labels")
+    sp.add_argument("--project", help="project uuid|name|shortcut (default: lone/first)")
+    sp.add_argument("--seed", action="store_true",
+                    help="ensure the convention labels (bug/feature/chore/docs) on the project(s)")
+    sp.add_argument("--projects",
+                    help="--seed only: comma list of projects to backfill (default: all)")
+    sp.set_defaults(func=cmd_labels)
+
+    for _name, _fn in (("members", cmd_members),
                        ("cycles", cmd_cycles), ("modules", cmd_modules)):
         sp = sub.add_parser(_name)
         sp.add_argument("--project", help="project uuid|name|shortcut (default: lone/first)")
