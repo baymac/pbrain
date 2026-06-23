@@ -678,7 +678,22 @@ PYEOF
     python3 "$PLANE" module --tie "$tie" --name "$name" || true
     ;;
 
-  labels|members|cycles|modules)
+  labels)
+    _parse_args "$@"
+    echo "PM_LABELS"
+    # PB-70: `labels --seed [--projects R,...]` backfills the convention labels
+    # (bug/feature/chore/docs) onto existing projects; bare `labels` still lists.
+    seed_flag=()
+    _has_bool seed && seed_flag=(--seed)
+    # ${arr[@]+…} guard: bash 3.2 (macOS) treats an empty array under `set -u`
+    # as an unbound variable, so expand only when the array is non-empty.
+    python3 "$PLANE" labels \
+      ${F_project:+--project "$F_project"} \
+      ${F_projects:+--projects "$F_projects"} \
+      ${seed_flag[@]+"${seed_flag[@]}"} || true
+    ;;
+
+  members|cycles|modules)
     _parse_args "$@"
     echo "PM_$(printf '%s' "$SUB" | tr '[:lower:]' '[:upper:]')"
     python3 "$PLANE" "$SUB" ${F_project:+--project "$F_project"} || true

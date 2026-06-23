@@ -511,6 +511,46 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "seed_convention_labels creates only missing convention labels, idempotent, fuzzy-skips existing (PB-70)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+names = {l["name"] for l in m.CONVENTION_LABELS}
+assert names == {"bug","feature","chore","docs"}, names   # canon = type set
+
+class FC:
+    def __init__(self, existing): self.labels=list(existing); self.created=[]
+    def list_labels(self, pid): return list(self.labels)
+    def create_label(self, pid, name, color=None):
+        rec={"id":"n%d"%len(self.created),"name":name,"color":color}
+        self.created.append(name); self.labels.append(rec); return rec
+
+# Start with one already present, fuzzily ('Bug' vs 'bug') -> only 3 created.
+fc=FC([{"id":"l1","name":"Bug"}])
+r1=m.seed_convention_labels(fc,"p")
+assert sorted(r1["created"])==["chore","docs","feature"], r1
+assert r1["existing"]==["bug"], r1
+assert "error" not in r1, r1
+# colors are applied on create
+assert any(l.get("color") for l in fc.labels if l["name"]=="feature"), fc.labels
+
+# Idempotent: a second pass creates nothing.
+r2=m.seed_convention_labels(fc,"p")
+assert r2["created"]==[], r2
+assert sorted(r2["existing"])==["bug","chore","docs","feature"], r2
+
+# list_labels failure degrades to a reported error, never raises.
+class Boom:
+    def list_labels(self,pid): raise m.PlaneError("nope")
+rb=m.seed_convention_labels(Boom(),"p")
+assert rb["created"]==[] and "error" in rb, rb
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "list_sub_issues: uses /sub-issues/ payload when present; parent-scan fallback when endpoint 404s (PB-67)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
