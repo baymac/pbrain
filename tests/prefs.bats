@@ -23,23 +23,27 @@ teardown() {
   rm -rf "$TMP"
 }
 
-@test "missing prefs file emits nothing and returns 0" {
+# Note (PB-95): pbrain_emit_prefs always emits a shipped CHAT OUTPUT HYGIENE
+# baseline block, so "emits nothing" now means "emits no USER PREFERENCES block"
+# — the hygiene block is the only output. These tests assert that distinction.
+
+@test "missing prefs file emits no user-prefs block and returns 0" {
   run pbrain_emit_prefs journal
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [[ "$output" != *"USER PREFERENCES"* ]]
 }
 
-@test "empty prefs file emits nothing" {
+@test "empty prefs file emits no user-prefs block" {
   : > "$PREFS"
   run pbrain_emit_prefs journal
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [[ "$output" != *"USER PREFERENCES"* ]]
 }
 
-@test "whitespace-only prefs file emits nothing" {
+@test "whitespace-only prefs file emits no user-prefs block" {
   printf '   \n\t\n' > "$PREFS"
   run pbrain_emit_prefs journal
-  [ -z "$output" ]
+  [[ "$output" != *"USER PREFERENCES"* ]]
 }
 
 @test "prefs with content emits a labelled block including the content" {
@@ -52,17 +56,20 @@ teardown() {
 }
 
 @test "no command name emits nothing and returns 0" {
+  # The $cmd guard returns before even the hygiene block, so this stays silent.
   run pbrain_emit_prefs
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
-@test "no vault and no override emits nothing and returns 0" {
+@test "no vault and no override still emits the hygiene block, no user prefs" {
   unset VAULT_DIR
   unset PBRAIN_PREFS_DIR
   run pbrain_emit_prefs journal
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  # The shipped hygiene baseline ships with the code, independent of any vault.
+  [[ "$output" == *"CHAT OUTPUT HYGIENE"* ]]
+  [[ "$output" != *"USER PREFERENCES"* ]]
 }
 
 @test "PBRAIN_PREFS_DIR override is honoured (root with per-cmd subdirs)" {
@@ -82,11 +89,11 @@ teardown() {
   [[ "$output" == *"END USER PREFERENCES (global)"* ]]
 }
 
-@test "whitespace-only global file emits nothing" {
+@test "whitespace-only global file emits no global prefs block" {
   printf '   \n\t\n' > "$GLOBAL"
   run pbrain_emit_prefs journal
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [[ "$output" != *"USER PREFERENCES"* ]]
 }
 
 @test "global block is emitted before the per-command block" {
@@ -109,6 +116,44 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"global only"* ]]
   [[ "$output" != *"USER PREFERENCES for /journal"* ]]
+}
+
+# --- PB-95: shipped CHAT OUTPUT HYGIENE baseline ----------------------------
+
+@test "PB-95: hygiene block is emitted even with no prefs of any kind" {
+  run pbrain_emit_prefs journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CHAT OUTPUT HYGIENE (all pbrain commands)"* ]]
+  [[ "$output" == *"END CHAT OUTPUT HYGIENE"* ]]
+  [[ "$output" == *"markdown link"* ]]
+  [[ "$output" == *"backticks"* ]]
+}
+
+@test "PB-95: hygiene block is emitted exactly once per call" {
+  echo "- a global rule" > "$GLOBAL"
+  echo "- a command rule" > "$PREFS"
+  run pbrain_emit_prefs journal
+  [ "$status" -eq 0 ]
+  local n
+  n="$(printf '%s\n' "$output" | grep -c 'CHAT OUTPUT HYGIENE (all pbrain commands)')"
+  [ "$n" -eq 1 ]
+}
+
+@test "PB-95: hygiene block precedes any USER PREFERENCES block" {
+  echo "- a global rule" > "$GLOBAL"
+  run pbrain_emit_prefs journal
+  [ "$status" -eq 0 ]
+  local hpos ppos
+  hpos="${output%%CHAT OUTPUT HYGIENE*}"
+  ppos="${output%%USER PREFERENCES*}"
+  [ "${#hpos}" -lt "${#ppos}" ]
+}
+
+@test "PB-95: hygiene block never exits non-zero (sourced under set -e)" {
+  # Mirrors the never-fail contract: the function must not take a command down.
+  run bash -c "set -euo pipefail; source '$REPO_ROOT/lib/prefs.sh'; pbrain_emit_prefs journal >/dev/null; echo OK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
 }
 
 # --- PB-37: prefs read from a profile's "prefs" array -----------------------

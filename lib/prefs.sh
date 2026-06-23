@@ -95,8 +95,27 @@ pbrain_emit_prefs() {
   profile_file="${2:-}"
   [[ -n "$cmd" ]] || return 0
 
-  # No override and no vault → nothing to read (unit tests source this file
-  # standalone; commands always have VAULT_DIR by the time they call this).
+  # PB-95 — shipped CHAT OUTPUT HYGIENE rule. Emitted on EVERY command run,
+  # before the vault-gated return below, so it ships with the code and applies
+  # for every user with zero setup (unlike the vault prefs, which are optional
+  # user content). Terminal/chat link renderers extend a clickable link to
+  # swallow a trailing .,;:)]}> jammed against a bare URL, producing a link
+  # whose target includes the stray char (it 404s). This rule tells the agent
+  # to never paste such a URL: wrap it as a markdown link or in backticks.
+  # ~6 lines, near-zero tokens; this block is hardcoded, not read from disk.
+  printf '%s\n' "--- CHAT OUTPUT HYGIENE (all pbrain commands) ---"
+  printf '%s\n' "When you emit a URL into chat, make it render as a clean clickable link:"
+  printf '%s\n' "wrap it as a markdown link [label](url) or in backticks \`url\`. NEVER paste a"
+  printf '%s\n' "bare URL with punctuation jammed against it (e.g. \`see https://x.com/a.\` or"
+  printf '%s\n' "\`(https://x.com/a)\`) — the renderer pulls the trailing .,;:)]}> into the link"
+  printf '%s\n' "target and it breaks. If a bare URL must stand alone, put a space before any"
+  printf '%s\n' "following punctuation, or drop the punctuation."
+  printf '%s\n' "--- END CHAT OUTPUT HYGIENE ---"
+  printf '%s\n' ""
+
+  # No override and no vault → no user prefs to read (unit tests source this
+  # file standalone; commands always have VAULT_DIR by the time they call
+  # this). The hygiene block above has already been emitted regardless.
   [[ -n "${PBRAIN_PREFS_DIR:-}" || -n "${VAULT_DIR:-}" ]] || return 0
   prefs_root="${PBRAIN_PREFS_DIR:-${VAULT_DIR:-}/.pbrain}"
 

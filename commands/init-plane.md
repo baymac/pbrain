@@ -15,7 +15,7 @@ With no argument the script runs `probe` and prints `INIT_PLANE_PROBE` followed 
 The flow:
 
 1. **Prerequisites.** Plane self-host needs **Docker + Docker Compose running** (≈4 GB RAM, 2 cores).
-   - `docker: no` → tell the user to install **Docker Desktop** (https://www.docker.com/products/docker-desktop/) and re-run. Stop here.
+   - `docker: no` → tell the user to install **Docker Desktop** (`https://www.docker.com/products/docker-desktop/`) and re-run. Stop here.
    - `docker_running: no` → tell them to start Docker Desktop, then re-run. Stop here.
    - `compose: no` → their Docker is too old; updating Docker Desktop bundles Compose.
 
