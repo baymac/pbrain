@@ -513,6 +513,51 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "file_context: generic intake context (types/labels/estimate/dedupe), branches, never writes (PB-67)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# consts: types cover all asked-for kinds; refactor/improvement fold into chore/feature
+assert set(m.WORK_TYPES)=={"bug","feature","docs","chore","refactor","improvement"}, m.WORK_TYPES
+assert m.WORK_TYPES["refactor"]["label"]=="chore" and m.WORK_TYPES["improvement"]["label"]=="feature"
+assert m.SEVERITY_TO_PRIORITY["crash"]=="urgent" and m.SEVERITY_TO_PRIORITY["polish"]=="low"
+
+class C:
+    def __init__(self): self.writes=[]
+    def list_labels(self,pid): return [{"id":"b","name":"bug"},{"id":"f","name":"feature"}]
+    def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
+                                       {"id":"sd","name":"Done","group":"completed"}]
+    def list_projects(self): return [{"id":"P","identifier":"PB"}]
+    def list_work_items(self,pid):
+        return [{"sequence_id":98,"name":"open item","labels":[],"state":"s1"},
+                {"sequence_id":50,"name":"done item","labels":[],"state":"sd"}]
+    def create_work_item(self,*a,**k): self.writes.append("c"); raise AssertionError("wrote!")
+    def update_work_item(self,*a,**k): self.writes.append("u"); raise AssertionError("wrote!")
+
+# estimates: stub ensure_estimate_scale so the test is offline + deterministic
+m.ensure_estimate_scale = lambda cfg, client, pid: {"points": {"1": "u1", "2": "u2", "3": "u3"}}
+
+cfg={"project":"P","projects":[{"id":"P","name":"pb","shortcut":"pb"}]}
+c=C()
+r=m.file_context(cfg,c,"add a dark mode toggle")
+assert r["status"]=="ok" and r["project_id"]=="P", r
+assert r["work_types"]["bug"]=="bug" and r["work_types"]["refactor"]=="chore", r["work_types"]
+assert r["has_estimate_scale"] is True and r["estimate_points"]==["1","2","3"], r
+# dedupe lists OPEN items only (PB-98), not the done one
+assert [i["id"] for i in r["recent_open_items"]]==["PB-98"], r["recent_open_items"]
+assert c.writes==[], "file_context must not write"
+
+# several projects, none named -> need_project; bad ref -> unknown_project
+cfg2={"projects":[{"id":"P","name":"pb"},{"id":"Q","name":"yt"}]}
+assert m.file_context(cfg2,C(),"x")["status"]=="need_project"
+assert m.file_context(cfg2,C(),"x",project_ref="nope")["status"]=="unknown_project"
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "seed_convention_labels creates only missing convention labels, idempotent, fuzzy-skips existing (PB-70)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

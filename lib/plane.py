@@ -87,6 +87,29 @@ CONVENTION_LABELS = [
     {"name": "docs",    "color": "#2563eb"},  # blue
 ]
 
+# Work-item TYPES the generic `file` intake recognises (PB-67). Any change software
+# needs maps to one of these; the `label` is the convention label it carries (the
+# four seeded by PB-70 — refactor/improvement fold into `chore`). `body` is the
+# heading shape the explode-from-dump uses, so each type reads triage-ready.
+WORK_TYPES = {
+    "bug":         {"label": "bug",     "body": ["Repro", "Expected", "Actual", "Severity"]},
+    "feature":     {"label": "feature", "body": ["Outcome", "Acceptance criteria", "Scope / non-goals"]},
+    "docs":        {"label": "docs",    "body": ["What's undocumented", "Audience", "Where it lives"]},
+    "chore":       {"label": "chore",   "body": ["What", "Why now"]},
+    "refactor":    {"label": "chore",   "body": ["What", "Why", "Risk / blast radius"]},
+    "improvement": {"label": "feature", "body": ["Current", "Desired", "Why it matters"]},
+}
+
+# Severity → priority (PB-67 triage convention). Used for bugs; other types take a
+# plain priority. Keeps triage consistent regardless of who/what files the item.
+SEVERITY_TO_PRIORITY = {
+    "crash":   "urgent",  # crash / data loss / blocks the daily loop
+    "blocker": "urgent",
+    "high":    "high",    # wrong output / real impact, workaround exists
+    "minor":   "medium",  # minor / cosmetic / a nudge mis-fires
+    "polish":  "low",     # nice-to-have / polish
+}
+
 
 def strip_html(html):
     """Crude HTML → plain text for comment bodies (PB-61) when the API gives no
@@ -1701,6 +1724,84 @@ def spec_context(cfg, client, ref, project_ref=None):
     }
 
 
+def file_context(cfg, client, dump, project_ref=None):
+    """Read-only context for FILING a work item from a free-text dump (PB-67) — any
+    type (bug/feature/docs/chore/refactor/improvement), inferred from the dump. The
+    generic intake behind the `file` verb; explode/spec resolve EXISTING issues, this
+    creates a NEW one. Never writes.
+
+    Resolves the target project (project_ref, else the lone/configured one; returns
+    status `need_project`/`unknown_project` when it can't). On `ok` returns enough for
+    BOTH paths of the walk:
+      • fast  — title/type/body/priority inferred from the dump, one confirm, create.
+      • full  — Socratic build-up: type, sub-issues, labels, estimate, priority,
+                deadline. So we ship the estimate scale + label set + types here.
+    Plus recent OPEN items (dedupe) and the severity→priority map."""
+    pid = None
+    if project_ref:
+        pid = resolve_project_ref(cfg, project_ref)
+        if not pid:
+            return {"status": "unknown_project", "project_ref": project_ref,
+                    "projects": normalize_registry(cfg)}
+    elif cfg.get("project"):
+        pid = cfg["project"]
+    else:
+        reg = normalize_registry(cfg)
+        if len(reg) == 1:
+            pid = reg[0]["id"]
+        else:
+            return {"status": "need_project", "dump": dump, "projects": reg}
+
+    try:
+        labels = [l.get("name") for l in client.list_labels(pid) if l.get("name")]
+    except PlaneError:
+        labels = []
+
+    scale = ensure_estimate_scale(cfg, client, pid)  # for the full path's estimate step
+
+    def _pt_key(v):
+        try:
+            return (0, float(v))
+        except (TypeError, ValueError):
+            return (1, 0.0)
+
+    # Recent OPEN items (any type) for dedupe — exclude only resolved (done/cancelled).
+    # Best-effort; degrades to [] and never blocks filing.
+    recent_open = []
+    try:
+        states_by_id = {s.get("id"): s for s in client.list_states(pid)}
+        ident = ""
+        try:
+            ident = next((p.get("identifier") or "" for p in client.list_projects()
+                          if p.get("id") == pid), "")
+        except PlaneError:
+            ident = ""
+        for w in client.list_work_items(pid):
+            if state_group(w, states_by_id) in ("completed", "cancelled"):
+                continue
+            seq = w.get("sequence_id")
+            recent_open.append({
+                "id": ("%s-%s" % (ident, seq)) if ident and seq is not None else str(seq or ""),
+                "title": w.get("name", ""),
+            })
+    except PlaneError:
+        recent_open = []
+
+    return {
+        "status": "ok",
+        "dump": dump,
+        "project": project_label(cfg, pid), "project_id": pid,
+        "existing_labels": labels,
+        "work_types": {k: v["label"] for k, v in WORK_TYPES.items()},
+        "type_body_shape": {k: v["body"] for k, v in WORK_TYPES.items()},
+        "convention_labels": [l["name"] for l in CONVENTION_LABELS],
+        "severity_priority": SEVERITY_TO_PRIORITY,
+        "has_estimate_scale": bool(scale),
+        "estimate_points": sorted((scale or {}).get("points", {}).keys(), key=_pt_key) if scale else [],
+        "recent_open_items": recent_open,
+    }
+
+
 def resolve_label_refs(client, project_id, names, allow_create=True, guard=None, existing=None):
     """Map label names → label UUIDs for a project. Reuse existing labels
     (fuzzy-deduped by normalised name); create the rest when `allow_create` and
@@ -2499,6 +2600,14 @@ def cmd_spec(args):
     return 0
 
 
+def cmd_file(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(file_context(cfg, client, args.dump, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_update(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -2804,6 +2913,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_spec)
+
+    sp = sub.add_parser("file")  # PB-67: generic work-item intake from a free-text dump
+    sp.add_argument("dump", help="the work as you'd describe it (free text); the walk explodes it")
+    sp.add_argument("--project", help="target project (uuid|name|shortcut; default: lone/configured)")
+    sp.set_defaults(func=cmd_file)
 
     sp = sub.add_parser("update")
     sp.add_argument("--edits", required=True, help="JSON [{tie,field,value}] (any field family)")

@@ -1,0 +1,75 @@
+---
+INSTRUCTIONS — file a WORK ITEM from a dump (PB-67). PM_FILE above is a JSON object:
+a free-text `dump` the user wants captured as a work item of ANY type, plus the
+resolved project + context. You EXPLODE the dump into a triage-ready item, then
+create it. Read-only until the user says go. Two paths — pick by PM_FAST:
+  • PM_FAST = yes  → FAST PATH. The user is in a hurry: infer everything, one
+                     confirm, create. Aim for ZERO extra questions.
+  • PM_FAST = no   → FULL PATH. Build it up Socratically (one question at a time),
+                     covering sub-issues / labels / estimate / priority / deadline.
+
+BRANCH ON `status` FIRST
+  • "need_project"    → several projects, none named. Show `projects` (name+shortcut),
+                        ask which, re-run ${PM_SELF} file "<dump>" --project <pick>.
+  • "unknown_project" → named project matched nothing. Show `projects`, ask, re-run.
+  • "ok"              → proceed. You have: dump, project, project_id, existing_labels,
+                        work_types{type→label}, type_body_shape{type→[headings]},
+                        convention_labels, severity_priority, has_estimate_scale,
+                        estimate_points[], recent_open_items[] (open items for dedupe).
+
+STEP 0 — EXPLODE THE DUMP (silently), CHECK FOR A DUPLICATE
+  Read the dump and infer, without asking yet:
+    • TYPE — one of work_types (bug/feature/docs/chore/refactor/improvement). The
+      dump's language tells you (a defect → bug; "add/support" → feature; "rename/
+      clean up/restructure" → refactor/chore; "document" → docs).
+    • TITLE — one crisp line.
+    • BODY — fill the headings for that type from type_body_shape (e.g. bug →
+      Repro/Expected/Actual/Severity; feature → Outcome/Acceptance criteria/Scope).
+      Use ONLY what the dump supports; mark genuine unknowns as "(?)".
+    • PRIORITY — for a bug, from severity_priority; otherwise a sensible default.
+  Scan recent_open_items: if one clearly tracks the SAME thing, say so in one line
+  and offer to comment there instead of filing a duplicate. Don't dump JSON back.
+
+═══ FAST PATH (PM_FAST = yes) ═══
+  Show the exploded item compactly: **type · title · priority** + the body. Ask for
+  ONE confirm ("file this?") — or a quick edit. Only ask a real question if TYPE or
+  the title is genuinely ambiguous from the dump. On yes → STEP 3 (create + the
+  matching label + priority; no sub-issues/estimate/deadline unless the dump stated
+  them). Done. Keep it to one round.
+
+═══ FULL PATH (PM_FAST = no) ═══
+  Socratic build-up — ONE question at a time (AskUserQuestion with 2–4 concrete
+  options drawn from THIS dump; plain-conversational fallback on Codex). Pull the
+  thread; don't ask what the dump already answers. Walk these, in order, but skip
+  any the dump already nails:
+    a) TYPE — confirm the inferred type (offer the work_types as options).
+    b) BODY — fill the gaps you marked "(?)" for that type's headings.
+    c) SUB-ISSUES — does this split into separate units? If yes, draw out an
+       ordered child list (title + rough size); they'll be created as sub-issues.
+    d) LABELS — the type's convention label is automatic; offer any extra area
+       label that already exists in existing_labels (don't invent taxonomy).
+    e) ESTIMATE — only if has_estimate_scale; offer estimate_points values.
+    f) PRIORITY — confirm (bug: from severity; else ask urgent/high/medium/low).
+    g) DEADLINE — only if it's time-bound; capture a target date (YYYY-MM-DD).
+  Stop when it's complete — check like /discuss: "Anything we're missing?" Then
+  SYNTHESIZE the full item (title · type · body · labels · estimate · priority ·
+  deadline · ordered sub-issues) and get an explicit yes. Fold tweaks, re-confirm.
+
+STEP 3 — APPLY (create, then enrich). The create returns the new tie:
+  1) ${PM_SELF} issue --project <project_id|shortcut> --title "<title>" \
+       [--priority <p>] [--target-date <YYYY-MM-DD>]
+  2) on the returned <tie>, set body + the type's convention label (+ any extra
+     label, estimate, sub-issues) in ONE batch:
+     ${PM_SELF} update --edits '[
+       {"tie":"<tie>","field":"description","value":"<the ## headed body>"},
+       {"tie":"<tie>","field":"tag","value":"<convention label for the type>"}
+       <,{"tie":"<tie>","field":"estimate","value":"<point>"} if chosen>
+       <,{"tie":"<tie>","field":"subissue","value":"<child title>"} per child>]'
+     (estimate only when has_estimate_scale and the value is one of estimate_points.
+     The convention labels exist in every project via PB-70's seeding; tagging is
+     idempotent. Sub-issue RELATIONS, if any surfaced, need a second pass once the
+     children exist — re-find them, then wire relation:<blocking|blocked_by>.)
+
+STEP 4 — REPORT
+  One compact line: new PB-id · type · priority · labels · (sub-issues, estimate,
+  deadline if set) · link. Relay any PLANE_ERROR plainly; never fake a created issue.

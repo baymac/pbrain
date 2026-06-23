@@ -204,7 +204,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree spec file create track capture enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -216,7 +216,7 @@ fi
 # Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|subtree|spec|enrich|move|priority|timeline|completed|issue|project-create|workdir)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|subtree|spec|file|create|track|capture|enrich|move|priority|timeline|completed|issue|project-create|workdir)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — this needs a configured Plane instance."
@@ -516,6 +516,25 @@ PYEOF
       export PM_SELF
       envsubst '$PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/spec-walk.txt"
     fi
+    ;;
+
+  # ===== generic work-item intake from a free-text dump (PB-67) ===============
+  # `file` + aliases create|track|capture: explode a dump into a triage-ready work
+  # item of ANY type (bug/feature/docs/chore/refactor/improvement). --fast = minimal
+  # one-confirm path; default = full Socratic build-up (type, sub-issues, labels,
+  # estimate, priority, deadline). The walk reads PM_FAST to pick the path.
+  file|create|track|capture)
+    _parse_args "$@"
+    # Free-text dump = the positional(s); join so an unquoted multi-word dump arrives whole.
+    dump="${POS[*]:-$(_flag dump)}"
+    [[ -n "$dump" ]] || { echo "Usage: /project-manager file \"<dump>\" [--project R] [--fast]" >&2; exit 1; }
+    echo "PM_FILE"
+    python3 "$PLANE" file "$dump" ${F_project:+--project "$F_project"} || true
+    echo ""
+    PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+    PM_FAST="$(_has_bool fast && printf yes || printf no)"
+    export PM_SELF PM_FAST
+    envsubst '$PM_SELF $PM_FAST' < "$_SCRIPT_DIR/templates/project-manager/file-walk.txt"
     ;;
 
   enrich)

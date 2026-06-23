@@ -160,6 +160,32 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *"Traceback"* ]]
 }
 
+@test "file verb (PB-67) + aliases are recognized, Plane-gated, Usage-guard a missing dump" {
+  # Recognized → config-gated, not NL-routed.
+  for v in file create track capture; do
+    run PM "$v" "add a dark mode toggle"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PM_NOT_CONFIGURED"* ]]
+    [[ "$output" != *"PM_ROUTE"* ]]
+  done
+  # Configured but no dump → Usage guard.
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM file
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage:"* ]]
+}
+
+@test "file (PB-67) emits PM_FILE + the walk; --fast vs full are both wired; degrades on unreachable Plane" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM file "add a dark mode toggle" --project pid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_FILE"* ]]
+  [[ "$output" == *"WORK ITEM"* ]]        # the file-walk template rendered
+  [[ "$output" == *"PM_FAST"* ]]          # the path selector is present
+  [[ "$output" != *"PM_ROUTE"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
 @test "an unknown first token routes to the NL router (not an error)" {
   # With the router, free text is an instruction, not an error: configured →
   # PM_ROUTE with the words echoed back.
