@@ -8,9 +8,9 @@ A weekly cadence is the missing layer between daily journaling (too noisy) and q
 
 **Behavior:**
 
-- Always covers today and the 6 days back, regardless of day of week. Run it whenever feels natural — Sunday evening, Monday morning, mid-week if you want a check-in.
+- Defaults to the **previous completed week** (Mon–Sun) — a weekly review looks back, and the just-started week has no data yet. Run it whenever feels natural — Sunday evening, Monday morning, mid-week — and it always reviews the last finished week. To review a specific (e.g. older) week, pass `--date YYYY-MM-DD` with any date inside that week.
 - If a day has zero entries, it's noted briefly and the review moves on. No moralizing about missed days.
-- If this week's review already exists, the existing file is shown and the command exits without overwriting.
+- If the reviewed week's file already exists, the existing file is shown and the command exits without overwriting (`--force` re-runs).
 
 **Tone rules baked into the prompt:**
 

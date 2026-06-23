@@ -65,14 +65,37 @@ WR() { bash "$REPO_ROOT/commands/weekly-review.sh" "$@"; }
   [[ "$output" != *"Proposed plan changes"* ]]
 }
 
-@test "existing review this week short-circuits" {
+@test "existing review for the previous week short-circuits" {
+  # A no-arg run defaults to the PREVIOUS completed week (PB-63), so the
+  # short-circuit keys off that week's file, not the current one.
   local iso
-  iso="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+  iso="$(python3 -c "import datetime; t=datetime.date.today()-datetime.timedelta(days=7); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
   mkdir -p "$PBRAIN_VAULT/life/weekly-tracking"
   echo "already written" > "$PBRAIN_VAULT/life/weekly-tracking/$iso.md"
   run WR
   [[ "$output" == *"already exists"* ]]
   [[ "$output" == *"already written"* ]]
+}
+
+@test "no-arg run defaults to the previous completed week (PB-63)" {
+  # iso_week → previous completed week; next_iso_week → the now-current week.
+  local prev_iso cur_iso
+  prev_iso="$(python3 -c "import datetime; t=datetime.date.today()-datetime.timedelta(days=7); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+  cur_iso="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+  run WR
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"iso_week: $prev_iso"* ]]
+  [[ "$output" == *"next_iso_week: $cur_iso"* ]]
+  [[ "$output" == *"output_file: "*"$prev_iso.md"* ]]
+}
+
+@test "--date anchors on the ISO week containing that exact date" {
+  # Explicit anchor is respected as-is — no 7-day shift (retroactive reviews).
+  run WR --date 2026-06-10   # Wed of 2026-W24 (Mon 2026-06-08 → Sun 2026-06-14)
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"iso_week: 2026-W24"* ]]
+  [[ "$output" == *"date_range: 2026-06-08 → 2026-06-14"* ]]
+  [[ "$output" == *"next_iso_week: 2026-W25"* ]]
 }
 
 @test "script source carries no declutter references" {

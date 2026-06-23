@@ -61,8 +61,10 @@ unset _LEGACY_WEEKLY
 mkdir -p "$WEEKLY_DIR"
 
 # Optional --date YYYY-MM-DD flag — anchors the review on the ISO week
-# containing that date instead of the current week. Useful for retroactive
-# reviews (e.g. run on Tuesday to review the previous Mon–Sun week).
+# containing that date. The default (no flag) reviews the PREVIOUS, completed
+# week: a weekly review looks BACK, and the just-started week has no data yet
+# (PB-63). --date overrides this with an explicit anchor — pass a date inside
+# whatever week you want to review (e.g. retroactive reviews of older weeks).
 ANCHOR_DATE=""
 FORCE_RUN=0
 while [[ $# -gt 0 ]]; do
@@ -72,8 +74,16 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
-TODAY="$(date +%Y-%m-%d)"
-[[ -n "$ANCHOR_DATE" ]] && TODAY="$ANCHOR_DATE"
+if [[ -n "$ANCHOR_DATE" ]]; then
+  # Explicit anchor: review the ISO week containing this exact date, as given.
+  TODAY="$ANCHOR_DATE"
+else
+  # Default: step back 7 days so "today" anchors on the previous completed
+  # week (Mon–Sun). Every downstream window (iso_week, date_range, dates,
+  # habits rollup, progress --since, clippings, output_file, next_iso_week
+  # mint target) derives from this anchor and shifts consistently.
+  TODAY="$(python3 -c 'import datetime; print((datetime.date.today() - datetime.timedelta(days=7)).isoformat())')"
+fi
 
 # Derive ISO week bounds (Mon–Sun) from the anchor date.
 read -r ISO_WEEK FIRST_DATE LAST_DATE MONTH_YEAR NEXT_ISO_WEEK NEXT_MONTH_YEAR < <(python3 - "$TODAY" <<'PY'
