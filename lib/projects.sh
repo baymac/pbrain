@@ -196,3 +196,48 @@ pbrain_projects_workdirs_json() {
   fi
   echo "{}"
 }
+
+# Self-host staleness guard (PB-93). Slash commands execute the LIVE pbrain
+# working tree these libs are sourced from, so a checkout parked on a
+# stale/unmerged branch silently shadows a fix already merged to main — the
+# /plan-my-work wrapper you're running can be older than `main` with no error.
+# The SELF-HOST CHECK prose in templates/plan-my-work/execute.txt relied on the
+# model remembering to run `git rev-parse`/`fetch`; this makes it deterministic.
+#
+# Emits ONE line when the pbrain repo is NOT on a clean, up-to-date `main`:
+#   SELFHOST_STALE <branch-or-HEAD> <state>
+# where <state> is `detached`, `branch:<name>` (on a non-main branch), or
+# `behind:<N>` (on main but behind the last-fetched origin/main). Silent (no
+# output) on the happy path — fresh main, not behind — mirroring how
+# UPGRADE_AVAILABLE only prints when there's something to say.
+#
+# Deliberately does NOT fetch (offline-safe, no latency/hang on every execute):
+# it compares against the LAST-FETCHED origin/main. The execute.txt prose still
+# tells the agent to `git fetch` + fast-forward when it acts on this line.
+# Never exits non-zero; call with `|| true`.
+pbrain_selfhost_staleness_line() {
+  local repo branch upstream behind
+  # The pbrain repo root is this lib's parent dir (symlink-resolved at source).
+  repo="$(cd -P -- "$PBRAIN_PROJECTS_LIB_DIR/.." 2>/dev/null && pwd -P)" || return 0
+  # Only meaningful inside a git work tree — skip silently otherwise.
+  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 0
+  if [[ "$branch" == "HEAD" ]]; then
+    echo "SELFHOST_STALE HEAD detached"
+    return 0
+  fi
+  if [[ "$branch" != "main" ]]; then
+    echo "SELFHOST_STALE $branch branch:$branch"
+    return 0
+  fi
+  # On main: report only if behind the last-fetched origin/main. If origin/main
+  # is unknown (no remote / never fetched), stay silent — nothing to compare.
+  upstream="$(git -C "$repo" rev-parse --verify --quiet origin/main 2>/dev/null)" || return 0
+  [[ -n "$upstream" ]] || return 0
+  behind="$(git -C "$repo" rev-list --count main..origin/main 2>/dev/null)" || return 0
+  if [[ "$behind" =~ ^[0-9]+$ && "$behind" -gt 0 ]]; then
+    echo "SELFHOST_STALE main behind:$behind"
+  fi
+  return 0
+}
