@@ -283,8 +283,9 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
   | {HH:MM–HH:MM} | {concrete action for anchors; work blocks are generic "Block N — focus work"; ✓ prefix for backfilled done rows} | {tie} |
   | ... | ... | ... |
 
-  _(Work blocks are placeholders — run /plan-my-work to fill them with real
-  tasks from Plane and write the "## Work tracker". /plan-my-day no longer
+  _(Work blocks here are LIFE-shape placeholders that protect focus time. The
+  actual task ledger is a SEPARATE, standalone "## Work tracker" owned by
+  /plan-my-work (PB-85) — it is not tied to these blocks. /plan-my-day no longer
   writes a task log.)_
 
   (Sections below are supporting detail — the schedule lives in the table.)
@@ -351,8 +352,18 @@ Step 3 — Show the full **Today at a glance** table and ask for confirmation:
   to save." Apply requested edits; repeat the updated table if changes were made.
   Once confirmed, write the complete plan — table + all sections — to $OUT_FILE.
 
+  PB-85 — PRESERVE AN EXISTING WORK TRACKER. work_tracker_present =
+  ${WORK_TRACKER_PRESENT}. If it is "yes", /plan-my-work already ran today and the
+  file holds a standalone "## Work tracker" (the task ledger). You MUST keep that
+  section verbatim — do not edit, reorder, or drop a single row. Write your
+  "## Today at a glance" + life-anchor sections ABOVE the existing "## Work
+  tracker", and keep "## How it went" wherever it already sits (typically below the
+  tracker). In practice: edit the file in place to insert/refresh only the sections
+  you own, rather than overwriting the whole file. If work_tracker_present = "no",
+  write the file normally (no tracker section — that's /plan-my-work's to add).
+
 Step 4 — After writing, confirm: "Saved → $OUT_FILE" and nudge once: "Blocks laid
-  out — run /plan-my-work to fill them with today's tasks from Plane."
+  out — run /plan-my-work to fill today's task ledger from Plane."
   Habit marking + reminder alignment run AUTOMATICALLY at the end of this session:
   if you track habits, a HABIT SCAN block appears below — follow it silently. No
   block = no habits set up yet (nothing to do). A block reading "NOTE: habit

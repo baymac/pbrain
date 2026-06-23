@@ -94,12 +94,28 @@ EOD() { bash "$SH" "$@"; }
   [[ "$output" == *"status=missed"* ]]
 }
 
-@test "end-of-day: reconcile targets the ## Work tracker (the new schema)" {
+@test "end-of-day: reconcile targets the ## Work tracker (PB-85 standalone schema)" {
   run EOD --date 2026-06-01
   [ "$status" -eq 0 ]
   [[ "$output" == *"## Work tracker"* ]]
   [[ "$output" == *"% complete"* ]]
-  [[ "$output" == *"Est rating"* ]]
+  [[ "$output" == *"Time taken"* ]]   # PB-85: new CEO column (replaces Est rating)
+}
+
+@test "PB-85: end-of-day surfaces glance_present and work_tracker_present flags" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"glance_present:"* ]]
+  [[ "$output" == *"work_tracker_present:"* ]]
+}
+
+@test "PB-85: end-of-day handles all 4 plan combos (preflight branches present)" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  # the close branches on each combo: pmw-only, pmd-only, both, neither
+  [[ "$output" == *"PMW-ONLY"* ]]
+  [[ "$output" == *"PMD-ONLY"* ]]
+  [[ "$output" == *"both present"* ]]
 }
 
 @test "end-of-day: injects the Plane reconcile context (configured + completed-today)" {
@@ -117,9 +133,18 @@ EOD() { bash "$SH" "$@"; }
   [[ "$output" == *"completed_in_plane_today: []"* ]]
 }
 
-@test "end-of-day: instructions cover the Plane push + unplanned detection (4k)" {
+@test "end-of-day: instructions cover Plane sync + reconcile + unplanned (4k)" {
   run EOD --date 2026-06-01
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLANE SYNC + UNPLANNED DETECTION"* ]]
+  [[ "$output" == *"PLANE SYNC + RECONCILE + UNPLANNED"* ]]
   [[ "$output" == *"plane_project"* ]]   # weekly-goal rollup matches by project
+}
+
+@test "PB-85: end-of-day 4k reconciles manual Plane changes back into the tracker" {
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  # Req 5: Plane → tracker reconcile of cancelled/done, both directions present.
+  [[ "$output" == *"RECONCILE"* ]]
+  [[ "$output" == *"cancelled in Plane"* ]]
+  [[ "$output" == *"Plane is authoritative"* ]]
 }

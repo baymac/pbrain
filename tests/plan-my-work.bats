@@ -106,11 +106,19 @@ PY
   [[ "$output" == *"PLAN_MY_WORK_NO_PROFILE"* ]]
 }
 
-@test "task on a day with no plan → PLAN_MY_WORK_TASK_NO_PLAN" {
+@test "PB-85: task on a day with no plan SCAFFOLDS the file (no nudge) and proceeds" {
   seed_profile
   run PMW task add
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_WORK_TASK_NO_PLAN"* ]]
+  # PB-85 autonomy: pmw no longer refuses; it creates a minimal daily-planning file
+  # and emits the task template — never PLAN_MY_WORK_TASK_NO_PLAN.
+  [[ "$output" != *"PLAN_MY_WORK_TASK_NO_PLAN"* ]]
+  [[ "$output" == *"PLAN_MY_WORK_TASK"* ]]
+  [ -f "$PBRAIN_PLAN_DIR/$TODAY.md" ]
+  grep -q "## Work tracker" "$PBRAIN_PLAN_DIR/$TODAY.md"
+  # standalone schema: no Block column, has the CEO columns
+  grep -q "Time taken" "$PBRAIN_PLAN_DIR/$TODAY.md"
+  ! grep -qE "^\| Block \|" "$PBRAIN_PLAN_DIR/$TODAY.md"
 }
 
 @test "no Plane configured → PLAN_MY_WORK_NO_PLANE (auto-pull needs Plane)" {
@@ -121,19 +129,25 @@ PY
 }
 
 # --- session shape ----------------------------------------------------------
-@test "standalone (no plan today) → SESSION with plan_exists no + helper hints" {
+@test "PB-85: standalone (no plan today) → SESSION scaffolds a tracker, no glance, no nudge" {
   seed_profile
   configure_plane
   run PMW
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_WORK_SESSION"* ]]
-  [[ "$output" == *"plan_exists: no"* ]]
-  [[ "$output" == *"blocks_helper:"* ]]
-  [[ "$output" == *"alloc_helper:"* ]]
+  [[ "$output" == *"glance_present: no"* ]]
   [[ "$output" == *"## Work tracker"* ]]   # the schema appears in the instructions
+  # PB-85: no block-based framing leaks out anymore.
+  [[ "$output" != *"blocks_helper:"* ]]
+  [[ "$output" != *"alloc_helper:"* ]]
+  [[ "$output" != *"past_blocks:"* ]]
+  # the file is scaffolded standalone (tracker present, no glance)
+  [ -f "$PBRAIN_PLAN_DIR/$TODAY.md" ]
+  grep -q "## Work tracker" "$PBRAIN_PLAN_DIR/$TODAY.md"
+  ! grep -q "## Today at a glance" "$PBRAIN_PLAN_DIR/$TODAY.md"
 }
 
-@test "with a plan today → SESSION with plan_exists yes + the plan is shown" {
+@test "PB-85: with a /plan-my-day glance today → SESSION reports glance_present yes + shows it (and leaves it)" {
   seed_profile
   configure_plane
   mkdir -p "$PBRAIN_PLAN_DIR"
@@ -148,48 +162,8 @@ PY
 EOF
   run PMW
   [ "$status" -eq 0 ]
-  [[ "$output" == *"plan_exists: yes"* ]]
+  [[ "$output" == *"glance_present: yes"* ]]
   [[ "$output" == *"Block 1 — focus work"* ]]
-}
-
-@test "PB-53: SESSION flags elapsed work blocks as past, leaves future blocks out" {
-  seed_profile
-  configure_plane
-  mkdir -p "$PBRAIN_PLAN_DIR"
-  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
-# Plan
-
-## Today at a glance
-
-| 10:00–11:00 | Block 1 — focus work | — |
-| 14:00–15:00 | Block 2 — focus work | — |
-
-## How it went
-EOF
-  PBRAIN_NOW=12:00 run PMW
-  [ "$status" -eq 0 ]
-  # now=12:00 → Block 1 (10:00) is past, Block 2 (14:00) is future
-  [[ "$output" == *"past_blocks: Block 1 (10:00–11:00)"* ]]
-  past_line="$(printf '%s\n' "$output" | grep '^past_blocks:')"
-  [[ "$past_line" != *"Block 2"* ]]
-}
-
-@test "PB-53: nothing is past on an early-morning run" {
-  seed_profile
-  configure_plane
-  mkdir -p "$PBRAIN_PLAN_DIR"
-  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
-# Plan
-
-## Today at a glance
-
-| 10:00–11:00 | Block 1 — focus work | — |
-
-## How it went
-EOF
-  PBRAIN_NOW=07:00 run PMW
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"past_blocks: (none)"* ]]
 }
 
 @test "task list/add/remove on a planned day emit PLAN_MY_WORK_TASK" {
@@ -249,79 +223,90 @@ EOF
      && "$output" == *"project-manager.sh"* ]]
 }
 
-# --- task execute (PB-40 — the execution layer) -----------------------------
-# A planned day with a full-day block (always contains `now`), one done row and
-# one planned row in its Work tracker. Used by the execute happy-path test.
+# --- task execute (PB-40 + PB-85 — the execution layer) ---------------------
+# PB-85: the Work tracker is a standalone ORDERED ledger (no Block column). One
+# done row and two planned rows; "next" is the first not-done row, top to bottom.
 seed_plan_for_execute() {
   mkdir -p "$PBRAIN_PLAN_DIR"
   cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
 # Plan
 
-## Today at a glance
-
-| 00:00–23:59 | Block 1 (00:00–23:59) | ship | — |
-
 ## Work tracker
 
-| Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Block 1 (00:00–23:59) | early done | Lettuce | pid:done1 | high | 1h | done | 09:00 | 100 | | |
-| Block 1 (00:00–23:59) | ship login | Lettuce | pid:abc | high | 2h | planned | | | | |
+| Task | Project | Plane id | Priority | Est | Status | Started | Done at | Time taken | % complete | Links | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| early done | Lettuce | pid:done1 | high | 1h | done | 08:00 | 09:00 | 1h | 100 | | |
+| ship login | Lettuce | pid:abc | high | 2h | planned | | | | | | PB-90 |
+| polish UI | Lettuce | pid:xyz | low | 1h | planned | | | | | | PB-91 |
 
 ## How it went
 EOF
 }
 
-@test "task execute → PLAN_MY_WORK_EXECUTE + current block + not-done tasks + working locations" {
+@test "PB-85: task execute → PLAN_MY_WORK_EXECUTE + ordered NEXT TASKS (done filtered) + working locations" {
   seed_profile
   configure_plane
   seed_plan_for_execute
-  # Record a working location for the lone project (pure config write, no network).
   python3 "$REPO_ROOT/lib/plane.py" workdir pid --path "$TMP" >/dev/null
   run PMW task execute
   [ "$status" -eq 0 ]
-  # Isolate the CURRENT BLOCK TASKS json line so done-filtering is checked there,
-  # not in the full plan dump (which echoes the done row too).
-  tasks="$(printf '%s\n' "$output" | grep -A1 '=== CURRENT BLOCK TASKS' | tail -1)"
-  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* && "$output" == *"current_block: Block 1 (00:00"* \
-     && "$tasks" == *"ship login"* && "$tasks" != *"early done"* \
-     && "$output" == *"WORKING LOCATIONS"* && "$output" == *"$TMP"* \
+  # NEXT TASKS is the not-done ledger, in order: ship login then polish UI; the
+  # done row is filtered out. No block-based fields anymore.
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" != *"current_block"* ]]
+  [[ "$next" == *"ship login"* && "$next" == *"polish UI"* && "$next" != *"early done"* ]]
+  # ledger order: ship login (index of) appears before polish UI
+  [[ "${next%%polish UI*}" == *"ship login"* ]]
+  [[ "$output" == *"WORKING LOCATIONS"* && "$output" == *"$TMP"* \
      && "$output" == *"INSTRUCTIONS — task execute"* ]]
 }
 
-@test "task execute on a day with no plan → PLAN_MY_WORK_TASK_NO_PLAN (no Plane needed)" {
-  seed_profile   # no plan file today, no plane.json — the task guard fires first
-  run PMW task execute
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_WORK_TASK_NO_PLAN"* ]]
-}
-
-@test "task execute → current_block none when now is past the day's last block" {
+@test "PB-85: task execute <PB-id> moves the targeted row to the FRONT of NEXT TASKS" {
   seed_profile
   configure_plane
-  # Build a block that safely ENDS before now (guard the first minute of the day).
-  now_min=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
-  if [ "$now_min" -lt 2 ]; then skip "too close to midnight to place a past block"; fi
-  end=$(( now_min - 1 )); start=$(( end - 1 )); [ "$start" -lt 0 ] && start=0
-  printf -v range '%02d:%02d–%02d:%02d' $((start/60)) $((start%60)) $((end/60)) $((end%60))
+  seed_plan_for_execute
+  # Target the low-priority 'polish UI' row by its PB-91 note; it should lead.
+  run PMW task execute 91
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target_ref: 91"* ]]
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "${next%%ship login*}" == *"polish UI"* ]]   # polish UI now precedes ship login
+}
+
+@test "PB-85: task execute on a day with no plan SCAFFOLDS the file and emits an empty ledger (no nudge)" {
+  seed_profile   # no plan file today, no plane.json
+  run PMW task execute
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"PLAN_MY_WORK_TASK_NO_PLAN"* ]]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  # empty ledger → NEXT TASKS is the empty array
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "$next" == *"[]"* ]]
+  [ -f "$PBRAIN_PLAN_DIR/$TODAY.md" ]
+}
+
+@test "PB-85: task execute reads a LEGACY Block-column tracker by header (no migration)" {
+  seed_profile
+  configure_plane
   mkdir -p "$PBRAIN_PLAN_DIR"
-  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<EOF
+  # Old schema with a Block column + Est rating — parser keys off header names.
+  cat > "$PBRAIN_PLAN_DIR/$TODAY.md" <<'EOF'
 # Plan
-
-## Today at a glance
-
-| $range | Block 1 ($range) | ship | — |
 
 ## Work tracker
 
 | Block | Task | Project | Plane id | Priority | Est | Status | Done at | % complete | Est rating | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Block 1 ($range) | ship login | Lettuce | pid:abc | high | 2h | planned | | | | |
+| Block 1 (10:00–11:30) | legacy done | L | pid:d | high | 1h | done | 09:00 | 100 | | |
+| Block 1 (10:00–11:30) | legacy todo | L | pid:t | high | 2h | planned | | | | |
 
 ## How it went
 EOF
   run PMW task execute
-  [ "$status" -eq 0 ] && [[ "$output" == *"current_block: none"* ]]
+  [ "$status" -eq 0 ]
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "$next" == *"legacy todo"* && "$next" != *"legacy done"* ]]
 }
 
 @test "task <unknown> action → usage error (execute is accepted, garbage is not)" {

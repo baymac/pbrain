@@ -1,95 +1,85 @@
 ---
-INSTRUCTIONS — fill today's work blocks with real tasks from Plane. You own the
-WORK PLAN: goals → allocation → pulling ready tasks into the blocks → the tracker.
-Plane grooming and writes are /project-manager's job — hand those off (step 2).
-Read working_style (session_length_min, break_min, work_hours_per_day,
-last_block_end) + bed time from the profile JSON above.
+INSTRUCTIONS — fill today's "## Work tracker" with real tasks from Plane. You own
+the WORK PLAN: goals → which projects today → pulling ready tasks into a standalone
+ledger. Plane grooming and writes are /project-manager's job — hand those off
+(step 2). Read working_style (session_length_min, work_hours_per_day) from the
+profile JSON above only to gauge how MUCH work fits today, not to build blocks.
 
-1. PREFLIGHT.
-   - plan_exists = yes → /plan-my-day already laid "## Today at a glance" with
-     empty work-block rows. You'll label those rows; never move the life anchors
-     (calendar, meals, fitness, walk, bed, habit 🔔).
-   - plan_exists = no → STANDALONE. Don't build a whole-day timeline. Ask focus
-     hours, then compute the block count now → bed with the blocks_helper shown
-     above. Write a minimal file (a short work-only glance + the tracker).
+PB-85 — STANDALONE TRACKER, NO BLOCKS, NO NUDGES.
+  • The "## Work tracker" is a flat CEO-overview ledger that lives BELOW daily
+    planning and is INDEPENDENT of "## Today at a glance". You do NOT create,
+    label, count, or re-flow any glance work blocks. You only write the tracker.
+  • pmw is autonomous: it NEVER tells the user to run /plan-my-day (or /journal,
+    /gratitude) first. The daily-planning file has already been scaffolded if it
+    was missing (a minimal frontmatter + empty "## Work tracker" + "## How it
+    went"). If /plan-my-day also ran, its "## Today at a glance" sits ABOVE the
+    tracker — leave it untouched.
+
+1. PREFLIGHT. The file exists (scaffolded if needed). If it already has tracker
+   rows from earlier today, you are ADDING to / refreshing the ledger, not
+   rebuilding it — preserve done/in-progress rows as-is.
 
 2. READY-CHECK — delegate grooming to /project-manager (separation of concern).
-   The tasks you pull must be well-formed, but you don't groom them here.
-   FIRST check for a FRESH background groom report (PB-46): the scheduled
-   `groom` agent does the mechanical half (backlog→todo triage + thin-issue
-   queue) headlessly, off this session, so the board may already be triaged.
+   The tasks you pull should be well-formed, but you don't groom here.
+   FIRST check for a FRESH background groom report (PB-46): a scheduled `groom`
+   agent does the mechanical half (backlog→todo triage + thin-issue queue)
+   headlessly, off-session, so the board may already be triaged.
      bash "${PM_CMD}" groom status
-   - today_report present → a fresh report exists. SKIP the live review call;
-     read the report's "Needs review" list and surface it in one line (these are
-     the thin issues the background pass could NOT auto-fix — they still want a
+   - today_report present → a fresh report exists. SKIP the live review call; just
+     read the report's "Needs review" list and surface it in one line (the thin
+     issues the background pass could NOT auto-fix — they still want a
      `/project-manager review`/`spec` walk, but don't block planning on them).
    - today_report (none) → fall back to the live review below (no regression).
-   If this week's goal projects have thin or still-in-backlog issues AND no fresh
-   report exists, hand grooming to the PM in EXECUTOR mode (it owns every Plane
-   write):
+   If this week's goal projects are thin / still-in-backlog AND no fresh report
+   exists, hand grooming to PM in EXECUTOR mode (it owns every Plane write):
      PBRAIN_PM_CALLER=plan-my-work bash "${PM_CMD}" review --projects "${WEEKLY_PIDS}"
    PM enriches (description/priority/assignee/relations/sub-tasks) and triages
    backlog → todo, then reports. If weekly_pids is empty, ask which projects to
    pull from. Do NOT enrich issues inline. (Tip: `bash "${PM_CMD}" groom enable
-   --projects "${WEEKLY_PIDS}"` schedules the daily background pass so future
-   runs skip live grooming entirely.)
+   --projects "${WEEKLY_PIDS}"` schedules a daily background pass so future runs
+   skip live grooming entirely.)
 
-3. PROGRESS REPORT (weekly primary + monthly context). From progress_json + this
-   week's goals (each with allocation_percent + plane_project):
-   - Per weekly goal: name · alloc% · Plane pct · tasks done this week (from the
+3. PROGRESS REPORT (weekly primary + monthly context). Using progress_json + this
+   week's goals (each allocation_percent + plane_project):
+   - Per weekly goal: name · alloc% · Plane pct · tasks done this week (from this
      week's tracker rows) · flag.
    - % of the week's importance met = Σ(alloc% · pct) / Σ(alloc%).
    - FLAGS: "pile-up" (last week's open rows still not done) · "re-evaluate"
      (high alloc%, low pct, no recent activity).
-   - One-line monthly read: are this week's goals serving this month's goals?
+   - One-line monthly read: are the week's goals serving the month's goals?
 
-4. PICK PROJECTS → DAILY ALLOCATION. The user names today's subset. Distribute the
-   day's blocks deterministically (leftover → highest-priority chosen project)
-   with the alloc_helper shown above. N = the empty work blocks in "Today at a
-   glance" (plan_exists=yes) or the standalone count from step 1.
-   PAST BLOCKS ARE EXCLUDED: count only blocks whose start time is ≥ now_time. A
-   block that already started or ended is PAST — it is NOT part of N and gets no
-   fresh allocation (see step 5). On a first-thing-in-the-morning run nothing is
-   past; on a mid/late-day run, exclude every elapsed block.
+4. PICK PROJECTS. Let the user name today's subset of projects to pull from. There
+   is no block allocation step anymore — the ledger is order-driven, not
+   block-partitioned. Use working_style only to judge how many tasks realistically
+   fit today (roughly work_hours_per_day ÷ typical est), and say so as guidance.
 
-5. PULL TASKS + ASSIGN. Pull ready tasks for the chosen projects — ALWAYS pass the
-   explicit project list:
+5. PULL TASKS → ORDERED LEDGER. Pull ready tasks for the chosen projects — ALWAYS
+   pass an explicit project list:
      bash "${PM_CMD}" ready --projects "<chosen pids, comma-separated>"
    If a project returns empty, it likely still needs grooming — hand it back to
-   step 2 (PM review), don't triage inline. Map tasks → blocks: PREFER one project
-   per block; biggest-rock first (priority → est); honor last_block_end.
-   PAST BLOCKS ARE ASK-ONLY: never auto-assign, pull, or backfill a task into a
-   block whose start time is < now_time. Trust the user about what already
-   happened — if an elapsed block is unlabeled or unfinished, ASK what they
-   actually did in it and record their answer; do not invent an assignment. Only
-   current and future blocks (start ≥ now_time) receive pulled tasks.
+   step 2 (PM review); don't triage inline. Order the rows biggest-rock-first
+   (priority → est) so `task execute` runs the most important work first.
    SPEC/APPROVAL GATE (PB-45): each ready row carries `approved` (its plan was
-   reviewed via `/project-manager spec`). Within the same priority, pack APPROVED
-   tasks FIRST — they run through `task execute` with no live planning gate, so
-   they're the lowest-friction wins of the day. Don't hide un-approved tasks (this
-   is a fast path, not a wall), but if the early blocks are all un-approved,
-   mention it: pre-speccing them with `/project-manager spec` would cut hand-holding.
+   reviewed via `/project-manager spec`). Within the same priority, order APPROVED
+   tasks FIRST — they run through `task execute` with no live planning gate, the
+   lowest-friction wins of the day. Don't hide un-approved tasks (this is a fast
+   path, not a wall), but if the top tasks are all un-approved, mention that
+   pre-speccing them with `/project-manager spec` would cut the hand-holding.
 
-6. WRITE "## Work tracker" into ${OUT_FILE} and (re)label the "## Today at a
-   glance" work-block rows. Tracker schema:
-     | Block | Task | Project | Plane | Priority | Est | Status | Done at | % complete | Est rating | Notes |
-   - "Block" = the time range ("Block 1 (10:00–11:30)").
-   - "Plane" = clickable link(s): [PB-19](${PLANE_WEB_BASE}/browse/PB-19/) — comma-
-     separate when a block has several. The tie (<project_id>:<issue_id>) is what
-     /end-of-day reconciles by; keep it recoverable (a `find PB-19` re-resolves
-     the tie). "—" for no Plane issue.
-   - Status starts "planned"; Done at / % complete / Est rating stay blank for
-     /end-of-day. "Est rating" later judges whether the estimate held.
-   - Notes: tag each row's plan state from the ready row's `approved` — "✅ plan
-     approved" (fast path) or "⏳ needs spec" (will plan inline at execute). This
-     is what tells you, at a glance, which of today's tasks are pre-specced.
-   If plan_exists=no, write a minimal file: frontmatter + short "## Today at a
-   glance" (work blocks only) + the tracker + an empty "## How it went". Rewrite
-   both tables together; never let them drift.
-   ON A MID/LATE-DAY RE-RUN: preserve existing rows for PAST blocks as-is (their
-   Status reflects what the user reports, per step 5) — only (re)write the rows
-   for current and future blocks. Never overwrite or backfill an elapsed block's
-   row with a fresh assignment.
+6. WRITE "## Work tracker" into ${OUT_FILE}. Standalone schema (NO Block column):
+   | Task | Project | Plane id | Priority | Est | Status | Started | Done at | Time taken | % complete | Links | Notes |
+   - "Plane id" = the full tie (<project_id>:<issue_id>) so /end-of-day can
+     reconcile by it; also keep a clickable link in Links: [PB-19](${PLANE_WEB_BASE}/browse/PB-19/).
+     "—" if there is no Plane issue.
+   - Status starts "planned"; Started / Done at / Time taken / % complete stay
+     blank until task execute / end-of-day fill them.
+   - Links = PR / issue / doc links a CEO would want at a glance. Notes = anything
+     else worth surfacing (e.g. "✅ plan approved" / "⏳ needs spec", est-calibration).
+   - Rows are an ORDERED ledger; "next to execute" is the first not-done row.
+   Rewrite ONLY the "## Work tracker" table. Do NOT touch "## Today at a glance",
+   life anchors, or any other section — the tracker is standalone (PB-85).
+   Preserve any existing done/in-progress rows; append/refresh the planned ones.
 
-7. Confirm in one tight read: the chosen projects, the block→task assignment, and
-   "run /end-of-day to close + reconcile to Plane." Stop here.
+7. Confirm in one tight read: chosen projects, the ordered task ledger, and "run
+   /plan-my-work task execute to start, or /end-of-day to close + reconcile to
+   Plane." Stop here.

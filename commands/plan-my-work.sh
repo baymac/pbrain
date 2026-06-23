@@ -179,6 +179,40 @@ HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 PM_CMD="$(pbrain_projects_manager_cmd 2>/dev/null || true)"
 
 # ---------------------------------------------------------------------------
+# Standalone Work tracker schema (PB-85). The tracker is a CEO-overview ledger
+# that lives BELOW daily planning and is INDEPENDENT of the day's "## Today at a
+# glance" work blocks — no Block column, just tasks/notes/time/links. Kept in one
+# place so the autonomous-scaffold path and the templates stay in lockstep.
+WORK_TRACKER_HEADER='| Task | Project | Plane id | Priority | Est | Status | Started | Done at | Time taken | % complete | Links | Notes |'
+WORK_TRACKER_SEP='| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'
+
+# pbrain_pmw_scaffold_file — PB-85 autonomy: pmw creates a minimal daily-planning
+# file when none exists, instead of nudging the user to run /plan-my-day first. It
+# writes only what pmw owns (frontmatter + an empty "## Work tracker" + an empty
+# "## How it went"); /plan-my-day later lays "## Today at a glance" ABOVE the
+# tracker without disturbing it. Idempotent: only writes when the file is absent.
+pbrain_pmw_scaffold_file() {
+  local f="$1"
+  [[ -f "$f" ]] && return 0
+  mkdir -p "$(dirname "$f")"
+  local dow; dow="$(date -j -f "%Y-%m-%d" "$TODAY" "+%A" 2>/dev/null || date "+%A")"
+  {
+    printf -- '---\n'
+    printf 'type: daily-plan\n'
+    printf 'date: %s\n' "$TODAY"
+    printf 'iso_week: %s\n' "$ISO_WEEK"
+    printf 'standalone: true\n'
+    printf 'source: plan-my-work\n'
+    printf -- '---\n\n'
+    printf '# %s — %s\n\n' "$TODAY" "$dow"
+    printf '## Work tracker\n\n'
+    printf '%s\n' "$WORK_TRACKER_HEADER"
+    printf '%s\n\n' "$WORK_TRACKER_SEP"
+    printf '## How it went\n\n'
+  } > "$f"
+}
+
+# ---------------------------------------------------------------------------
 # `task` subcommand — revise an EXISTING day's WORK TRACKER without rebuilding.
 #   task add | task remove | task list   (moved here from /plan-my-day)
 # ---------------------------------------------------------------------------
@@ -188,38 +222,40 @@ if [[ "${1:-}" == "task" ]]; then
     add|remove|list|execute) ;;
     *) echo "usage: plan-my-work.sh task add|remove|list|execute" >&2; exit 2;;
   esac
-  if [[ ! -f "$OUT_FILE" ]]; then
-    echo "PLAN_MY_WORK_TASK_NO_PLAN"
-    echo "action: $TASK_ACTION"
-    echo "file: $OUT_FILE"
-    echo ""
-    echo "INSTRUCTIONS: There's no day plan for $TODAY yet, so there's no work tracker"
-    echo "to edit. Tell the user to run /plan-my-day (lay out the day), then /plan-my-work"
-    echo "(fill the blocks) first — the task verb only revises an existing day. Stop here."
-    exit 0
-  fi
+  # PB-85 autonomy: never nudge the user to run /plan-my-day first. If today has no
+  # daily-planning file yet, pmw scaffolds a minimal one (tracker + how-it-went) and
+  # proceeds. `task list` on a fresh file simply shows an empty ledger.
+  pbrain_pmw_scaffold_file "$OUT_FILE"
 
-  # --- task execute (PB-40) — drive the CURRENT block's tasks to Done --------
-  # The deterministic half lives here: which block contains `now`, and that
-  # block's unfinished Work-tracker rows (done filtered out → resume-safe). The
-  # lifecycle/cascade + every Plane/git/PR/merge step is driven by execute.txt.
+  # --- task execute (PB-40, PB-85) — drive the work-tracker ledger to Done ----
+  # The deterministic half lives here. PB-85 decoupled the tracker from the day's
+  # "## Today at a glance" work blocks: the tracker is now a standalone ORDERED
+  # ledger, so "what to run next" is simply the first not-done row, top to bottom
+  # (resume-safe), independent of clock time or any block grouping.
+  #
+  # PARALLEL EXECUTION (PB-85): each execute session drives its OWN assigned task
+  # in its OWN worktree. We do NOT enforce "one task in-progress at a time" and we
+  # do NOT block on other in-progress rows — multiple tasks may be in flight in
+  # parallel across sessions/worktrees. A single optional argument ($3) names the
+  # target row (a PB-id like "85", "PB-85", or a tie/title fragment); when given,
+  # that row leads and the rest follow it. With no arg, the first not-done row leads.
+  #
+  # The parser keys off the table HEADER names (not column position) so BOTH the
+  # new schema and legacy Block-column files read correctly (no migration).
+  # The lifecycle/cascade + every Plane/git/PR/merge step is driven by execute.txt.
   if [[ "$TASK_ACTION" == execute ]]; then
+    TARGET_REF="${3:-}"
     # ONE $()-captured python heredoc (bash-3.2 trap — no apostrophes inside).
-    # Prints two lines: the current block label, then the not-done rows as JSON.
-    EXEC_PARSE="$(python3 - "$OUT_FILE" "$NOW_TIME" <<'PY'
+    # Emits the not-done rows as a single JSON line, in ledger order, with the
+    # targeted row (if any) moved to the front.
+    NEXT_TASKS_JSON="$(python3 - "$OUT_FILE" "$TARGET_REF" <<'PY'
 import sys, re, json
-path, now = sys.argv[1], sys.argv[2]
+path = sys.argv[1]
+target = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lower()
 try:
     txt = open(path).read()
 except Exception:
     txt = ""
-def mins(t):
-    h, m = t.split(":")
-    return int(h) * 60 + int(m)
-try:
-    now_min = mins(now)
-except Exception:
-    now_min = 0
 header = "## Work tracker"
 i = txt.find(header)
 section = ""
@@ -228,60 +264,49 @@ if i != -1:
     nxt = section.find("\n## ")
     if nxt != -1:
         section = section[:nxt]
-cols = ["block", "task", "project", "plane", "priority", "est",
-        "status", "done_at", "pct", "est_rating", "notes"]
+# Parse the markdown table by HEADER names so old (Block-column) and new schemas
+# both read. Normalize header cells to lowercase keys; map a few legacy aliases.
+ALIAS = {"plane": "plane", "plane id": "plane", "% complete": "pct", "%": "pct",
+         "done at": "done_at", "est rating": "est_rating", "time taken": "time_taken"}
+def norm(h):
+    h = h.strip().lower()
+    return ALIAS.get(h, h.replace(" ", "_"))
+lines = [ln for ln in section.splitlines() if ln.strip().startswith("|")]
+headers = None
 rows = []
-for ln in section.splitlines():
-    s = ln.strip()
-    if not s.startswith("|") or "---" in s:
+for ln in lines:
+    cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+    if all(set(c) <= set("-: ") for c in cells):  # the |---|---| separator
         continue
-    cells = [c.strip() for c in s.strip("|").split("|")]
-    if not cells or cells[0].lower() == "block":
+    low = [c.lower() for c in cells]
+    if headers is None and ("task" in low and ("plane" in low or "plane id" in low or "status" in low)):
+        headers = [norm(c) for c in cells]
+        continue
+    if headers is None:
         continue
     row = {}
-    for idx, name in enumerate(cols):
+    for idx, name in enumerate(headers):
         row[name] = cells[idx] if idx < len(cells) else ""
     rows.append(row)
-rng = re.compile(r"\((\d{1,2}:\d{2})\s*[–\-]\s*(\d{1,2}:\d{2})\)")
-order = []
-blocks = {}
-for r in rows:
-    lab = r["block"]
-    if lab not in blocks:
-        blocks[lab] = {"label": lab, "start": None, "end": None, "rows": []}
-        order.append(lab)
-    blocks[lab]["rows"].append(r)
-    m = rng.search(lab)
-    if m and blocks[lab]["start"] is None:
-        blocks[lab]["start"] = mins(m.group(1))
-        blocks[lab]["end"] = mins(m.group(2))
-ranged = [blocks[l] for l in order if blocks[l]["start"] is not None]
-current = None
-for b in sorted(ranged, key=lambda b: b["start"]):
-    if b["start"] <= now_min < b["end"]:
-        current = b
-        break
-if current is None:
-    up = [b for b in ranged if b["start"] > now_min]
-    if up:
-        current = sorted(up, key=lambda b: b["start"])[0]
-if current is None and not ranged and order:
-    current = blocks[order[0]]
-label = current["label"] if current else "none"
-tasks = []
-if current:
-    for r in current["rows"]:
-        if (r.get("status") or "").strip().lower() == "done":
-            continue
-        tasks.append(r)
-print(label)
-print(json.dumps(tasks, ensure_ascii=False))
+# Not-done rows, in ledger order.
+notdone = [r for r in rows if (r.get("status") or "").strip().lower() != "done"]
+def matches(r, t):
+    if not t:
+        return False
+    blob = " ".join(str(v) for v in r.values()).lower()
+    t2 = t[3:] if t.startswith("pb-") else t
+    # match "85" against "pb-85" boundaries, or any tie/title fragment
+    if re.search(r"\bpb-%s\b" % re.escape(t2), blob) or re.search(r"\b%s\b" % re.escape(t2), blob):
+        return True
+    return t in blob
+if target:
+    lead = [r for r in notdone if matches(r, target)]
+    rest = [r for r in notdone if not matches(r, target)]
+    notdone = lead + rest
+print(json.dumps(notdone, ensure_ascii=False))
 PY
 )"
-    CURRENT_BLOCK="$(printf '%s\n' "$EXEC_PARSE" | head -1)"
-    CURRENT_TASKS_JSON="$(printf '%s\n' "$EXEC_PARSE" | tail -n +2)"
-    [[ -n "$CURRENT_BLOCK" ]] || CURRENT_BLOCK="none"
-    [[ -n "$CURRENT_TASKS_JSON" ]] || CURRENT_TASKS_JSON="[]"
+    [[ -n "$NEXT_TASKS_JSON" ]] || NEXT_TASKS_JSON="[]"
     WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
     PM_CMD="${PM_CMD:-/project-manager}"
 
@@ -290,17 +315,14 @@ PY
     echo "file: $OUT_FILE"
     echo "today: $TODAY"
     echo "now_time: $NOW_TIME"
-    echo "current_block: $CURRENT_BLOCK"
+    echo "target_ref: ${TARGET_REF:-(none)}"
     echo "weekly_pids: ${WEEKLY_PIDS:-(none)}"
     echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
     echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
     echo "plane_web_base: $PLANE_WEB_BASE"
     echo ""
-    echo "=== CURRENT BLOCK ==="
-    echo "$CURRENT_BLOCK"
-    echo ""
-    echo "=== CURRENT BLOCK TASKS (not-done rows — resume from the first) ==="
-    echo "$CURRENT_TASKS_JSON"
+    echo "=== NEXT TASKS (not-done ledger rows, in order — lead row first) ==="
+    echo "$NEXT_TASKS_JSON"
     echo ""
     echo "=== WORKING LOCATIONS (plane.json projects[].work) ==="
     echo "$WORKING_LOCATIONS_JSON"
@@ -314,8 +336,8 @@ PY
     echo "=== PROJECT REGISTRY ==="
     echo "$REGISTRY_JSON"
     echo ""
-    export OUT_FILE TODAY NOW_TIME CURRENT_BLOCK CURRENT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
-    envsubst '$OUT_FILE $TODAY $NOW_TIME $CURRENT_BLOCK $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
+    export OUT_FILE TODAY NOW_TIME TARGET_REF NEXT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
+    envsubst '$OUT_FILE $TODAY $NOW_TIME $TARGET_REF $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
     exit 0
   fi
 
@@ -415,54 +437,25 @@ print("\n".join(out) if out else "(no work-tracker rows in the last 7 days)")
 PY
 )"
 
+# PB-85 autonomy: pmw never refuses for lack of a /plan-my-day layout, and never
+# nudges the user to run another command first. If today has no daily-planning file
+# yet, scaffold a minimal one (frontmatter + empty "## Work tracker" + "## How it
+# went") so the session can write a standalone Work tracker. glance_present tells
+# the model whether /plan-my-day also laid a "## Today at a glance" above it (which
+# pmw must leave untouched) or not.
+GLANCE_PRESENT="$PLAN_EXISTS"   # PLAN_EXISTS = "## Today at a glance" grep (line ~129)
+pbrain_pmw_scaffold_file "$OUT_FILE"
+
 echo "PLAN_MY_WORK_SESSION"
 echo "today: $TODAY"
 echo "now_time: $NOW_TIME"
-# PB-53: hand the model a deterministic list of which glance work-block rows are
-# already PAST (start time < now), so elapsed blocks stay ask-only and are never
-# backfilled with fresh task assignments. Blank when no plan exists yet.
-if [[ "$PLAN_EXISTS" == yes ]]; then
-  PAST_BLOCKS="$(NOW_TIME="$NOW_TIME" python3 - "$OUT_FILE" <<'PY'
-import sys, re, os
-now = os.environ.get("NOW_TIME", "")
-def mins(t):
-    m = re.match(r'^\s*(\d{1,2}):(\d{2})', t)
-    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
-now_m = mins(now)
-past = []
-try:
-    with open(sys.argv[1]) as f:
-        for ln in f:
-            if not ln.lstrip().startswith("|"):
-                continue
-            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-            if len(cells) < 2:
-                continue
-            time_cell, action = cells[0], cells[1]
-            # only work blocks (labelled "Block N")
-            if not re.search(r'\bBlock\s*\d', action):
-                continue
-            start_m = mins(time_cell)
-            if start_m is not None and now_m is not None and start_m < now_m:
-                rng = time_cell.split("|")[0].strip()
-                label = re.search(r'(Block\s*\d+)', action)
-                past.append("%s (%s)" % (label.group(1) if label else "Block", rng))
-except Exception:
-    pass
-print("; ".join(past) if past else "(none)")
-PY
-)"
-  echo "past_blocks: $PAST_BLOCKS"
-fi
 echo "iso_week: $ISO_WEEK"
 echo "month_year: $MONTH_YEAR"
 echo "file: $OUT_FILE"
-echo "plan_exists: $PLAN_EXISTS"
+echo "glance_present: $GLANCE_PRESENT"
 echo "plane_configured: $(pbrain_plane_configured && echo yes || echo no)"
 echo "weekly_pids: ${WEEKLY_PIDS:-(none)}"
 echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
-echo "blocks_helper: bash \"$_SCRIPT_DIR/plan-my-work.sh\" blocks --now HH:MM --bed HH:MM --session-min N --break-min N"
-echo "alloc_helper: bash \"$_SCRIPT_DIR/plan-my-work.sh\" alloc --chosen '<json>' --blocks N"
 echo ""
 echo "=== PLANS PROFILE (working_style + day shape) ==="
 echo "$WORK_PROFILE_JSON"
@@ -484,15 +477,16 @@ echo ""
 echo "=== THIS WEEK'S WORK TRACKER ROWS (carry-forward context) ==="
 echo "$WEEK_TRACKER"
 echo ""
-if [[ "$PLAN_EXISTS" == yes ]]; then
-  echo "=== TODAY'S PLAN ($OUT_FILE) — work blocks to fill ==="
-  cat "$OUT_FILE"
-  echo ""
-fi
+# The file always exists now (scaffolded if needed). Show it so the model can
+# refresh the standalone "## Work tracker" and respect any "## Today at a glance"
+# /plan-my-day laid above it (glance_present tells which case this is).
+echo "=== TODAY'S FILE ($OUT_FILE) — refresh the standalone ## Work tracker ==="
+cat "$OUT_FILE"
+echo ""
 
 # Instructions live in commands/templates/plan-my-work/session.txt — the .sh is a
 # thin dispatcher (mirrors /plan-my-day). Grooming/triage hands off to
-# /project-manager (separation of concern); this layer owns goals → blocks.
+# /project-manager (separation of concern); this layer owns goals → the tracker.
 PM_CMD="${PM_CMD:-/project-manager}"
 export PM_CMD WEEKLY_PIDS OUT_FILE PLANE_WEB_BASE
 envsubst '$PM_CMD $WEEKLY_PIDS $OUT_FILE $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/session.txt"
