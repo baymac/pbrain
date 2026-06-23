@@ -699,6 +699,10 @@ PYEOF
   #                                     scheduled/headless entry; default dry-run
   #                                     unless --apply; the LaunchAgent uses --apply)
   #   status                          — schedule + today's report status
+  #   doctor [--apply]                — PB-79: check macOS power settings (Power
+  #                                     Nap on AC) so the scheduled groom fires
+  #                                     reliably; read-only unless --apply, which
+  #                                     runs `sudo pmset -c powernap 1`
   #   enable [--time HH:MM] [--projects csv] — install the daily LaunchAgent
   #   disable                         — remove the LaunchAgent
   groom)
@@ -721,6 +725,15 @@ PYEOF
       status)
         pmg_status || true
         ;;
+      doctor)
+        # PB-79: read-only check that the daily groom agent will fire reliably on
+        # AC (Power Nap policy); --apply opts into the one pmset fix.
+        if _has_bool apply; then
+          pmg_doctor --apply || true
+        else
+          pmg_doctor || true
+        fi
+        ;;
       enable)
         echo "PM_GROOM_ENABLE"
         pmg_schedule_install "${F_time:-06:40}" "${F_projects:-}" || true
@@ -732,7 +745,7 @@ PYEOF
         echo "removed: $PMG_LABEL"
         ;;
       *)
-        echo "Usage: /project-manager groom <run|status|enable|disable> [--projects csv] [--time HH:MM] [--apply]" >&2
+        echo "Usage: /project-manager groom <run|status|doctor|enable|disable> [--projects csv] [--time HH:MM] [--apply]" >&2
         exit 1
         ;;
     esac
