@@ -34,12 +34,18 @@ TODAY="$(date +%Y-%m-%d)"
 TIME="$(date +%H:%M)"
 OUT_FILE="$DAILY_DIR/$TODAY.md"
 
+# Whatever the user typed after the slash command (the dump) arrives as args.
+# When present, the entry is already in hand — ingest it and skip the wait.
+DUMP="$*"
+
 if [[ -f "$OUT_FILE" ]]; then
   cat <<EXISTING
 JOURNAL_SESSION_RESUME
 date: $TODAY
 time: $TIME
 output_file: $OUT_FILE
+dump_provided: $([[ -n "$DUMP" ]] && echo yes || echo no)
+$([[ -n "$DUMP" ]] && printf 'provided_dump: |\n%s\n' "$(printf '%s\n' "$DUMP" | sed 's/^/  /')")
 
 Today's journal already exists. Current contents:
 
@@ -48,11 +54,15 @@ $(cat "$OUT_FILE")
 ---
 
 INSTRUCTIONS:
-Step 1 — Keep the opener minimal. One short line like "Go ahead." Wait for them
-  to share. Do not summarize or ask what's on their mind — they came here to log
-  something specific.
+Step 1 — Get the entry.
+  - If dump_provided is yes, the user already typed their entry as the command
+    argument (shown above as provided_dump). Treat THAT as what they shared —
+    do NOT say "Go ahead." or wait. Go straight to Step 2.
+  - If dump_provided is no, keep the opener minimal — one short line like
+    "Go ahead." — then wait for them to share. Do not summarize or ask what's
+    on their mind; they came here to log something specific.
 
-Step 2 — Once they've shared, decide if a follow-up is warranted:
+Step 2 — Once you have the entry, decide if a follow-up is warranted:
   - Reflective entry (a mistake, a decision, something emotionally loaded):
     ask ONE follow-up question about the "why" or "what now" — pulled from their
     actual words, not a generic prompt. Wait for their answer.
@@ -82,13 +92,19 @@ cat <<PROMPT
 JOURNAL_SESSION
 date: $TODAY
 output_file: $OUT_FILE
+dump_provided: $([[ -n "$DUMP" ]] && echo yes || echo no)
+$([[ -n "$DUMP" ]] && printf 'provided_dump: |\n%s\n' "$(printf '%s\n' "$DUMP" | sed 's/^/  /')")
 
 INSTRUCTIONS: This is a quiet daily journal. Do NOT ask the user what's on
-their mind. Wait for them to share whatever they want to share — that's
-the dump. If they haven't shared anything yet, just say one short line
-like "Ready when you are." and wait.
+their mind.
+  - If dump_provided is yes, the user already typed their dump as the command
+    argument (shown above as provided_dump). Do NOT say "Ready when you are."
+    or wait — treat provided_dump as the dump and go straight to Step 1.
+  - If dump_provided is no, wait for them to share whatever they want to
+    share — that's the dump. Until they do, just say one short line like
+    "Ready when you are." and wait.
 
-Once they've shared, follow these steps in order.
+Once you have the dump, follow these steps in order.
 
 Step 1 — Silently scan the dump for:
   - Focus       → the headline of what they're working on
@@ -105,9 +121,13 @@ Step 2 — If there are open threads, generate 2–3 open questions. Rules:
   If there are NO open threads, skip straight to Step 4. Don't invent
   questions just to have something to ask. A quiet day is fine.
 
-Step 3 — Ask each open question one at a time, waiting for a response.
-  Keep it conversational. If they say "skip" or "no idea", move on and
-  record "—" as the answer for that one.
+Step 3 — If Step 2 produced any questions, you MUST run the interview before
+  writing anything: ask each question one at a time, waiting for a response
+  before asking the next. Keep it conversational. If they say "skip" or "no
+  idea", move on and record "—" as that one's answer. Do NOT skip the
+  interview, and do NOT pre-fill or write "—" for a question you never
+  actually asked. Only when every question has an answer (or an explicit
+  skip) do you proceed to Step 4.
 
 Step 4 — Write the entry to $OUT_FILE with this exact structure:
 
@@ -133,14 +153,15 @@ If none, write: —}
 
 ## Open questions
 
-{Bullet list — each question followed by the user's answer indented under
-it. Example:
+{Bullet list — each question from Step 2 followed by the answer the user
+gave in the Step 3 interview, indented under it. Example:
 
 - Should I refactor the auth layer before the launch?
   Their answer here.
 
-If a question was skipped, record "—" as the answer. If Step 2 produced
-no questions at all, write: —}
+Use only answers you actually collected in Step 3. If a question was
+skipped, record "—" as the answer. If Step 2 produced no questions at all,
+write: —}
 PROMPT
 
 # Habit extraction (silent if no habits profile).
