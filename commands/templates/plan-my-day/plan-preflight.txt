@@ -1,0 +1,61 @@
+INSTRUCTIONS — PREFLIGHT (fast) pass for /plan-my-day. This is a deliberately
+CHEAP first turn (PB-58): the heavy planning context (profile, 3-day digest,
+carry-forward, calendar, habits rollup + tracker, sleep, diet) has NOT been
+loaded yet — it loads only after the user continues. Your whole job here is to
+surface the fitness/diet/gratitude nudges (if any) and offer to continue. Keep
+it to one short message. Do NOT plan the day, do NOT ask planning questions, do
+NOT invent context you weren't given.
+
+Signals handed to you above:
+  - fitness_today: MISSING | present
+  - diet_today_exists: yes | no
+  - gratitude_today_exists: yes | no
+  - continue_cmd: the exact command to re-run to load the full plan
+
+NO NARRATING INTERNAL LOGIC (PB-75): each nudge below is gated on one of those
+precomputed signals. Read the signal and act, but do NOT narrate the check or
+the skip — never say things like "gratitude_today_exists is yes so I'm skipping"
+or "diet_today_exists is no so I'll nudge". A skipped nudge produces NO output at
+all; a fired nudge produces only its one user-facing line. State only the nudge,
+never the reasoning that led to it.
+
+1. FITNESS NUDGE (soft, non-blocking — like the daily-journal nudge):
+   PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
+   (global or per-command) says to skip the fitness-journal nudge, SKIP it. A
+   standing preference always wins.
+   - fitness_today == MISSING: mention it ONCE — e.g. "Heads up: today's
+     /fitness-journal isn't done. Running it captures your wake time and slots
+     your workout into the day — want to? Either way I can plan now." Do NOT
+     STOP and wait; do NOT ask whether any session is complete/logged (that's
+     /end-of-day's job, not the planner's).
+   - fitness_today == present: say nothing about it.
+
+2. DIET NUDGE (non-blocking):
+   PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
+   diet nudge, skip it.
+   - diet_today_exists == no: one short line — "Today's /diet-journal isn't
+     logged yet — want to capture your meals first?" Don't block; don't ask
+     whether anything is complete.
+   - diet_today_exists == yes: say nothing.
+
+3. GRATITUDE NUDGE (soft, non-blocking — PB-66). Gate STRICTLY on
+   gratitude_today_exists above; do NOT check the gratitude file yourself.
+   PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
+   journal/gratitude nudge, skip it.
+   - gratitude_today_exists == no: one short line, folded into the same first
+     message — e.g. "Today's gratitude entry isn't logged — /gratitude-journal
+     anchors the day, but you can do it later." Don't block; don't ask whether
+     anything is complete.
+   - gratitude_today_exists == yes: say nothing.
+
+4. CONTINUE GATE. This is what unlocks the full planning context. After the
+   nudge(s), offer to proceed — e.g. "Ready to lay out the day whenever you
+   are." When the user says go (or declines the journals and wants to plan), RUN
+   the continue command to load the full context and produce the plan:
+
+     bash "${PMD_SCRIPT_DIR}/plan-my-day.sh" plan --continue
+
+   That re-invocation emits PLAN_MY_DAY_SESSION (the heavy context + planning
+   instructions); follow those instructions then. Do NOT try to plan from this
+   preflight turn — you don't have the context yet. Stop here and wait for the
+   user.

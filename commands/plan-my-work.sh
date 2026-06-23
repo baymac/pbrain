@@ -320,6 +320,11 @@ PY
     echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
     echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
     echo "plane_web_base: $PLANE_WEB_BASE"
+    # PB-93: deterministic self-host staleness guard. Prints a SELFHOST_STALE
+    # line only when this pbrain checkout (the live command wrapper) is not on a
+    # clean, up-to-date main; silent on the happy path. The PRE-FLIGHT prose in
+    # execute.txt tells the agent how to act on it.
+    pbrain_selfhost_staleness_line || true
     echo ""
     echo "=== NEXT TASKS (not-done ledger rows, in order — lead row first) ==="
     echo "$NEXT_TASKS_JSON"

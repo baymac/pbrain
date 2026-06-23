@@ -498,7 +498,7 @@ INSTRUCTIONS (for the calling agent): relay this to the user concisely.
 
 5. If `codex_detected=no`: note that the Codex CLI was not found on PATH — the
    skills and AGENTS.md block are installed and will work once Codex is installed
-   (https://developers.openai.com/codex/cli).
+   (install docs: `https://developers.openai.com/codex/cli`).
 
 6. Note it is idempotent: re-run `/codex-install` from Claude Code after
    moving/reinstalling pbrain or when new commands ship.
