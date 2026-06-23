@@ -2770,6 +2770,19 @@ PEOF
   [[ "$output" == *"1.6/7 wk"* ]]
 }
 
+@test "tracker Progress rounds an accumulated scored sum (no 1.9300000000000002 float artifact)" {
+  _write_weekly_scored_profile
+  # 93/(93+7)=0.93 plus 100/100=1.0 sums to 1.9300000000000002 in raw float —
+  # must render rounded to 2dp as "1.93/7 wk", never the binary-float artifact (PB-106).
+  HABITS mark --name "Deep work" --date 2026-06-15 --focus '{"work":93,"social":7}' >/dev/null
+  HABITS mark --name "Deep work" --date 2026-06-17 --focus '{"work":100}' >/dev/null
+  HABITS track --date 2026-06-17 >/dev/null
+  run grep "Deep work" "$PBRAIN_HABIT_TRACK_DIR/2026-06-17.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1.93/7 wk"* ]]
+  [[ "$output" != *"1.9300000000000002"* ]]
+}
+
 # ═════════════════════════════════════════════════════════════════════════
 # 3-state habit status: done / skipped / missed  (Phase 1)
 # ═════════════════════════════════════════════════════════════════════════

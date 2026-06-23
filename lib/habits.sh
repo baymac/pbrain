@@ -810,8 +810,16 @@ def load_habits(profile):
 
 
 def fmtnum(n):
-    if isinstance(n, float) and n.is_integer():
-        return str(int(n))
+    # Format a progress number for display. Floats are rounded to 2dp so an
+    # accumulated scored sum (e.g. 0.93 + 1.0 = 1.9300000000000002) renders as
+    # "1.93" instead of leaking a binary-float artifact; integer-valued floats
+    # collapse to ints ("4.0" -> "4") and trailing zeros are stripped
+    # ("2.50" -> "2.5"). Non-floats (ints) pass through unchanged.
+    if isinstance(n, float):
+        n = round(n, 2)
+        if n.is_integer():
+            return str(int(n))
+        return ("%.2f" % n).rstrip("0").rstrip(".")
     return str(n)
 
 def _to_int(s):
