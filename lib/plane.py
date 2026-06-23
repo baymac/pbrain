@@ -1246,8 +1246,9 @@ def parse_issue_ref(ref):
     """Parse a Plane issue reference → (identifier, sequence). Pure.
 
     Accepts a browse URL (".../browse/PB-26/" or ".../browse/PB-26"), a bare id
-    ("PB-26"), or a bare sequence ("26", needs a project from the caller).
-    identifier is upper-cased; returns (None, None) when nothing parses.
+    with ("PB-26") or without ("pb26") the hyphen, or a bare sequence ("26",
+    needs a project from the caller). identifier is upper-cased; returns
+    (None, None) when nothing parses.
     """
     import re
     s = (ref or "").strip()
@@ -1257,6 +1258,12 @@ def parse_issue_ref(ref):
     mi = re.match(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)$", s)
     if mi:
         return mi.group(1).upper(), int(mi.group(2))
+    # Hyphenless id ("pb8", "PB8"): a letters-only prefix glued to the sequence.
+    # The prefix must be letters-only (not [A-Za-z0-9]*) so the trailing digits
+    # split off as the sequence rather than being swallowed by a greedy prefix.
+    mh = re.match(r"^([A-Za-z]+)(\d+)$", s)
+    if mh:
+        return mh.group(1).upper(), int(mh.group(2))
     if re.match(r"^\d+$", s):
         return None, int(s)
     return None, None

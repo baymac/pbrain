@@ -383,9 +383,11 @@ PYEOF
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-# parse_issue_ref: url | id | bare seq | name
+# parse_issue_ref: url | id | hyphenless id | bare seq | name
 assert m.parse_issue_ref("http://x/pb/browse/PB-26/")==("PB",26)
 assert m.parse_issue_ref("PB-26")==("PB",26)
+assert m.parse_issue_ref("pb8")==("PB",8)       # hyphenless, lowercased (PB-97)
+assert m.parse_issue_ref("PB8")==("PB",8)       # hyphenless, uppercase
 assert m.parse_issue_ref("26")==(None,26)
 assert m.parse_issue_ref("fix the bug")==(None,None)
 # match_label (normalised)
