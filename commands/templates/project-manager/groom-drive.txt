@@ -1,0 +1,49 @@
+--- INSTRUCTIONS — groom: drive the auto-exec queue (PB-94). The mechanical scan above
+already ran (triage + the auto-exec queue), and wrote the grooming-data artifact to
+the vault at $GROOM_DATA_FILE. Now, IF an auto-exec queue exists, drive it through the
+SAME `/plan-my-work task execute` lifecycle — do NOT reimplement it — parking each
+issue at its first MANUAL gate and recording the outcome. This block only appears when
+an agent is present (the headless nightly LaunchAgent skips it and just writes the
+queue for you to drive on waking).
+
+READ FIRST. The grooming-data file's `## Auto-exec queue` table lists the issues that
+carry `auto:<gate>` labels and the gates each is cleared for. The execute loop reads
+the same clearances per issue from `spec "<tie>" --read` (`auto_gates`). An empty queue
+→ nothing to drive; say so and stop (the triage report still stands for your review).
+
+DRIVE THE QUEUE — for each issue in `## Auto-exec queue`, in listed order:
+  1. Run the standard `/plan-my-work task execute <PB-id>` lifecycle on it (resolve
+     working location → isolate worktree → spec/approval → implement → finish → PR →
+     merge → done). Honor each gate's auto:<gate> label exactly as execute.txt
+     specifies: a cleared gate AUTO-ADVANCES (announced), an uncleared gate is a
+     MANUAL stop.
+  2. PARK at the FIRST manual (non-auto-cleared) gate the issue hits. Do NOT force
+     past it — that gate is, by definition, where the user wanted to be consulted.
+     "Parking" = stop driving THIS issue, leave it wherever the lifecycle reached
+     (in-progress, PR open at merge gate, etc.), and move to the next queue issue.
+  3. ON PARK, COMMENT on the issue so a later MANUAL `/plan-my-work` run has the
+     context to resume and close it:
+       ${PM_SELF} comment "<tie>" --body "<groom park note>"
+     The note states: which gates auto-advanced, the manual gate it parked at, what
+     remains, and a pointer to the grooming-data file ($GROOM_DATA_FILE) for the full
+     run context. Keep it tight — it's a resume breadcrumb, not a transcript.
+  4. RECORD the outcome in the grooming-data file's `## Auto-work` section (append a
+     line per issue): `- **<PB-id>** <title> — auto-advanced [<gates>], parked at
+     <manual gate>; <PR/branch link if any>`. This is the morning-review record.
+
+INVARIANTS (carried from execute.txt — never weakened here):
+  • The MERGE gate is irreversible. Without `auto:merge`, it is ALWAYS a manual park
+    point — groom never types the `merge <PB-id>` confirm for you. Even WITH
+    `auto:merge`, CI must be green/waived first; a red CI parks the issue, it does not
+    merge.
+  • groom never AUTO-CLEARS a gate by adding an `auto:<gate>` label — it only READS
+    the labels the user (full path) or the triage agent (fast path) set. If you think
+    an issue should be auto-cleared, that's a `/project-manager spec` / triage
+    decision, not a groom-time edit.
+  • Thin issues (in `## Needs review`) are NOT in the queue and must not be driven —
+    they need grooming first.
+
+When the queue is exhausted (or you stop), give one tight summary: which issues
+auto-advanced and how far, which are parked at a manual gate (and which gate), and
+"review the grooming data at $GROOM_DATA_FILE, then run `/plan-my-work task execute
+<PB-id>` to resume any parked issue." Stop here.

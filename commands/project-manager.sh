@@ -767,6 +767,17 @@ PYEOF
         else
           pmg_run || true
         fi
+        # PB-94: when an AGENT is present (i.e. not the headless nightly LaunchAgent,
+        # which sets PBRAIN_PMG_HEADLESS=1), emit the agent-facing block that drives
+        # the auto-exec queue through the `task execute` lifecycle, parking + commenting
+        # at the first manual gate. The headless run only writes the queue; the human's
+        # next interactive groom/plan-my-work drives it.
+        if [[ -z "${PBRAIN_PMG_HEADLESS:-}" ]]; then
+          GROOM_DATA_FILE="$(pmg_data_file "$(pmg_today)")"
+          PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
+          export GROOM_DATA_FILE PM_SELF
+          envsubst '$GROOM_DATA_FILE $PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/groom-drive.txt"
+        fi
         ;;
       status)
         pmg_status || true

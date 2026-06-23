@@ -23,6 +23,33 @@ implement straight against the recorded plan, no live planning gate. Issues with
 an approved plan FALL BACK to drafting the plan inline behind a [GATE], as before.
 Nothing is blocked — approval is a fast path, not a wall.
 
+PER-GATE AUTO-EXECUTION (PB-94) — "auto-execute until it hits a manual gate". Each
+[GATE] in the lifecycle below can be AUTO-ADVANCED or stay MANUAL, decided per
+issue, upstream at triage — NOT a fixed boundary. The decision rides on the issue's
+`auto:<gate>` labels (read from `spec --read`'s `auto_gates` array, also surfaced on
+ready/subtree rows). The gates and their labels:
+    step 2  mark in-progress  → auto:in-progress
+    step 4  plan (fallback)   → auto:plan      (FAST PATH already skips this; the
+                                                label additionally clears the
+                                                UNAPPROVED fallback gate)
+    step 6  finish/commit     → auto:finish
+    step 8  merge             → auto:merge      (irreversible — see the invariant)
+    step 10 cascade           → auto:cascade
+Rule, applied at EACH gate: if `auto_gates` contains that gate's name, AUTO-ADVANCE
+it — do the gate's action and announce it in ONE line ("auto:finish set — committing
+without a stop"), do NOT wait for a yes. If the gate's name is ABSENT, keep the
+DEFAULT manual [GATE] exactly as written (stop, get an explicit yes). An issue with
+no auto:* labels behaves identically to today (every gate manual). Labels are set by
+the USER on the full path and by the AGENT on the fast path — you only READ them
+here; never add auto:* labels mid-execute to skip your own gates.
+INVARIANT — the merge stays SAFE even when auto:merge is set: `auto:merge` waives
+only the TYPED-confirm half of step 8. CI-green (step 8a) is NEVER waived by a label
+— a red/failing CI still HARD-STOPS the merge. And `auto:merge` never SELF-applies:
+groom does not auto-clear merge unless the user's triage labels say so.
+When you AUTO-ADVANCE a gate during a normal `task execute` run, still narrate it so
+the user can see the loop moving; when the GROOM caller drives this loop (PB-94), the
+parking + commenting rules in groom's own instructions apply instead.
+
 You were handed (in the output above):
   • target_ref = ${TARGET_REF} (the PB-id, OR the free-text description, you were
     asked to execute, if any; "(none)" means just take the ledger in order).
@@ -166,7 +193,9 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
    - Verify the path exists and is a git repo (git -C <path> rev-parse). If not,
      stop and say so — do NOT create or guess a repo.
 
-2. [GATE] MARK IN-PROGRESS. On the user's go:
+2. [GATE — auto:in-progress] MARK IN-PROGRESS. If `auto_gates` contains
+   `in-progress`, auto-advance (announce "auto:in-progress — starting"); else get the
+   user's go. Then:
      bash "${PM_CMD}" move "<tie>" --to doing
    and set that row's Status = in-progress in "## Work tracker", and Started = HH:MM.
    (Parallel-safe: other rows may also be in-progress — that is expected, not a bug.)
@@ -195,7 +224,10 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
    - approved = false → FALLBACK. Draft a tight implementation plan against the
      TARGET repo's conventions (use the PM_SPEC JSON — incl. `comments` — or
      `bash "${PM_CMD}" find "<tie>"`, for context).
-       [GATE] explicit yes before you write ANY code.
+       [GATE — auto:plan] If `auto_gates` contains `plan`, auto-advance: state the
+       drafted plan in one line and proceed to step 5 WITHOUT waiting (announce
+       "auto:plan — implementing against drafted plan"). Else: explicit yes before
+       you write ANY code.
      OFFER once, without blocking: "want me to save this as an approved plan so
      future runs skip this step?" — on yes, run the interactive walk
      `bash "${PM_CMD}" spec "<tie>"` to record + approve it; on no, just proceed.
@@ -203,9 +235,11 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
 5. IMPLEMENT. Write code to the target repo's conventions. Run its tests /
    linters / build. Show a tight diff. Iterate until it's green and right.
 
-6. [GATE] FINISH. Confirm the work is complete → commit in the worktree (a clear
-   message; reference the PB-id). Set the row's % complete = 100. Status STAYS
-   in-progress until the PR merges (it is not done yet).
+6. [GATE — auto:finish] FINISH. If `auto_gates` contains `finish`, auto-advance
+   (announce "auto:finish — committing"); else confirm with the user the work is
+   complete. Then commit in the worktree (a clear message; reference the PB-id). Set
+   the row's % complete = 100. Status STAYS in-progress until the PR merges (it is
+   not done yet).
 
 7. OPEN A PR. Probe `command -v gh` first.
    - gh present → push the branch, then:
@@ -218,9 +252,15 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
 8. [GATE — TYPED CONFIRM, IRREVERSIBLE] GATED MERGE. Double-gated:
    a) CI green — watch it: `gh pr checks <pr> --watch` (or the manual URL). CI
       red → STOP, report which check failed, and do not merge. The user may
-      explicitly WAIVE a non-blocking check; record that they did.
+      explicitly WAIVE a non-blocking check; record that they did. INVARIANT
+      (PB-94): `auto:merge` NEVER waives this — CI must be green (or human-waived);
+      a label cannot merge a red PR.
    b) TYPED confirm — ask the user to type the exact word `merge <PB-id>`
-      (not just "yes"). Only with BOTH (green/waived AND the typed word):
+      (not just "yes"). PB-94: if `auto_gates` contains `merge`, this TYPED-confirm
+      half is waived — announce "auto:merge — merging on green" and proceed once
+      8a is green/waived (the user pre-cleared the merge at triage). Without
+      `auto:merge`, the typed word is still required. Only with BOTH halves
+      satisfied (8a green/waived AND [typed word OR auto:merge]):
         gh pr merge <pr> --squash --delete-branch
       then clean up the worktree (git -C <path> worktree remove <wt>).
 
@@ -249,7 +289,10 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
     then stop (a parent target is one logical target; do not cascade to other work).
 
 CASCADE (target_mode = none only — skip entirely in solo mode) — at each hand-off
-a [GATE] (confirm before continuing):
+a [GATE — auto:cascade] (confirm before continuing, UNLESS the just-finished issue
+carried `auto:cascade`, in which case auto-advance into the next hand-off, announcing
+"auto:cascade — pulling more work"). auto:cascade clears only the hand-off stop; the
+NEXT issue's own gates are still read from its OWN labels:
   A — LIST DONE, more day left. There are no more rows in NEXT TASKS but the day
     isn't over. Go to CASCADE B.
   B — PROJECT-DAY EXHAUSTED. Offer to pull more ready tasks for the same project:

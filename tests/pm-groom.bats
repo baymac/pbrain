@@ -169,6 +169,71 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+# --- PB-94: auto-exec queue surfaced by groom_run ----------------------------
+
+@test "groom_run lists a well-formed issue carrying auto:* labels in auto_exec" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class FakeClient:
+    DATA = {"A": {
+      "states":[{"id":"bk","group":"backlog","default":True},
+                {"id":"td","group":"unstarted","default":True}],
+      "items":[{"id":"a1","sequence_id":1,"name":"cleared","priority":"high",
+                "description_stripped":"has body","state":"bk",
+                "labels":["Lmerge","Lfinish"]}],
+      "labels":[{"id":"Lmerge","name":"auto:merge"},
+                {"id":"Lfinish","name":"auto:finish"},
+                {"id":"Lbug","name":"bug"}],
+    }}
+    def list_states(self,pid): return self.DATA[pid]["states"]
+    def list_work_items(self,pid): return self.DATA[pid]["items"]
+    def list_labels(self,pid): return self.DATA[pid]["labels"]
+    def update_work_item(self,pid,iid,body): pass
+m.ensure_estimate_scale = lambda cfg,c,pid: None
+cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
+rep = m.groom_run(cfg, FakeClient(), ["A"], apply=False)
+ax = rep["auto_exec"]
+assert len(ax)==1, rep
+assert ax[0]["auto_gates"]==["finish","merge"], ax  # GATE_NAMES order
+# the triaged row also carries its clearances
+assert rep["triaged"][0]["auto_gates"]==["finish","merge"], rep["triaged"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "groom_run does NOT auto-exec a thin issue even if it carries auto:* labels" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class FakeClient:
+    DATA = {"A": {
+      "states":[{"id":"bk","group":"backlog","default":True}],
+      # thin: no description, no priority — must go to needs_review, not auto_exec
+      "items":[{"id":"a1","sequence_id":1,"name":"thin-but-labelled","priority":"none",
+                "description_stripped":"","description_html":"<p></p>","state":"bk",
+                "labels":["Lmerge"]}],
+      "labels":[{"id":"Lmerge","name":"auto:merge"}],
+    }}
+    def list_states(self,pid): return self.DATA[pid]["states"]
+    def list_work_items(self,pid): return self.DATA[pid]["items"]
+    def list_labels(self,pid): return self.DATA[pid]["labels"]
+    def update_work_item(self,pid,iid,body): raise AssertionError("must not write a thin issue")
+m.ensure_estimate_scale = lambda cfg,c,pid: None
+cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
+rep = m.groom_run(cfg, FakeClient(), ["A"], apply=True)
+assert rep["auto_exec"]==[], rep          # thin → never auto-exec eligible
+assert len(rep["needs_review"])==1, rep   # surfaced for grooming instead
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 # --- report rendering: pmg_run (python3 groom stubbed) -----------------------
 
 @test "pmg_run renders a dated markdown report from the scan JSON" {
@@ -228,6 +293,57 @@ PYFAKE
     && grep -q "(applied)" "$report" \
     && grep -q "groom me" "$report" \
     && grep -q "backlog → todo" "$report"
+}
+
+# --- PB-94: vault grooming-data artifact + agent-drive block -----------------
+
+@test "pmg_run writes the vault grooming-data file with the auto-exec queue" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"triaged":[{"id":1,"title":"promote me","from":"backlog","to":"todo","ok":true,"auto_gates":["in-progress"]}],"needs_review":[{"id":2,"title":"too thin","group":"backlog","flags":["no_estimate"]}],"auto_exec":[{"id":1,"title":"promote me","auto_gates":["in-progress","finish"]}],"errors":[]}'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  data="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  [ -f "$data" ]
+  grep -q "type: daily-grooming" "$data"
+  grep -q "## Auto-exec queue (1)" "$data"
+  grep -q "in-progress, finish" "$data"
+  grep -q "## Auto-work" "$data"
+  grep -q "promote me" "$data"
+}
+
+@test "groom run emits the agent-drive block interactively, suppresses it headless" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"triaged":[],"needs_review":[],"auto_exec":[{"id":1,"title":"x","auto_gates":["finish"]}],"errors":[]}'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  # Interactive (no headless marker): the drive block IS emitted.
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/project-manager.sh" groom run --projects A --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"groom: drive the auto-exec queue"* ]]
+  # Headless (LaunchAgent path): the block is suppressed.
+  run env PATH="$STUB:$PATH" PBRAIN_PMG_HEADLESS=1 \
+    bash "$REPO_ROOT/commands/project-manager.sh" groom run --projects A --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"groom: drive the auto-exec queue"* ]]
 }
 
 @test "pmg_prune keeps the newest N dated reports and deletes the rest" {

@@ -74,6 +74,23 @@ PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "": 4
 APPROVED_LABEL = "plan-approved"
 PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the description
 
+# Per-gate auto-execution clearances (PB-94). Each gate in the `/plan-my-work task
+# execute` lifecycle checks for its own `auto:<gate>` label: present → the gate
+# auto-advances (announced, not silent); absent → the gate keeps its default manual
+# stop. Set upstream at triage — by the user on the full path, by the agent on the
+# fast path — so auto-execution is decided ONCE, not re-litigated per run. Seeded
+# into every project alongside the convention labels (project create + `labels
+# --seed`), never created ad-hoc by groom. `auto:plan` clears the plan GATE;
+# plan-approved remains the separate plan-CONTENT seam. Invariant: even with
+# `auto:merge`, a red CI still hard-stops — only the typed confirm is waived.
+GATE_NAMES = ["in-progress", "plan", "finish", "merge", "cascade"]
+GATE_LABELS = [{"name": "auto:%s" % g, "color": "#7c3aed"} for g in GATE_NAMES]  # violet
+
+# All labels pbrain seeds into a project: work-type conventions (PB-70), the
+# plan-approval seam (PB-45), and the per-gate auto clearances (PB-94).
+def _seed_label_specs():
+    return CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}] + GATE_LABELS
+
 # Canonical "convention" labels (PB-70). Every project gets these work-item TYPE
 # labels so triage is consistent across the workspace: a `bug` filed via
 # `/project-manager bug` always finds its label, `feature`/`chore`/`docs` classify
@@ -1020,7 +1037,7 @@ def issue_labels(issue):
 
 
 def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est_h,
-                   uuid_hours=None, approved_label_ids=None):
+                   uuid_hours=None, approved_label_ids=None, gate_map=None):
     grp = state_group(issue, states_by_id)
     iid = issue.get("id")
     ep = issue.get("estimate_point")
@@ -1039,6 +1056,8 @@ def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est
         "priority": issue.get("priority") or "none",
         "is_sub": bool(issue.get("parent")),
         "approved": approved,
+        # PB-94: gates this issue is auto-cleared for (empty → all manual).
+        "auto_gates": issue_gate_clearances(issue, gate_map),
     }
 
 
@@ -1070,6 +1089,34 @@ def approved_label_ids(client, project_id):
     target = _norm(APPROVED_LABEL)
     return {lab.get("id") for lab in labels
             if lab.get("id") and _norm(lab.get("name") or "") == target}
+
+
+def gate_label_map(client, project_id):
+    """Map gate name → set of that project's label ids for `auto:<gate>` (PB-94),
+    matched fuzzily by normalised name. Best-effort: returns an empty map if labels
+    can't be listed, so the gate seam degrades to 'nothing cleared' (all manual)
+    rather than erroring."""
+    try:
+        labels = client.list_labels(project_id)
+    except Exception:
+        return {}
+    want = {_norm("auto:%s" % g): g for g in GATE_NAMES}
+    out = {g: set() for g in GATE_NAMES}
+    for lab in labels:
+        g = want.get(_norm(lab.get("name") or ""))
+        if g and lab.get("id"):
+            out[g].add(lab["id"])
+    return out
+
+
+def issue_gate_clearances(issue, gate_map):
+    """The list of gate names this issue is auto-cleared for, given a project's
+    gate_label_map. Stable order (GATE_NAMES). Empty when the issue carries no
+    auto:* label → every gate stays manual (the default)."""
+    if not gate_map:
+        return []
+    have = set(issue_labels(issue))
+    return [g for g in GATE_NAMES if have & gate_map.get(g, set())]
 
 
 def build_status_body(status, states, completed_at=None):
@@ -1344,11 +1391,12 @@ def ready(cfg, client, project_id, include_backlog=False, with_lanes=False,
     ensure_estimate_scale(cfg, client, project_id)
     uuid_hours = est_uuid_to_hours(cfg, project_id)
     approved_ids = approved_label_ids(client, project_id)  # spec/approval gate (PB-45)
+    gate_map = gate_label_map(client, project_id)          # per-gate auto clearances (PB-94)
     items = []
     for issue in client.list_work_items(project_id):
         r = issue_to_ready(issue, project_id, states_by_id, module_by_issue,
                            cfg["default_est_h"], uuid_hours,
-                           approved_label_ids=approved_ids)
+                           approved_label_ids=approved_ids, gate_map=gate_map)
         r["_group"] = state_group(issue, states_by_id)
         items.append(r)
     return filter_ready(items, include_backlog=include_backlog, approved_only=approved_only)
@@ -1476,13 +1524,18 @@ def groom_run(cfg, client, project_ids, apply=False):
     one bad project can't sink the nightly run. Returns a JSON-able report dict.
     """
     report = {"generated_for": list(project_ids), "applied": bool(apply),
-              "projects": [], "triaged": [], "needs_review": [], "errors": []}
+              "projects": [], "triaged": [], "needs_review": [], "errors": [],
+              # PB-94: triaged issues that are auto-execution cleared (carry one or
+              # more auto:<gate> labels), so the execute loop / morning report can
+              # see exactly which gates will auto-advance per issue.
+              "auto_exec": []}
     for pid in project_ids:
         label = project_label(cfg, pid)
         try:
             states = client.list_states(pid)
             states_by_id = {s["id"]: s for s in states}
             has_scale = bool(ensure_estimate_scale(cfg, client, pid))
+            gate_map = gate_label_map(client, pid)  # PB-94 per-gate auto clearances
             issues = list(client.list_work_items(pid))
         except PlaneError as e:
             report["errors"].append({"project_id": pid, "project": label, "error": str(e)})
@@ -1503,9 +1556,18 @@ def groom_run(cfg, client, project_ids, apply=False):
                      "id": seq, "title": title, "group": grp, "flags": flags})
                 counts["needs_review"] += 1
                 continue
+            # PB-94: which gates this well-formed issue is auto-execution cleared
+            # for (carries auto:<gate> labels). Set upstream at triage by the user
+            # (full path) or the agent (fast path); groom only READS them here.
+            auto_gates = issue_gate_clearances(issue, gate_map)
+            if auto_gates:
+                report["auto_exec"].append(
+                    {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
+                     "id": seq, "title": title, "group": grp, "auto_gates": auto_gates})
             if grp == "backlog":
                 row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                       "id": seq, "title": title, "from": "backlog", "to": "todo"}
+                       "id": seq, "title": title, "from": "backlog", "to": "todo",
+                       "auto_gates": auto_gates}
                 if apply:
                     try:
                         body = build_status_body("todo", states)
@@ -1626,6 +1688,7 @@ def subtree_context(cfg, client, ref, project_ref=None):
         ensure_estimate_scale(cfg, client, pid)
         uuid_hours = est_uuid_to_hours(cfg, pid)
         approved_ids = approved_label_ids(client, pid)
+        gate_map = gate_label_map(client, pid)  # PB-94 per-gate auto clearances
         items = list(client.list_work_items(pid))
     except PlaneError as e:
         return {"status": "error", "error": str(e), "candidates": cards}
@@ -1645,7 +1708,7 @@ def subtree_context(cfg, client, ref, project_ref=None):
             continue  # skip done/cancelled children — they are not units of work
         r = issue_to_ready(issue, pid, states_by_id, module_by_issue,
                            cfg["default_est_h"], uuid_hours,
-                           approved_label_ids=approved_ids)
+                           approved_label_ids=approved_ids, gate_map=gate_map)
         r["project_id"] = pid
         r["project"] = label
         children.append(r)
@@ -1683,6 +1746,9 @@ def spec_context(cfg, client, ref, project_ref=None):
     approved_ids = approved_label_ids(client, pid)
     approved = bool(approved_ids) and any(
         lid in approved_ids for lid in issue_labels(issue))
+    # PB-94: per-gate auto-execution clearances carried as auto:<gate> labels, so
+    # the executor (spec --read) knows which lifecycle gates auto-advance.
+    auto_gates = issue_gate_clearances(issue, gate_label_map(client, pid))
     # PB-61: user comments are AUTHORITATIVE — they override the description and
     # any model-added plan content. Surface them (oldest→newest, so the last
     # entry is the most recent word) so the executor / spec walk can honour them.
@@ -1718,6 +1784,8 @@ def spec_context(cfg, client, ref, project_ref=None):
         "comments_authoritative": True,
         "approved": approved,
         "approved_label": APPROVED_LABEL,
+        # PB-94: gates auto-cleared on this issue (empty → all gates manual).
+        "auto_gates": auto_gates,
         "priority": issue.get("priority"),
         "state": card.get("state"),
         "project": card["project"], "project_id": pid,
@@ -2175,11 +2243,13 @@ def create_project(cfg, client, name, shortcut=None):
 
 
 def seed_convention_labels(client, project_id):
-    """Ensure the CONVENTION_LABELS exist on `project_id`. Idempotent: existing
-    labels (fuzzy-matched by normalised name) are left untouched; only missing
-    ones are created, with their canonical color. Returns
-    {"created": [...names...], "existing": [...names...], "error": <str?>}.
-    Never raises — label seeding is best-effort and reported, not fatal."""
+    """Ensure pbrain's seed labels exist on `project_id`: the CONVENTION_LABELS
+    work types (PB-70), the plan-approved seam (PB-45), and the per-gate auto:*
+    clearances (PB-94). Idempotent: existing labels (fuzzy-matched by normalised
+    name) are left untouched; only missing ones are created, with their canonical
+    color. Returns {"created": [...names...], "existing": [...names...],
+    "error": <str?>}. Never raises — label seeding is best-effort and reported,
+    not fatal."""
     out = {"created": [], "existing": []}
     try:
         existing = client.list_labels(project_id)
@@ -2187,7 +2257,7 @@ def seed_convention_labels(client, project_id):
         out["error"] = str(e)
         return out
     by_norm = {_norm(l.get("name")): l for l in existing}
-    for spec in CONVENTION_LABELS:
+    for spec in _seed_label_specs():
         name = spec["name"]
         if _norm(name) in by_norm:
             out["existing"].append(name)

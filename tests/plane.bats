@@ -566,6 +566,10 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 names = {l["name"] for l in m.CONVENTION_LABELS}
 assert names == {"bug","feature","chore","docs"}, names   # canon = type set
+# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94).
+seed_names = {s["name"] for s in m._seed_label_specs()}
+assert {"bug","feature","chore","docs", m.APPROVED_LABEL} <= seed_names, seed_names
+assert {"auto:%s" % g for g in m.GATE_NAMES} <= seed_names, seed_names
 
 class FC:
     def __init__(self, existing): self.labels=list(existing); self.created=[]
@@ -574,10 +578,12 @@ class FC:
         rec={"id":"n%d"%len(self.created),"name":name,"color":color}
         self.created.append(name); self.labels.append(rec); return rec
 
-# Start with one already present, fuzzily ('Bug' vs 'bug') -> only 3 created.
+# Start with one already present, fuzzily ('Bug' vs 'bug') -> it is skipped; the rest of
+# the seed set (convention types minus bug + plan-approved + auto:* gates) is created.
 fc=FC([{"id":"l1","name":"Bug"}])
 r1=m.seed_convention_labels(fc,"p")
-assert sorted(r1["created"])==["chore","docs","feature"], r1
+expected_created = sorted((seed_names - {"bug"}))
+assert sorted(r1["created"])==expected_created, (r1, expected_created)
 assert r1["existing"]==["bug"], r1
 assert "error" not in r1, r1
 # colors are applied on create
@@ -586,7 +592,7 @@ assert any(l.get("color") for l in fc.labels if l["name"]=="feature"), fc.labels
 # Idempotent: a second pass creates nothing.
 r2=m.seed_convention_labels(fc,"p")
 assert r2["created"]==[], r2
-assert sorted(r2["existing"])==["bug","chore","docs","feature"], r2
+assert sorted(r2["existing"])==sorted(seed_names), r2
 
 # list_labels failure degrades to a reported error, never raises.
 class Boom:
@@ -1059,6 +1065,65 @@ m.cmd_projects(argparse.Namespace(sync=True))
 saved = json.load(open(m.config_path()))
 work = {p["id"]: p.get("work") for p in saved["projects"]}
 assert work.get("A") and work["A"]["path"] == workpath, work
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+# ===== PB-94: per-gate auto-execution labels =====================================
+
+@test "PB-94 seed set includes auto:* gate labels + plan-approved" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+names = [s["name"] for s in m._seed_label_specs()]
+for g in m.GATE_NAMES:
+    assert ("auto:%s" % g) in names, (g, names)
+assert m.APPROVED_LABEL in names, names
+# convention labels still present (not displaced)
+for c in ("bug", "feature", "chore", "docs"):
+    assert c in names, names
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 issue_gate_clearances maps auto:* labels → gate names; empty when absent" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# gate_map: gate name -> set of label ids
+gate_map = {"in-progress": {"L1"}, "finish": {"L2"}, "merge": {"L3"}}
+# an issue carrying L1 + L2 is cleared for in-progress + finish, in GATE_NAMES order
+issue = {"labels": ["L1", "L2", "Lother"]}
+assert m.issue_gate_clearances(issue, gate_map) == ["in-progress", "finish"], \
+    m.issue_gate_clearances(issue, gate_map)
+# no auto label → empty (every gate manual)
+assert m.issue_gate_clearances({"labels": ["Lz"]}, gate_map) == []
+# empty gate_map (labels unlistable) → degrade to all-manual
+assert m.issue_gate_clearances(issue, {}) == []
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 gate_label_map degrades to empty when labels can't be listed" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class Boom:
+    def list_labels(self, pid): raise RuntimeError("network down")
+assert m.gate_label_map(Boom(), "A") == {}, "must not raise; returns {}"
+# and a matching client surfaces the auto:* ids by gate
+class Good:
+    def list_labels(self, pid):
+        return [{"id":"i1","name":"auto:merge"}, {"id":"i2","name":"bug"},
+                {"id":"i3","name":"auto:plan"}]
+gm = m.gate_label_map(Good(), "A")
+assert gm["merge"] == {"i1"} and gm["plan"] == {"i3"} and gm["finish"] == set(), gm
 print("ok")
 PYEOF
   [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]

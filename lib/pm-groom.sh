@@ -36,6 +36,14 @@ pmg_report_file() { printf '%s\n' "$(pmg_report_dir)/${1:?date}.md"; }
 pmg_log_file()    { printf '%s\n' "$PMG_CONFIG_DIR/pm-groom.log"; }
 pmg_plist()       { printf '%s\n' "$HOME/Library/LaunchAgents/$PMG_LABEL.plist"; }
 
+# PB-94: the grooming-data artifact in the VAULT (iCloud-synced, reviewable on the
+# phone in the morning) — distinct from the disposable config-cache report above.
+# Holds the day's triage info AND the auto-exec queue + auto-work outcomes that the
+# execute loop appends. $VAULT_DIR is resolved by lib/vault.sh (sourced before this
+# file); PBRAIN_GROOM_DATA_DIR overrides for tests.
+pmg_data_dir()  { printf '%s\n' "${PBRAIN_GROOM_DATA_DIR:-${VAULT_DIR:-$HOME/pbrain-vault}/agent-work/daily-grooming}"; }
+pmg_data_file() { printf '%s\n' "$(pmg_data_dir)/${1:?date}.md"; }
+
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
 # reliable). Resolving it lazily inside a function is unsafe: by call time
 # BASH_SOURCE may be empty/relative, pointing pmg_plane_py at the wrong path.
@@ -141,6 +149,97 @@ if errs:
 with open(out, "w") as f:
     f.write("\n".join(lines).rstrip() + "\n")
 PYEOF
+
+  # PB-94: also write the vault-synced grooming-data artifact (triage info + the
+  # auto-exec queue). The execute loop appends per-issue auto-work outcomes under
+  # "## Auto-work" when it drives the queue. Best-effort: a vault-write failure
+  # must not fail the (headless) groom run, so it's wrapped and never fatal.
+  local data_out; data_out="$(pmg_data_file "$date")"
+  mkdir -p "$(pmg_data_dir)" 2>/dev/null || true
+  PMG_JSON="$json" PMG_DATE="$date" PMG_DATA_OUT="$data_out" python3 - <<'PYEOF' 2>>"$logf" || true
+import json, os
+data = json.loads(os.environ["PMG_JSON"])
+date = os.environ["PMG_DATE"]
+out = os.environ["PMG_DATA_OUT"]
+applied = data.get("applied")
+# Preserve an existing "## Auto-work" section (the execute loop writes into it as it
+# parks issues), so a re-run of the scan doesn't clobber the day's recorded outcomes.
+existing_autowork = ""
+if os.path.exists(out):
+    try:
+        prev = open(out).read()
+        idx = prev.find("\n## Auto-work")
+        if idx != -1:
+            existing_autowork = prev[idx:].rstrip() + "\n"
+    except Exception:
+        existing_autowork = ""
+L = []
+L.append("---")
+L.append("type: daily-grooming")
+L.append("date: %s" % date)
+L.append("source: project-manager groom")
+L.append("---")
+L.append("")
+L.append("# Grooming — %s" % date)
+L.append("")
+L.append("_Mechanical triage (%s) + the auto-exec queue. Review on waking, then run"
+         " `/plan-my-work` to drive or resume._" % ("applied" if applied else "dry-run"))
+L.append("")
+# Triage info.
+L.append("## Triaged backlog → todo")
+L.append("")
+triaged = data.get("triaged", [])
+if triaged:
+    for t in triaged:
+        mark = ""
+        if applied:
+            mark = " ✅" if t.get("ok") else " ⚠️ %s" % t.get("error", "failed")
+        ag = t.get("auto_gates") or []
+        tag = (" · auto:%s" % ",".join(ag)) if ag else ""
+        L.append("- **%s** %s%s%s" % (t.get("id"), t.get("title", ""), mark, tag))
+else:
+    L.append("_None — no well-formed backlog issues to promote._")
+L.append("")
+nr = data.get("needs_review", [])
+L.append("## Needs review (thin — groom first, not auto-exec eligible)")
+L.append("")
+if nr:
+    for r in nr:
+        L.append("- **%s** %s [%s] — %s" % (
+            r.get("id"), r.get("title", ""), r.get("group", ""),
+            ", ".join(r.get("flags", []))))
+else:
+    L.append("_None — every top-level issue is well-formed._")
+L.append("")
+# The auto-exec queue: well-formed issues carrying auto:<gate> labels, with the
+# gates that will auto-advance. The execute loop drives these and parks each at its
+# first manual (non-auto) gate.
+ax = data.get("auto_exec", [])
+L.append("## Auto-exec queue (%d)" % len(ax))
+L.append("")
+if ax:
+    L.append("| Issue | Title | Auto-cleared gates |")
+    L.append("|---|---|---|")
+    for r in ax:
+        L.append("| %s | %s | %s |" % (
+            r.get("id"), r.get("title", ""), ", ".join(r.get("auto_gates", []))))
+else:
+    L.append("_None — no triaged issue carries an `auto:<gate>` label._")
+L.append("")
+if existing_autowork:
+    L.append(existing_autowork.rstrip())
+    L.append("")
+else:
+    # Seed an empty Auto-work section the execute loop appends to.
+    L.append("## Auto-work")
+    L.append("")
+    L.append("_Empty until `/plan-my-work` drives the queue — each issue records the"
+             " gates it auto-advanced and the manual gate it parked at._")
+    L.append("")
+with open(out, "w") as f:
+    f.write("\n".join(L).rstrip() + "\n")
+PYEOF
+
   pmg_prune "$(pmg_report_dir)" "${PBRAIN_PMG_KEEP:-14}"
   echo "$out"
   return 0
@@ -310,6 +409,7 @@ pmg_schedule_install() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PBRAIN_PMG_HEADLESS</key><string>1</string>
   </dict>"
   # The scheduled run APPLIES the conservative triage (--apply) for the named
   # projects; thin issues are still only queued, never edited.
