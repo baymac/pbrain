@@ -217,6 +217,22 @@ EOF
   [[ "$output" != *"follow it silently"* ]]
 }
 
+@test "PB-59: SESSION instructions open with a friendly recap and forbid internal jargon in user-facing text" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  # A positive instruction to lead with a warm, human key-facts recap exists.
+  [[ "$output" == *"OPEN WITH A FRIENDLY RECAP"* ]]
+  [[ "$output" == *"plain English"* ]]
+  # An explicit anti-jargon rule: internal signal names never reach the user.
+  [[ "$output" == *"NO INTERNAL JARGON IN USER-FACING TEXT"* ]]
+  [[ "$output" == *"weekly_review_signal"* ]]   # named as a thing NOT to speak
+  # The raw sleep sentinel is treated as an internal marker, never echoed.
+  [[ "$output" == *"an internal marker — never show it"* ]]
+}
+
 @test "fresh setup block carries the typical_day + variation_rules template" {
   run PMD
   [ "$status" -eq 0 ]
