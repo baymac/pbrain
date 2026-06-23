@@ -106,6 +106,30 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *"PM_ROUTE"* ]]
 }
 
+@test "bug verb (PB-67) is recognized, Plane-gated when unset, and Usage-guards a missing symptom" {
+  # Recognized → config-gated, not handed to the NL router.
+  run PM bug "the gym reminder fires late"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_NOT_CONFIGURED"* ]]
+  [[ "$output" != *"PM_ROUTE"* ]]
+  # With Plane configured but no symptom → Usage guard, non-zero, no trace.
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM bug
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage:"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
+@test "bug (PB-67) emits PM_BUG + the triage walk, degrades on unreachable Plane (no trace)" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM bug "reminder fires late" --project pid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_BUG"* ]]
+  [[ "$output" == *"TRIAGE-READY BUG"* ]]   # the walk template rendered
+  [[ "$output" != *"PM_ROUTE"* ]]
+  [[ "$output" != *"Traceback"* ]]
+}
+
 # --- ops: token emission + graceful degrade ---------------------------------
 @test "projects prints PM_PROJECTS and the synthesized registry" {
   PM config --api-key SECRET --workspace ws --project pid >/dev/null

@@ -511,6 +511,49 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "bug_context resolves project, returns triage context + dedupe, branches on need_project (PB-67); never writes" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+assert m.SEVERITY_TO_PRIORITY["crash"]=="urgent" and m.SEVERITY_TO_PRIORITY["polish"]=="low"
+
+class C:
+    def __init__(self): self.writes=[]
+    def list_labels(self,pid): return [{"id":"b","name":"bug"},{"id":"f","name":"feature"}]
+    def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
+                                       {"id":"sd","name":"Done","group":"completed"}]
+    def list_projects(self): return [{"id":"P","identifier":"PB"}]
+    def list_work_items(self,pid):
+        return [{"sequence_id":98,"name":"old bug","labels":[{"id":"b"}],"state":"s1"},
+                {"sequence_id":50,"name":"closed bug","labels":[{"id":"b"}],"state":"sd"},
+                {"sequence_id":51,"name":"not a bug","labels":[{"id":"f"}],"state":"s1"}]
+    def create_work_item(self,*a,**k): self.writes.append("create"); raise AssertionError("wrote!")
+    def update_work_item(self,*a,**k): self.writes.append("update"); raise AssertionError("wrote!")
+    def create_label(self,*a,**k): self.writes.append("label"); raise AssertionError("wrote!")
+
+cfg={"project":"P","projects":[{"id":"P","name":"pb","shortcut":"pb"}]}
+c=C()
+r=m.bug_context(cfg,c,"reminder fires late")
+assert r["status"]=="ok", r
+assert r["project_id"]=="P" and r["has_bug_label"] is True, r
+assert r["convention_labels"]==["bug","feature","chore","docs"], r
+ids=[b["id"] for b in r["recent_open_bugs"]]      # only the OPEN bug, PB-98
+assert ids==["PB-98"], r["recent_open_bugs"]
+assert c.writes==[], "bug_context must not write"
+
+cfg2={"projects":[{"id":"P","name":"pb","shortcut":"pb"},{"id":"Q","name":"yt","shortcut":"yt"}]}
+r2=m.bug_context(cfg2,C(),"x")
+assert r2["status"]=="need_project" and len(r2["projects"])==2, r2
+
+r3=m.bug_context(cfg2,C(),"x",project_ref="nope")
+assert r3["status"]=="unknown_project", r3
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "seed_convention_labels creates only missing convention labels, idempotent, fuzzy-skips existing (PB-70)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

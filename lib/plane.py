@@ -83,6 +83,17 @@ CONVENTION_LABELS = [
     {"name": "docs",    "color": "#2563eb"},  # blue
 ]
 
+# Triage convention (PB-67): map a bug's severity → Plane priority. The `bug`
+# filing walk asks for severity in plain terms and sets the issue priority from
+# this table, so triage is consistent regardless of who (or which agent) files it.
+SEVERITY_TO_PRIORITY = {
+    "crash":   "urgent",  # crash / data loss / blocks the daily loop
+    "blocker": "urgent",
+    "high":    "high",    # wrong output, but a workaround exists
+    "minor":   "medium",  # minor / cosmetic / a nudge mis-fires
+    "polish":  "low",     # nice-to-have / polish
+}
+
 
 def strip_html(html):
     """Crude HTML → plain text for comment bodies (PB-61) when the API gives no
@@ -1678,6 +1689,83 @@ def spec_context(cfg, client, ref, project_ref=None):
     }
 
 
+def bug_context(cfg, client, symptom, project_ref=None):
+    """Read-only context for FILING a bug from a free-text symptom (PB-67). Unlike
+    explode/spec (which resolve an EXISTING issue), this resolves the TARGET PROJECT
+    and gathers enough for the Socratic triage walk to flesh the symptom into a
+    triage-ready report, then create it. Never writes.
+
+    Resolves the project from project_ref, else the lone/configured project. When
+    the workspace has several projects and none was named, returns
+    status="need_project" with the registry so the walk can ask which one.
+    On status="ok" returns the symptom, the project's existing labels (so the walk
+    proposes from what exists and knows whether `bug` is present), and recent OPEN
+    bugs (so the walk can dedupe against an already-filed bug)."""
+    # Resolve project (mirrors _one_project, but returns a status instead of raising
+    # when ambiguous — the walk handles disambiguation conversationally).
+    pid = None
+    if project_ref:
+        pid = resolve_project_ref(cfg, project_ref)
+        if not pid:
+            return {"status": "unknown_project", "project_ref": project_ref,
+                    "projects": normalize_registry(cfg)}
+    elif cfg.get("project"):
+        pid = cfg["project"]
+    else:
+        reg = normalize_registry(cfg)
+        if len(reg) == 1:
+            pid = reg[0]["id"]
+        else:
+            return {"status": "need_project", "symptom": symptom, "projects": reg}
+
+    try:
+        labels = [l.get("name") for l in client.list_labels(pid) if l.get("name")]
+    except PlaneError:
+        labels = []
+
+    # Recent OPEN bugs in this project, for dedupe. Best-effort: a `bug` label +
+    # an open state group. Degrades to [] on any read failure — never blocks filing.
+    recent_bugs = []
+    try:
+        bug_label_ids = {l.get("id") for l in client.list_labels(pid)
+                         if _norm(l.get("name")) == "bug"}
+        if bug_label_ids:
+            states_by_id = {s.get("id"): s for s in client.list_states(pid)}
+            ident = ""
+            try:
+                ident = next((p.get("identifier") or "" for p in client.list_projects()
+                              if p.get("id") == pid), "")
+            except PlaneError:
+                ident = ""
+            for w in client.list_work_items(pid):
+                lab_ids = {x.get("id") if isinstance(x, dict) else x
+                           for x in (w.get("labels") or [])}
+                if not (lab_ids & bug_label_ids):
+                    continue
+                # Dedupe wants every LIVE bug, so include backlog too — exclude
+                # only resolved ones (done/cancelled).
+                if state_group(w, states_by_id) in ("completed", "cancelled"):
+                    continue
+                seq = w.get("sequence_id")
+                recent_bugs.append({
+                    "id": ("%s-%s" % (ident, seq)) if ident and seq is not None else str(seq or ""),
+                    "title": w.get("name", ""),
+                })
+    except PlaneError:
+        recent_bugs = []
+
+    return {
+        "status": "ok",
+        "symptom": symptom,
+        "project": project_label(cfg, pid), "project_id": pid,
+        "existing_labels": labels,
+        "has_bug_label": any(_norm(n) == "bug" for n in labels),
+        "convention_labels": [l["name"] for l in CONVENTION_LABELS],
+        "recent_open_bugs": recent_bugs,
+        "severity_priority": SEVERITY_TO_PRIORITY,
+    }
+
+
 def resolve_label_refs(client, project_id, names, allow_create=True, guard=None, existing=None):
     """Map label names → label UUIDs for a project. Reuse existing labels
     (fuzzy-deduped by normalised name); create the rest when `allow_create` and
@@ -2476,6 +2564,14 @@ def cmd_spec(args):
     return 0
 
 
+def cmd_bug(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(bug_context(cfg, client, args.symptom, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_update(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -2781,6 +2877,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_spec)
+
+    sp = sub.add_parser("bug")  # PB-67: file a triage-ready bug from a free-text symptom
+    sp.add_argument("symptom", help="the bug as you hit it (free text); the walk fleshes it out")
+    sp.add_argument("--project", help="target project (uuid|name|shortcut; default: lone/configured)")
+    sp.set_defaults(func=cmd_bug)
 
     sp = sub.add_parser("update")
     sp.add_argument("--edits", required=True, help="JSON [{tie,field,value}] (any field family)")

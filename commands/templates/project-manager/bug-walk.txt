@@ -1,0 +1,79 @@
+---
+INSTRUCTIONS — file a TRIAGE-READY BUG. PM_BUG above is a JSON object: a free-text
+`symptom` the user wants filed as a bug, plus the resolved project and context.
+This is a Socratic walk in the spirit of /discuss and `explode` — ONE question at
+a time, pull on the thread the user gives you, don't widen, don't pre-solution.
+You draw out a complete bug report together, then CREATE it in Plane. Read-only
+until the user says go.
+
+BRANCH ON `status` FIRST
+  • "need_project"    → several projects exist and none was named. Show the
+                        `projects` (name + shortcut), ask which one, then re-run
+                        ${PM_SELF} bug "<symptom>" --project <pick> and continue.
+  • "unknown_project" → the named project_ref matched nothing. Say so, show
+                        `projects`, ask which, re-run. Don't guess.
+  • "ok"              → proceed. You have: symptom, project, project_id,
+                        existing_labels[], has_bug_label, convention_labels[],
+                        recent_open_bugs[] (live bugs for dedupe),
+                        severity_priority{} (the triage map).
+
+STEP 0 — READ CONTEXT SILENTLY, CHECK FOR A DUPLICATE
+  Absorb the symptom. Scan recent_open_bugs: if one clearly describes the SAME
+  bug, surface it in one line ("PB-NN already tracks this — add a comment there
+  instead of filing a new one?") and let the user choose. Only file fresh if it's
+  genuinely new. Don't dump the JSON back at the user — one short line naming the
+  symptom, then the first question.
+
+STEP 1 — THE SOCRATIC TRIAGE INTERVIEW (one question at a time)
+  Mechanism:
+    • If AskUserQuestion is available, ask ONE question per call with 2–4 concrete
+      `options` drawn from THIS symptom (the tool auto-adds "Other" — never add
+      your own). multiSelect only when answers genuinely co-apply.
+    • If not (e.g. Codex CLI), fall back to plain one-at-a-time questions.
+  Rules (like /discuss): each question follows from the last answer. No advice, no
+  reflexive validation. Don't ask what the symptom already tells you.
+
+  The thread to pull, roughly in order — but follow the user, not the list:
+    a) REPRO — what are the exact steps that trigger it? (the more concrete the
+       better; a command, a sequence, a file/state).
+    b) EXPECTED vs ACTUAL — what should happen, and what happens instead?
+    c) SCOPE / BLAST RADIUS — how often, who/what is affected, is data or a live
+       integration at risk, is there a workaround?
+    d) SEVERITY — land on one severity bucket from severity_priority (keys:
+       crash/blocker = urgent, high = wrong-output-with-workaround, minor =
+       cosmetic/nudge-misfire, polish = nice-to-have). The bucket SETS priority.
+  Stop when the report is complete — check like /discuss: "Does that capture it,
+  or is there a piece we're missing?"
+
+STEP 2 — SYNTHESIZE & CONFIRM (no writes yet)
+  Replay, tight and in the user's words:
+    • a TITLE (one crisp line — the symptom, not a restatement of the steps), and
+    • the BODY, in this exact triage-ready shape:
+        ## Bug
+        <one-paragraph what's wrong>
+        ## Repro
+        1. … 2. … 3. …
+        ## Expected
+        <…>
+        ## Actual
+        <…>
+        ## Severity
+        <bucket> — <why> (workaround: <yes/no + what>)
+    • the PRIORITY derived from severity (via severity_priority), and
+    • the LABEL `bug` (plus an optional area label only if one clearly applies and
+      already exists in existing_labels — don't invent taxonomy here).
+  Get an explicit yes before writing anything. Fold in tweaks and re-confirm.
+
+STEP 3 — APPLY (create, then enrich). Two calls — the create returns the new tie:
+  1) ${PM_SELF} issue --project <project_id|shortcut> --title "<title>" --priority <p>
+  2) on the returned <tie>, set the structured body + the bug label in one batch:
+     ${PM_SELF} update --edits '[
+       {"tie":"<tie>","field":"description","value":"<the ## Bug … body, HTML/markdown ok>"},
+       {"tie":"<tie>","field":"tag","value":"bug"}]'
+  (Body goes in the follow-up, not the create, so a long report isn't lost. The
+  `bug` label already exists in every project via PB-70's seeding; tagging it is
+  idempotent.)
+
+STEP 4 — REPORT
+  One compact line: new PB-id · priority · labels · link. Relay any PLANE_ERROR
+  plainly; never fake a created issue.
