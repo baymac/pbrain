@@ -116,12 +116,29 @@ _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
-pbrain_emit_prefs "habits" "${PBRAIN_HABITS_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_HABIT_TRACK_DIR:-$VAULT_DIR/life/habit-tracking}")" habits-profile)}" || true
+SUB="${1:-}"
+
+# PB-95 fix: /habits doubles as a programmatic callee — other commands invoke
+# these subcommands and parse stdout as an EXACT value (a score, a REALIGNED/
+# SKIPPED line, a NOT_FOUND token). The prefs preamble (incl. the always-on CHAT
+# OUTPUT HYGIENE banner) is interactive chrome that would pollute that machine-
+# readable output, so suppress it for those subcommands. User-facing subcommands
+# (list/add/edit/show/link/…) still get the preamble.
+_habits_machine_sub() {
+  case "$1" in
+    rollup|scores|score|mark|reminder|reminders-pending|reminders-ensure|reminders-sync|\
+reminders-reschedule|reminders-realign-plan|reminders-cancel|fitness-reconcile|autostatus)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if ! _habits_machine_sub "$SUB"; then
+  pbrain_emit_prefs "habits" "${PBRAIN_HABITS_PROFILE_FILE:-$(pbrain_profile_latest_any "$(pbrain_profile_store "${PBRAIN_HABIT_TRACK_DIR:-$VAULT_DIR/life/habit-tracking}")" habits-profile)}" || true
+fi
 pbrain_db_init || true
 
 PROFILE_FILE="$(pbrain_habits_profile_file)"
 TODAY="$(date +%Y-%m-%d)"
-SUB="${1:-}"
 
 # Default scored habits — each seeds ONLY when its owning command is enabled,
 # where "enabled" = that command's committed profile exists (the laptop tracker

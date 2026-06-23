@@ -632,6 +632,17 @@ PY
   [[ "$output" == *"HABIT EXTRACTION (plan-my-day)"* && "$output" == *"Brush at night"* ]]
 }
 
+@test "PB-75: emit_habits_scan tells the model not to narrate the mechanism" {
+  _write_profile
+  run pbrain_emit_habits_scan plan-my-day
+  [ "$status" -eq 0 ]
+  # The scan block must explicitly forbid narrating the scan/realign/sync plumbing
+  # and echoing the deterministic command output back to the user.
+  [[ "$output" == *"do NOT"* && "$output" == *"NARRATE"* ]]
+  [[ "$output" == *"REALIGNED <n> SKIPPED <n>"* ]]
+  [[ "$output" == *"quiet bookkeeping"* ]]
+}
+
 @test "emit_habits_scan lists today's existing vault entries to scan" {
   _write_profile
   local today; today="$(date +%Y-%m-%d)"

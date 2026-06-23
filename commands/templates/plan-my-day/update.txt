@@ -43,6 +43,9 @@ Notes:
 - For end-of-day reconciliation (actual vs plan, Plane sync, scoring), point them to
   /end-of-day — that is NOT this command's job.
 - Habit marking + reminder alignment run automatically at the end of this session:
-  if you track habits, a HABIT SCAN block appears below — follow it silently. No
-  block = no habits set up (nothing to do); a "NOTE: habit reconcile unavailable"
-  block means the helper failed to load — flag it so it can be fixed.
+  if you track habits, a HABIT SCAN block appears below — follow it as quiet
+  bookkeeping. Do NOT narrate the scan/realign/sync mechanism or echo its command
+  output ("REALIGNED <n> SKIPPED <n>", "SYNCED …"); surface only a habit that
+  actually got marked. No block = no habits set up (nothing to do); a "NOTE: habit
+  reconcile unavailable" block means the helper failed to load — flag it so it can
+  be fixed.

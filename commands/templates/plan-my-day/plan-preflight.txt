@@ -12,6 +12,13 @@ Signals handed to you above:
   - gratitude_today_exists: yes | no
   - continue_cmd: the exact command to re-run to load the full plan
 
+NO NARRATING INTERNAL LOGIC (PB-75): each nudge below is gated on one of those
+precomputed signals. Read the signal and act, but do NOT narrate the check or
+the skip — never say things like "gratitude_today_exists is yes so I'm skipping"
+or "diet_today_exists is no so I'll nudge". A skipped nudge produces NO output at
+all; a fired nudge produces only its one user-facing line. State only the nudge,
+never the reasoning that led to it.
+
 1. FITNESS NUDGE (soft, non-blocking — like the daily-journal nudge):
    PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
    (global or per-command) says to skip the fitness-journal nudge, SKIP it. A

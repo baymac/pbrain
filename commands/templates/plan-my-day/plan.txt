@@ -4,6 +4,14 @@ wind-down, bed, habit reminders) + EMPTY work blocks. You do NOT assign tasks �
 /plan-my-work fills the blocks with real tasks from Plane afterward.
 
 Step 0 — Preflight checks (do these silently, then surface in one short message):
+  NO NARRATING INTERNAL LOGIC: every check below is gated on a precomputed signal
+  in the header above (e.g. `weekly_review_signal`, `month_boundary_signal`,
+  `habits_setup_needed`, `laptop_tracking_state`, the USER PREFERENCES block).
+  Read the signal and act, but do NOT narrate the check or the skip — never say
+  things like "weekly_review_signal is none so I'm skipping" or "habits aren't
+  set up so I'll nudge". A skipped nudge produces NO output at all; a fired nudge
+  produces only the one user-facing line described below. State only the nudge
+  itself, never the reasoning that led to it.
   - FITNESS / DIET NUDGES — ALREADY SURFACED (PB-58): the fitness-journal and
     diet-journal nudges were handled in the cheap PREFLIGHT pass before this
     context loaded (you only reach this SESSION block after the user chose to
@@ -380,10 +388,13 @@ Step 3 — Show the full **Today at a glance** table and ask for confirmation:
 Step 4 — After writing, confirm: "Saved → $OUT_FILE" and nudge once: "Blocks laid
   out — run /plan-my-work to fill today's task ledger from Plane."
   Habit marking + reminder alignment run AUTOMATICALLY at the end of this session:
-  if you track habits, a HABIT SCAN block appears below — follow it silently. No
-  block = no habits set up yet (nothing to do). A block reading "NOTE: habit
-  reconcile unavailable" means the habit helper failed to load — flag it so it can
-  be fixed. Apart from the one explicit fitness-reminder set in 4a below, do NOT
+  if you track habits, a HABIT SCAN block appears below — follow it as quiet
+  bookkeeping. Do NOT narrate the scan/realign/sync mechanism (no "scanning
+  today's entries", no "realigning reminders", no echoing "REALIGNED <n> SKIPPED
+  <n>" / "SYNCED …"); surface only a habit that actually got marked. No block =
+  no habits set up yet (nothing to do). A block reading "NOTE: habit reconcile
+  unavailable" means the habit helper failed to load — flag it so it can be
+  fixed. Apart from the one explicit fitness-reminder set in 4a below, do NOT
   reschedule other habit reminders or check habits off by hand here.
 
   4a — FITNESS REMINDER (set to the confirmed time) [PB-49]. If 1c.5 confirmed a
