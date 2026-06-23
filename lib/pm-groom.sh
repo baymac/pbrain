@@ -186,6 +186,113 @@ pmg_status() {
   fi
 }
 
+# pmg_doctor [--apply] — diagnose whether the daily groom LaunchAgent will fire
+# reliably on AC power, and (optionally, opt-in) apply the one fix that matters.
+#
+# Why this exists (PB-79): the groom agent uses StartCalendarInterval at 06:40.
+# launchd DOES run a missed StartCalendarInterval job on the next wake — but only
+# while the Mac can wake/run work during AC sleep, which is gated by Power Nap.
+# With Power Nap off and the lid closed overnight on AC, the 06:40 fire can be
+# skipped until the user opens the laptop. So the one knob that makes overnight
+# firing reliable is `pmset -c powernap 1`. Everything else here is informational.
+#
+# Read-only by default: it prints a verdict + the exact command to fix it. With
+# --apply it runs `sudo pmset -c powernap 1` (which prompts for a password). It
+# NEVER writes any setting unless --apply is passed.
+#
+# Verdict policy:
+#   FAIL  — agent not installed/loaded (groom won't fire at all → `groom enable`)
+#   WARN  — installed, but Power Nap is off on AC (catch-up-on-wake still works,
+#           but overnight firing isn't guaranteed → enable Power Nap)
+#   OK    — installed + Power Nap on (AC)
+#   UNKNOWN — pmset unavailable / not macOS (can't assess power policy)
+# Bash-3.2-safe; never exits non-zero (call site adds `|| true`).
+pmg_doctor() {
+  local do_apply=no
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply) do_apply=yes; shift;;
+      *) shift;;
+    esac
+  done
+
+  echo "PMG_DOCTOR"
+  echo "label: $PMG_LABEL"
+
+  # --- 1. Is the agent installed + loaded? -------------------------------
+  local plist sched=no loaded=no
+  plist="$(pmg_plist)"
+  [[ -f "$plist" ]] && sched=yes
+  if pbrain_launchagent_loaded "$PMG_LABEL" 2>/dev/null; then loaded=yes; fi
+  echo "scheduled: $sched"
+  echo "loaded: $loaded"
+
+  # --- 2. Power source + AC Power Nap policy (read-only) -----------------
+  local power_source="unknown" powernap_ac="unknown" sleep_ac="unknown"
+  if command -v pmset >/dev/null 2>&1; then
+    # Current power source: "AC" or "Battery". `pmset -g batt` line 1 reads e.g.
+    # "Now drawing from 'AC Power'" or "Now drawing from 'Battery Power'".
+    case "$(pmset -g batt 2>/dev/null | head -1)" in
+      *"AC Power"*)  power_source="AC";;
+      *Battery*)     power_source="Battery";;
+    esac
+    # Parse the AC block of `pmset -g custom` for powernap + sleep.
+    # Format: two sections headed "AC Power:" and "Battery Power:", each with
+    # indented "key value" lines. We read only the AC section.
+    local custom; custom="$(pmset -g custom 2>/dev/null || true)"
+    if [[ -n "$custom" ]]; then
+      local parsed
+      parsed="$(printf '%s\n' "$custom" | awk '
+        /^AC Power:/      { sect="ac"; next }
+        /^Battery Power:/ { sect="batt"; next }
+        sect=="ac" && $1=="powernap" { pn=$2 }
+        sect=="ac" && $1=="sleep"    { sl=$2 }
+        END { printf "%s|%s", (pn==""?"unknown":pn), (sl==""?"unknown":sl) }
+      ')"
+      powernap_ac="${parsed%%|*}"
+      sleep_ac="${parsed##*|}"
+    fi
+  fi
+  echo "power_source: $power_source"
+  echo "powernap_ac: $powernap_ac"
+  echo "sleep_ac: $sleep_ac"
+
+  # --- 3. Verdict --------------------------------------------------------
+  local verdict fix=""
+  if [[ "$sched" != yes || "$loaded" != yes ]]; then
+    verdict="FAIL"
+    fix="groom isn't scheduled — run: /project-manager groom enable"
+  elif [[ "$powernap_ac" == "unknown" ]]; then
+    verdict="UNKNOWN"
+    fix="couldn't read AC power policy (pmset unavailable) — can't confirm overnight firing"
+  elif [[ "$powernap_ac" == "1" ]]; then
+    verdict="OK"
+  else
+    verdict="WARN"
+    fix="Power Nap is off on AC, so the 06:40 groom may not fire during overnight sleep until you open the lid. Enable it: sudo pmset -c powernap 1  (or System Settings > Battery > Options > Power Nap). Re-run with --apply to do it now."
+  fi
+  echo "verdict: $verdict"
+  [[ -n "$fix" ]] && echo "fix: $fix"
+
+  # --- 4. Opt-in apply (the only setting we ever write) ------------------
+  # The privilege wrapper is overridable (PBRAIN_PMG_SUDO) so tests can stub it;
+  # in real use it's `sudo`, which prompts for a password.
+  local sudo_cmd="${PBRAIN_PMG_SUDO:-sudo}"
+  if [[ "$do_apply" == yes ]]; then
+    if [[ "$verdict" == "WARN" ]] && command -v pmset >/dev/null 2>&1; then
+      echo "applying: $sudo_cmd pmset -c powernap 1"
+      if $sudo_cmd pmset -c powernap 1 2>/dev/null; then
+        echo "applied: powernap=1 (AC) — re-run 'groom doctor' to confirm"
+      else
+        echo "apply_failed: could not set powernap (sudo declined or pmset error)"
+      fi
+    else
+      echo "apply_skipped: nothing to apply (verdict=$verdict)"
+    fi
+  fi
+  return 0
+}
+
 # pmg_schedule_install [HH:MM] [csv-projects] — daily LaunchAgent that runs the
 # groom scan. Default 06:40 (a few hours before a typical first work block).
 pmg_schedule_install() {

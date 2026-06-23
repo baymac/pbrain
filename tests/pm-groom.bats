@@ -317,6 +317,63 @@ PYFAKE
   [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_DISABLE* ]] && [ ! -f "$plist" ]
 }
 
+# --- PB-79: groom doctor (macOS power-settings diagnostic) -------------------
+
+@test "groom doctor FAILs when the agent isn't scheduled (clean machine)" {
+  run PM groom doctor
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *PMG_DOCTOR* ]] \
+    && [[ "$output" == *"scheduled: no"* ]] \
+    && [[ "$output" == *"verdict: FAIL"* ]] \
+    && [[ "$output" == *"groom enable"* ]]
+}
+
+@test "groom doctor reports UNKNOWN when pmset is unavailable" {
+  # Schedule installed + loaded so we get past the FAIL gate.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB/launchctl"; chmod +x "$STUB/launchctl"
+  PM groom enable --time 06:40 >/dev/null
+  # Build a PATH that has the core tools the command needs (bash, awk, python3…)
+  # but NO pmset, so `command -v pmset` fails → the UNKNOWN power-policy path.
+  NOPM="$TMP/nopmset"; mkdir -p "$NOPM"
+  for t in bash sh env awk sed grep cat head python3 mktemp dirname basename rm mkdir chmod date printf; do
+    src="$(command -v "$t" 2>/dev/null || true)"; [[ -n "$src" ]] && ln -sf "$src" "$NOPM/$t"
+  done
+  run env PATH="$STUB:$NOPM" bash "$REPO_ROOT/commands/project-manager.sh" groom doctor
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *PMG_DOCTOR* ]] \
+    && [[ "$output" == *"powernap_ac: unknown"* ]] \
+    && [[ "$output" == *"verdict: UNKNOWN"* ]]
+}
+
+@test "groom doctor WARNs when Power Nap is off on AC, and --apply runs pmset" {
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB/launchctl"; chmod +x "$STUB/launchctl"
+  PM groom enable --time 06:40 >/dev/null
+  # Stub pmset: -g custom reports powernap 0 on AC; -c powernap 1 records a call.
+  cat > "$STUB/pmset" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "-g custom")
+    printf 'AC Power:\n powernap 0\n sleep 10\nBattery Power:\n powernap 0\n sleep 5\n' ;;
+  "-g batt")  printf "Now drawing from 'AC Power'\n" ;;
+  "-c powernap 1") echo applied > "$TMP/pmset-applied" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUB/pmset"
+  run PM groom doctor
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"powernap_ac: 0"* ]] \
+    && [[ "$output" == *"verdict: WARN"* ]]
+  # --apply opts into the fix: the stubbed `pmset -c powernap 1` must be called.
+  # PBRAIN_PMG_SUDO=env makes the privilege wrapper a no-op passthrough so the
+  # stubbed pmset (on PATH) runs without a real sudo prompt.
+  run env PATH="$STUB:$PATH" PBRAIN_PMG_SUDO=env \
+    bash "$REPO_ROOT/commands/project-manager.sh" groom doctor --apply
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"applying: env pmset -c powernap 1"* ]] \
+    && [ -f "$TMP/pmset-applied" ]
+}
+
 @test "groom rejects an unknown action" {
   run PM groom frobnicate
   [ "$status" -ne 0 ] && [[ "$output" == *Usage* ]]
