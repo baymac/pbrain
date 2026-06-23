@@ -107,6 +107,20 @@ case "${1:-}" in
   plan|update) MODE="$1" ;;
 esac
 
+# PB-58: staged context loading. The PLAN path is the expensive one (~66KB /
+# ~27k tokens of profile + 3-day digest + carry-forward + calendar + habits
+# rollup/tracker + sleep + diet). On a bare/`plan` invocation we first do a
+# CHEAP preflight pass that surfaces only the fitness/diet nudges + a continue
+# gate, and `exit` BEFORE any heavy work runs. The continue command re-invokes
+# the script with `--continue`, which skips the preflight and emits the full
+# PLAN_MY_DAY_SESSION. Order-independent so `plan --continue` and a bare
+# `--continue` both unlock the heavy path. (The auto-skip case — nothing to
+# nudge — sets this internally so the gate is invisible when both are logged.)
+PLAN_CONTINUE=no
+for _arg in "$@"; do
+  if [[ "$_arg" == "--continue" ]]; then PLAN_CONTINUE=yes; fi
+done
+
 # Habit reconcile call site, shared by the update and plan paths. Wrapped so an
 # UNLOADED scan helper surfaces LOUDLY as a NOTE block instead of vanishing behind
 # `|| true`. The templates promise "a HABIT SCAN block appears below"; if habits.sh
@@ -500,6 +514,42 @@ fi
 # ---------------------------------------------------------------------------
 FITNESS_TODAY="$(cat "$FITNESS_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 DAILY_TODAY="$(cat "$DAILY_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
+
+# PB-58: PREFLIGHT (fast) pass. These flags are CHEAP (file reads + existence
+# tests, all already done above) — everything below this block is the heavy
+# ~27k-token context build. On the first (no-`--continue`) invocation, surface
+# only the fitness/diet/gratitude nudges + a continue gate and exit before any
+# of that runs. The gratitude nudge (PB-66) is relocated here from plan.txt
+# Step 0 so it rides the fast pass too — still gated STRICTLY on the precomputed
+# GRATITUDE_TODAY_EXISTS flag, never a model-side file check. Auto-skip the gate
+# when there is nothing to nudge (all logged) — the issue's "or there is nothing
+# to nudge" clause — by falling straight through to the heavy path.
+if [[ "$PLAN_CONTINUE" != yes ]]; then
+  PMD_FITNESS_STATE="$([[ "$FITNESS_TODAY" == MISSING ]] && echo MISSING || echo present)"
+  if [[ "$PMD_FITNESS_STATE" == MISSING || "$DIET_TODAY_EXISTS" == no || "$GRATITUDE_TODAY_EXISTS" == no ]]; then
+    # Something to nudge → cheap preflight, then stop. The model surfaces the
+    # nudges and re-runs the continue command when the user says go. The
+    # continue command is composed from $_SCRIPT_DIR (the template builds the
+    # `bash "<dir>/plan-my-day.sh" plan --continue` line) so no command-shaped
+    # variable is needed here.
+    PMD_SCRIPT_DIR="$_SCRIPT_DIR"
+    export TODAY PMD_FITNESS_STATE DIET_TODAY_EXISTS GRATITUDE_TODAY_EXISTS PMD_SCRIPT_DIR
+    cat <<PREFLIGHT
+PLAN_MY_DAY_PREFLIGHT
+date: $TODAY
+fitness_today: $PMD_FITNESS_STATE
+diet_today_exists: $DIET_TODAY_EXISTS
+gratitude_today_exists: $GRATITUDE_TODAY_EXISTS
+continue_cmd: bash "$PMD_SCRIPT_DIR/plan-my-day.sh" plan --continue
+
+---
+PREFLIGHT
+    envsubst '$TODAY $PMD_FITNESS_STATE $DIET_TODAY_EXISTS $GRATITUDE_TODAY_EXISTS $PMD_SCRIPT_DIR' < "$_SCRIPT_DIR/templates/plan-my-day/plan-preflight.txt"
+    exit 0
+  fi
+  # Nothing to nudge → unlock the heavy path inline (the gate stays invisible).
+  PLAN_CONTINUE=yes
+fi
 
 # Sleep data recorded by today's fitness check-in (frontmatter sleep_* fields)
 # — when present, the wake-time question is skipped (confirm in passing).

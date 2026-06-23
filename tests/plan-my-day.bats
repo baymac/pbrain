@@ -244,7 +244,7 @@ PYEOF
 @test "daily session reports typical_day_present yes and injects recent fitness activity" {
   write_plans_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"typical_day_present: yes"* ]]
   [[ "$output" == *"RECENT FITNESS ACTIVITY"* ]]
@@ -269,7 +269,7 @@ committed: true
 \`\`\`
 EOF
   write_libraries
-  PBRAIN_PLAN_PROFILE_FILE="$legacy" run PMD
+  PBRAIN_PLAN_PROFILE_FILE="$legacy" run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
   [[ "$output" == *"typical_day_present: no"* ]]
@@ -303,14 +303,14 @@ status: planned
 ---
 # Day A
 EOF
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_sleep: sleep_wake=07:20"* ]]
 }
 
 @test "missing fitness entry asks for the wake time" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_sleep: (not recorded — ask the user)"* ]]
 }
 
@@ -327,14 +327,14 @@ sleep_wake: 07:20
 ---
 # Day A
 EOF
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_today_activity: Apple Fitness+ Kickboxing + Strength + Cooldown"* ]]
 }
 
 @test "fitness_today_activity falls back when there is no focus field" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_today_activity: (no fitness entry / focus not set)"* ]]
 }
 
@@ -353,7 +353,7 @@ committed: true
 {"created": "$TODAY", "meal_times": {"Lunch": "13:30", "Dinner": "20:30"}}
 \`\`\`
 EOF
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"diet_meal_times: Lunch 13:30, Dinner 20:30"* ]]
 }
 
@@ -384,7 +384,7 @@ committed: true
 ---
 # Gym — Profile
 EOF
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
 
@@ -429,9 +429,10 @@ EOF
 @test "PLAN path emits gratitude_today_exists: no when today's gratitude entry is absent (PB-66)" {
   write_plans_profile
   write_libraries
-  run PMD
+  # SESSION-path field (PB-58: behind the continue gate now).
+  run PMD plan --continue
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
   [[ "$output" == *"gratitude_today_exists: no"* ]]
 }
 
@@ -440,9 +441,9 @@ EOF
   write_libraries
   mkdir -p "$PBRAIN_VAULT/life/gratitude-journal"
   printf '# gratitude\n- thing one\n' > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
   [[ "$output" == *"gratitude_today_exists: yes"* ]]
 }
 
@@ -475,7 +476,7 @@ EOF
   mkdir -p "$PLAN"
   # /plan-my-work scaffolded today with only a standalone Work tracker, no glance.
   printf -- '---\ntype: daily-plan\ndate: %s\n---\n\n## Work tracker\n\n| Task | Project | Plane id | Priority | Est | Status | Started | Done at | Time taken | %% complete | Links | Notes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n\n## How it went\n' "$TODAY" > "$PLAN/$TODAY.md"
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   # Lays the day shape (plan path), not the update path, and flags the tracker so
   # the layout is placed ABOVE it without clobbering.
@@ -501,7 +502,7 @@ sleep_hours: 7.5
 | 13:00–13:45 | Lunch | Eating |
 SECRET_FULL_PLAN_BODY_MARKER
 EOF
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   # digest header present; the old full-7 dump is gone; the prior plan's body
   # is NOT pasted in (all enforced — final command is the meaningful one).
@@ -525,7 +526,7 @@ energy: 6
 | 13:00–13:45 | Lunch | Eating |
 | 20:00–20:45 | Dinner | Eating |
 EOF
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"2000-01-02"* && "$output" == *"lunch 13:00"* && "$output" == *"energy 6"* ]]
 }
@@ -575,7 +576,7 @@ EOF
   cp "$STORE/plans-profile.v1.md" "$cp_profile"
   rm -rf "$STORE"
   write_libraries
-  PBRAIN_PLAN_PROFILE_FILE="$cp_profile" run PMD
+  PBRAIN_PLAN_PROFILE_FILE="$cp_profile" run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
   [[ "$output" == *"profile_file: $cp_profile"* ]]
@@ -655,14 +656,14 @@ EOF
 @test "plan frontmatter template includes week_period" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"week_period:"* ]]
 }
 
 @test "no task-log table in the plan instructions; work blocks are placeholders" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [[ "$output" != *"## Task log"* ]]
   [[ "$output" == *"placeholders"* ]]
   [[ "$output" == *"Block N — focus work"* ]]
@@ -695,7 +696,7 @@ EOF
 @test "month_boundary_signal is present in daily session output" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"month_boundary_signal:"* ]]
 }
 
@@ -812,14 +813,14 @@ EOF
     > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v1.md"
   printf -- '---\nactivity: Gym\ndays: [%s]\nversion: 2\ncommitted: false\n---\n# Gym v2 draft\n' "$dow3" \
     > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/activities/gym.v2.md"
-  run PMD
+  run PMD plan --continue
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
 
 @test "PB-49: plan path instructs confirming the fitness slot time before locking it" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"1c.5 — FITNESS SLOT TIME (confirm + reminder) [PB-49]"* ]]
   [[ "$output" == *"do NOT silently place it"* ]]
@@ -829,7 +830,7 @@ EOF
 @test "PB-49: plan path sets the fitness reminder to the confirmed time via the real habits cmd" {
   write_goals_profile
   write_libraries
-  run PMD
+  run PMD plan --continue
   [ "$status" -eq 0 ]
   [[ "$output" == *"4a — FITNESS REMINDER (set to the confirmed time) [PB-49]"* ]]
   # the habits command path must be substituted (not a literal ${HABITS_CMD})
@@ -860,4 +861,87 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"3.5 FITNESS SLOT TIME (confirm + reminder) [PB-49]"* ]]
   [[ "$output" == *"reminders-reschedule --habit"* ]]
+}
+
+# ── PB-58: staged context loading (preflight fast pass + continue gate) ───────
+
+# Log today's fitness + diet journals so the preflight gate auto-skips.
+write_today_journals() {
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking" "$PBRAIN_VAULT/fitness/diet-tracking" \
+    "$PBRAIN_VAULT/life/gratitude-journal"
+  printf -- '---\ntype: fitness\ndate: %s\nstatus: planned\n---\n# session\n' "$TODAY" \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md"
+  printf -- '# diet %s\n' "$TODAY" > "$PBRAIN_VAULT/fitness/diet-tracking/$TODAY.md"
+  printf -- '# gratitude %s\n' "$TODAY" > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
+}
+
+@test "PB-58: bare plan with no fitness/diet emits PREFLIGHT and stops before heavy context" {
+  write_plans_profile
+  write_libraries
+  run PMD plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_PREFLIGHT"* ]]
+  # The heavy session token is NOT emitted at the start of a line (the template
+  # text mentions the word, so match the real emitted token only).
+  ! grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  # No heavy context blocks built.
+  [[ "$output" != *"=== PLANS PROFILE"* ]]
+  [[ "$output" != *"CARRY-FORWARD"* ]]
+  [[ "$output" != *"=== HABITS"* ]]
+  # The continue command is surfaced.
+  [[ "$output" == *"plan --continue"* ]]
+}
+
+@test "PB-58: preflight reports the fitness/diet signals" {
+  write_plans_profile
+  write_libraries
+  run PMD plan
+  [[ "$output" == *"fitness_today: MISSING"* ]]
+  [[ "$output" == *"diet_today_exists: no"* ]]
+  [[ "$output" == *"gratitude_today_exists: no"* ]]
+}
+
+@test "PB-58/PB-66: an unlogged gratitude entry alone triggers the preflight gate" {
+  write_plans_profile
+  write_libraries
+  # Log fitness + diet so only gratitude is outstanding.
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking" "$PBRAIN_VAULT/fitness/diet-tracking"
+  printf -- '---\ntype: fitness\ndate: %s\nstatus: planned\n---\n# s\n' "$TODAY" \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md"
+  printf -- '# diet\n' > "$PBRAIN_VAULT/fitness/diet-tracking/$TODAY.md"
+  run PMD plan
+  [ "$status" -eq 0 ]
+  grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
+  ! grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  [[ "$output" == *"gratitude_today_exists: no"* ]]
+}
+
+@test "PB-58: auto-skip — all journals logged goes straight to SESSION, no preflight" {
+  write_plans_profile
+  write_libraries
+  write_today_journals
+  run PMD plan
+  [ "$status" -eq 0 ]
+  ! grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  [[ "$output" == *"=== PLANS PROFILE"* ]]
+}
+
+@test "PB-58: --continue skips the preflight and emits the full SESSION + HABIT SCAN" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  ! grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  [[ "$output" == *"=== PLANS PROFILE"* ]]
+  [[ "$output" == *"HABIT SCAN"* ]]
+}
+
+@test "PB-58: bare --continue (no plan verb) also unlocks the SESSION" {
+  write_plans_profile
+  write_libraries
+  run PMD --continue
+  [ "$status" -eq 0 ]
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
 }

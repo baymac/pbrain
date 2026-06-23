@@ -4,18 +4,11 @@ wind-down, bed, habit reminders) + EMPTY work blocks. You do NOT assign tasks �
 /plan-my-work fills the blocks with real tasks from Plane afterward.
 
 Step 0 — Preflight checks (do these silently, then surface in one short message):
-  - FITNESS NUDGE (soft, non-blocking — like the daily-journal nudge):
-    PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
-    (global or per-command) says to skip the fitness-journal nudge, SKIP this
-    entirely. A standing preference always wins.
-      - If TODAY'S FITNESS JOURNAL == "MISSING": mention it ONCE, folded into
-        the same first message as the other Step 0 nudges — e.g. "Heads up:
-        today's /fitness-journal isn't done. Running it captures your wake time
-        and slots your workout into the day — want to? Either way I'll plan
-        now." Do NOT make it a separate turn; do NOT STOP and wait; do NOT ask
-        whether any session is complete/logged (that's /end-of-day's job, not
-        the planner's). Just plan. If you genuinely need the workout time and
-        `fitness_today_schedule` is empty, ask it inline in Step 1c, not here.
+  - FITNESS / DIET NUDGES — ALREADY SURFACED (PB-58): the fitness-journal and
+    diet-journal nudges were handled in the cheap PREFLIGHT pass before this
+    context loaded (you only reach this SESSION block after the user chose to
+    continue). Do NOT re-nudge about either here — don't repeat "today's
+    /fitness-journal isn't done" or "/diet-journal isn't logged". Just plan.
       - If TODAY'S FITNESS JOURNAL exists: say nothing about it; still read its
         `sleep_*` fields (Step 1a) and treat its scheduled session as today's.
         Its `focus:` field is surfaced as `fitness_today_activity` above — when
@@ -30,18 +23,10 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
         the reminder explicitly on confirmation rather than leaving it silent.
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's
     /journal is empty too — you can fill it in later." Do not block.
-  - GRATITUDE NUDGE (soft, non-blocking) — gate STRICTLY on `gratitude_today_exists`
-    above; do NOT check the gratitude file yourself (that mis-resolves the path/date
-    and fires a false nudge — PB-66).
-      - PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
-        (global or per-command) says to skip the journal/gratitude nudge, SKIP this
-        entirely. A standing preference always wins.
-      - If `gratitude_today_exists: yes`: say NOTHING about it — today's entry is
-        already logged.
-      - If `gratitude_today_exists: no`: fold ONE short line into the same first
-        Step 0 message as the other nudges — e.g. "Heads up: today's gratitude
-        entry isn't logged — /gratitude-journal anchors the day, but you can do it
-        later." Do not make it a separate turn; do not STOP and wait. Just plan.
+  - GRATITUDE NUDGE — ALREADY SURFACED (PB-58/PB-66): the gratitude-journal nudge
+    was handled in the cheap PREFLIGHT pass (gated on `gratitude_today_exists`)
+    before this context loaded, so do NOT re-nudge about it here. (`gratitude_today_exists`
+    is still provided above for any planning use — just don't re-offer it.)
   - WEEKLY REVIEW (Mondays only) — read `weekly_review_signal` above:
       - `none` → not a Monday, or nothing to review yet: say nothing.
       - `current` → fewer than 7 days since the last weekly review: say nothing.
@@ -430,10 +415,7 @@ Step 5 — Reminders (only if relevant — don't force it):
   Resolve the due time relative to today ($TODAY) + the current time. Set it
   only on a yes. At most one short offer covering all of them.
 
-Step 7 — Diet nudge (the very end, non-blocking). Read `diet_today_exists` above:
-  PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
-  diet nudge, skip this step.
-  - If `no`: one short line — "Today's /diet-journal isn't logged yet — want to
-    capture your meals? Otherwise the day's all set." Don't block; don't ask
-    whether anything is complete. Just the offer.
-  - If `yes`: say nothing.
+Step 7 — Diet nudge: ALREADY SURFACED (PB-58). The diet-journal nudge fired in
+the cheap PREFLIGHT pass before this context loaded, so do NOT repeat it here.
+(`diet_today_exists` is still provided above for any planning use, e.g. meal-slot
+context — just don't re-offer "/diet-journal isn't logged".)
