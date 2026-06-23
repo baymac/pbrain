@@ -1582,6 +1582,128 @@ PROF
   [[ "$output" != "NOT_LINKED" && "$output" != "NOT_FOUND" ]]
 }
 
+# ── reminders-realign-plan (PB-88): deterministic time-match to the plan ─────
+
+# Write a daily plan with a "## Today at a glance" table containing timed rows.
+_write_plan_glance() {  # <date>  → plan file under PBRAIN_PLAN_DIR
+  local d="${1:-2026-06-03}"
+  export PBRAIN_PLAN_DIR="$TMP/daily-planning"; mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/$d.md" <<EOF
+---
+type: daily-plan
+date: $d
+---
+
+# $d — plan
+
+## Today at a glance
+
+| Time | Block | Focus | Tie |
+|---|---|---|---|
+| 09:00–10:00 | Wake + morning routine | rest | — |
+| 22:45–23:15 | Brush at night | wind-down | — |
+| 00:00 | Bed | sleep | — |
+
+## Work tracker
+EOF
+}
+
+# Count pending habit_reminders rows for a habit on a date (proves ensure ran).
+_hr_pending_count() {  # <habit_id> <date>
+  python3 - "$PBRAIN_DB_FILE" "$1" "$2" <<'PYEOF'
+import sqlite3, sys
+db, hid, date = sys.argv[1:4]
+con = sqlite3.connect(db)
+n = con.execute("SELECT COUNT(*) FROM habit_reminders WHERE habit_id=? AND occurred_on=? AND status='pending'",
+                (hid, date)).fetchone()[0]
+con.close(); print(n)
+PYEOF
+}
+
+@test "reminders-realign-plan: no habits profile prints REALIGNED 0 SKIPPED 0" {
+  rm -f "$PBRAIN_HABITS_PROFILE_FILE"
+  _write_plan_glance 2026-06-03
+  run HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 0" ]]
+}
+
+@test "reminders-realign-plan: missing plan file prints REALIGNED 0 SKIPPED 0" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  run HABITS reminders-realign-plan --plan "$TMP/nope.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 0" ]]
+}
+
+@test "reminders-realign-plan: bad date is rejected" {
+  _write_profile
+  run HABITS reminders-realign-plan --plan "$TMP/x.md" --date "nope"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ERROR:bad date"* ]]
+}
+
+@test "reminders-realign-plan: only LINKED habits are matched (unlinked → no attempt)" {
+  _write_profile
+  # Brush at night IS in the plan glance but is NOT linked → must not be touched.
+  _write_plan_glance 2026-06-03
+  run HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 0" ]]
+  # no one-shot ensured for an unlinked habit
+  [ "$(_hr_pending_count brush-at-night 2026-06-03)" -eq 0 ]
+}
+
+@test "reminders-realign-plan: linked habit matched in a timed row triggers an attempt" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  _write_plan_glance 2026-06-03
+  run HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  # The match fired → an ensure+reschedule attempt was made. Apple Reminders is
+  # stubbed UNAVAILABLE in CI so the edit can't succeed, landing the attempt in
+  # SKIPPED. The SKIPPED 1 (vs the no-match SKIPPED 0) is what proves the match.
+  [[ "$output" == "REALIGNED 0 SKIPPED 1" ]]
+}
+
+@test "reminders-realign-plan: linked habit absent from the plan is not touched" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  # Plan glance that does NOT mention "Brush at night".
+  export PBRAIN_PLAN_DIR="$TMP/daily-planning"; mkdir -p "$PBRAIN_PLAN_DIR"
+  cat > "$PBRAIN_PLAN_DIR/2026-06-03.md" <<'EOF'
+## Today at a glance
+
+| Time | Block | Focus | Tie |
+|---|---|---|---|
+| 09:00–10:00 | Deep work | focus | pbrain |
+EOF
+  run HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 0" ]]
+  [ "$(_hr_pending_count brush-at-night 2026-06-03)" -eq 0 ]
+}
+
+@test "reminders-realign-plan: defaults --plan to today's daily-planning file" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  _write_plan_glance 2026-06-03
+  # omit --plan → resolves PBRAIN_PLAN_DIR/<date>.md
+  run HABITS reminders-realign-plan --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 1" ]]
+}
+
+@test "reminders-realign-plan: idempotent re-run produces the same output" {
+  _write_profile
+  HABITS reminder --id brush-at-night --link --time 07:00
+  _write_plan_glance 2026-06-03
+  HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  run HABITS reminders-realign-plan --plan "$PBRAIN_PLAN_DIR/2026-06-03.md" --date 2026-06-03
+  [ "$status" -eq 0 ]
+  [[ "$output" == "REALIGNED 0 SKIPPED 1" ]]
+}
+
 # ── new scoring types: meal_ratio + deviation ───────────────────────────────
 
 _write_v2_scored_profile() {

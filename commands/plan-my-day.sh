@@ -1000,6 +1000,9 @@ export TODAY DOW ISO_WEEK OUT_FILE REMIND_CMD
 envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD' < "$_SCRIPT_DIR/templates/plan-my-day/plan.txt"
 
 # Habit reconcile (silent if no habits profile): scan today's entries across the
-# vault for evidence, mark states, and realign today's one-shot reminders to the
-# planned times — the habit module owns this logic.
+# vault for evidence + mark states, then — once the model has written today's
+# plan — time-match the one-shot reminders to the final block times via the
+# deterministic `reminders-realign-plan` batch (PB-88). The habit module owns
+# both; the realign runs AFTER the plan exists because the plan file is authored
+# by the model from the template above, not by this script.
 _pmd_habit_scan
