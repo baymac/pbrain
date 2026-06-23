@@ -108,6 +108,99 @@ PY
   exit 0
 fi
 
+# --- natural-language "do work" routing (PB-96) -----------------------------
+# Without this, ONLY the literal `task execute …` form reaches the EXECUTE
+# lifecycle; everything else falls through to PLAN_MY_WORK_SESSION, whose step 2
+# delegates grooming/triage to /project-manager. So a plain-words work request
+# like "fix the X bug", "work on PB-96", or just "pb96" used to TRIAGE the board
+# instead of running the plan→implement→PR→close cycle the user actually asked
+# for. Here we normalize such a request into the canonical `task execute <target>`
+# form so it flows through the EXACT existing EXECUTE path (no duplicated logic).
+#
+# The <target> the user gives is one of two KINDS — and the EXECUTE template
+# handles each in its unmatched branch (PB-96):
+#   - an ID (pb96 / PB-96 / 96, alone or after a verb) → resolved against Plane
+#     with the parent-aware subtree read, exactly as before;
+#   - a DESCRIPTION (free text after an action verb, e.g. "fix the routing bug")
+#     → the FULL search-or-file cycle: find a matching issue in Plane, and if
+#     none matches, triage a NEW issue via `${PM_CMD} file "<desc>"`, then
+#     execute the resulting id. The .sh cannot do semantic search or filing
+#     (those are agent steps), so it passes the description THROUGH verbatim as
+#     the target and emits TARGET_KIND so the template knows which path to run.
+#
+# What triggers re-dispatch:
+#   - a leading action verb (fix/do/work/implement/build/ship/finish/start/…,
+#     optionally "work on …") → execute; if a PB-ref/seq appears in the request
+#     it becomes the target (KIND=id), else the verb-stripped remainder is the
+#     description target (KIND=desc). A bare verb with no remainder ("do some
+#     work") → no target, drive the ledger / cascade (KIND=none);
+#   - a bare PB-ref token (pb96 / PB-96 / 96) → execute that ref (KIND=id);
+#   - `task …` (canonical) and the no-arg / planning form are left untouched, so
+#     `/plan-my-work` with no args still plans the day's work (SESSION).
+# Re-dispatch is deterministic and lives in the .sh (agent-agnostic), so Codex
+# and Claude behave identically. TARGET_KIND is exported below for the template.
+PMW_TARGET_KIND=""
+if [[ "${1:-}" != "task" && $# -gt 0 ]]; then
+  _PMW_REROUTE="$(python3 - "$@" <<'PY'
+import re, sys
+args = [a for a in sys.argv[1:] if a.strip()]
+if not args:
+    sys.exit(0)
+VERBS = {"fix", "do", "work", "implement", "execute", "build", "ship",
+         "finish", "start", "tackle", "complete", "resolve", "address"}
+# Connectives dropped after the leading verb so "work on X"/"fix the X" →  "X".
+STOP_AFTER_VERB = {"on", "the", "a", "an", "this", "that", "some", "my", "with"}
+# Generic filler nouns: a verb + only these ("do some work", "do stuff") names
+# NO specific task → drive the ledger / cascade, NOT a description to file.
+FILLER_TARGET = {"work", "stuff", "something", "things", "tasks", "task", "anything"}
+# A PB-ref token: full id (pb-96 / pb96 / PB-96), or a bare sequence number.
+REF = re.compile(r"^(?:pb-?)?(\d+)$", re.IGNORECASE)
+def as_ref(tok):
+    m = REF.match(tok.strip().strip(":#"))
+    # normalize to the hyphenless lowercase form the EXECUTE parser already
+    # understands (its matches()/subtree read strips a leading "pb-").
+    return ("pb" + m.group(1)) if m else ""
+def find_ref(tokens):
+    for t in tokens:
+        r = as_ref(t)
+        if r:
+            return r
+    return ""
+first = args[0].strip().lower()
+verb_form = first in VERBS
+ref = find_ref(args)
+# Emit 3 lines: action, kind, target.
+if ref and (verb_form or len(args) == 1):
+    # Explicit id wins (bare "pb96", or a verb request that names an id).
+    print("execute"); print("id"); print(ref)
+elif verb_form:
+    # Strip the leading verb + connectives → the description to search/file on.
+    rest = args[1:]
+    while rest and rest[0].strip().lower() in STOP_AFTER_VERB:
+        rest = rest[1:]
+    desc = " ".join(rest).strip()
+    rest_words = [w.lower() for w in rest]
+    if desc and not all(w in FILLER_TARGET for w in rest_words):
+        print("execute"); print("desc"); print(desc)
+    else:
+        # bare verb, or verb + only filler ("do some work") → no target, ledger.
+        print("execute"); print("none"); print("")
+# else: print nothing → leave args untouched (planning SESSION form).
+PY
+)"
+  if [[ -n "$_PMW_REROUTE" ]]; then
+    PMW_TARGET_KIND="$(printf '%s\n' "$_PMW_REROUTE" | sed -n '2p')"
+    _PMW_TARGET="$(printf '%s\n' "$_PMW_REROUTE" | sed -n '3p')"
+    if [[ -n "$_PMW_TARGET" ]]; then
+      set -- task execute "$_PMW_TARGET"
+    else
+      set -- task execute
+    fi
+  fi
+  unset _PMW_REROUTE _PMW_TARGET
+fi
+export PMW_TARGET_KIND
+
 source "$_SCRIPT_DIR/../lib/vault.sh"
 
 pbrain_emit_prefs "plan-my-work" || true
@@ -244,7 +337,12 @@ if [[ "${1:-}" == "task" ]]; then
   # new schema and legacy Block-column files read correctly (no migration).
   # The lifecycle/cascade + every Plane/git/PR/merge step is driven by execute.txt.
   if [[ "$TASK_ACTION" == execute ]]; then
-    TARGET_REF="${3:-}"
+    # Target = everything after `task execute` (joined), so a multi-word free-text
+    # DESCRIPTION survives (PB-96 — `task execute fix the login bug`), not just the
+    # first token. The NL normalizer passes a single pre-joined arg, so this only
+    # widens the direct `task execute <words…>` path; a lone PB-id is unaffected.
+    shift 2 2>/dev/null || true   # drop "task" + "execute"; leave the target in $@
+    TARGET_REF="$*"
     # ONE $()-captured python heredoc (bash-3.2 trap — no apostrophes inside).
     # PB-92: an explicit target is AUTHORITATIVE. With no target, emit the full
     # not-done ledger (first row leads, cascade applies). With a target:
@@ -327,6 +425,23 @@ PY
     NEXT_TASKS_JSON="$(printf '%s\n' "$NEXT_TASKS_JSON" | sed -n '2,$p')"
     [[ -n "$TARGET_MODE" ]] || TARGET_MODE="none"
     [[ -n "$NEXT_TASKS_JSON" ]] || NEXT_TASKS_JSON="[]"
+    # TARGET_KIND (PB-96) — what the unmatched target IS, so execute.txt knows
+    # whether to resolve it as an id (subtree read) or as a free-text DESCRIPTION
+    # (find-or-file cycle). The NL normalizer already classified it into
+    # PMW_TARGET_KIND; for a direct `task execute <ref>` call (no NL rewrite) we
+    # classify here: id-shaped ref → id, any other non-empty target → desc, none.
+    TARGET_KIND="${PMW_TARGET_KIND:-}"
+    if [[ -z "$TARGET_KIND" ]]; then
+      if [[ -z "$TARGET_REF" ]]; then
+        TARGET_KIND="none"
+      elif [[ "$TARGET_REF" =~ ^(pb-?)?[0-9]+$ ]]; then
+        TARGET_KIND="id"
+      else
+        TARGET_KIND="desc"
+      fi
+    fi
+    # A target that DID match a ledger row (solo) is an id we already have; kind
+    # is irrelevant there. Only the unmatched branch consults TARGET_KIND.
     WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
     PM_CMD="${PM_CMD:-/project-manager}"
 
@@ -337,6 +452,7 @@ PY
     echo "now_time: $NOW_TIME"
     echo "target_ref: ${TARGET_REF:-(none)}"
     echo "target_mode: ${TARGET_MODE}"
+    echo "target_kind: ${TARGET_KIND}"
     echo "weekly_pids: ${WEEKLY_PIDS:-(none)}"
     echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
     echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
@@ -362,8 +478,8 @@ PY
     echo "=== PROJECT REGISTRY ==="
     echo "$REGISTRY_JSON"
     echo ""
-    export OUT_FILE TODAY NOW_TIME TARGET_REF TARGET_MODE NEXT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
-    envsubst '$OUT_FILE $TODAY $NOW_TIME $TARGET_REF $TARGET_MODE $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
+    export OUT_FILE TODAY NOW_TIME TARGET_REF TARGET_MODE TARGET_KIND NEXT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
+    envsubst '$OUT_FILE $TODAY $NOW_TIME $TARGET_REF $TARGET_MODE $TARGET_KIND $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
     exit 0
   fi
 

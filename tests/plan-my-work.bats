@@ -380,6 +380,157 @@ EOF
   [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
 }
 
+# PB-96: a natural-language "do work" request (not the literal `task execute …`)
+# used to fall through to PLAN_MY_WORK_SESSION, whose step 2 delegates triage to
+# /project-manager — so asking pmw to *do work* triaged the board instead of
+# running the execute cycle. The .sh now normalizes such requests into the
+# canonical `task execute [PB-id]` form before dispatch.
+@test "PB-96: NL verb + ref ('fix pb96') routes to EXECUTE as kind=id" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW fix pb96
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
+  [[ "$output" == *"target_ref: pb96"* ]]
+  [[ "$output" == *"target_kind: id"* ]]
+}
+
+@test "PB-96: 'work on PB-96' routes to EXECUTE kind=id (connective + hyphen id)" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW work on PB-96
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" == *"target_ref: pb96"* ]]
+  [[ "$output" == *"target_kind: id"* ]]
+}
+
+@test "PB-96: a bare PB-ref token ('pb96') routes to EXECUTE kind=id" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW pb96
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" == *"target_ref: pb96"* ]]
+  [[ "$output" == *"target_kind: id"* ]]
+}
+
+@test "PB-96: a bare sequence number ('96') routes to EXECUTE, normalized to pb96 (id)" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW 96
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" == *"target_ref: pb96"* ]]
+  [[ "$output" == *"target_kind: id"* ]]
+}
+
+# PB-96 (the core of this issue): a brief DESCRIPTION with no issue id must run
+# the find-or-file cycle, NOT triage and NOT the ledger. The .sh carries the
+# verb-stripped description through verbatim and tags it kind=desc so execute.txt
+# searches Plane and files a new issue when none matches.
+@test "PB-96: a free-text verb request ('fix the routing bug') → EXECUTE kind=desc, description carried" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW fix the routing bug
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
+  [[ "$output" == *"target_kind: desc"* ]]
+  # leading verb + connective "the" stripped; the rest is the search/file query
+  [[ "$output" == *"target_ref: routing bug"* ]]
+}
+
+@test "PB-96: 'implement dark mode' → kind=desc with the full multi-word description" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW implement dark mode
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target_kind: desc"* ]]
+  [[ "$output" == *"target_ref: dark mode"* ]]
+}
+
+@test "PB-96: a multi-word 'task execute <desc>' keeps the whole description (not just \$3)" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW task execute fix the login bug
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" == *"target_ref: fix the login bug"* ]]
+  [[ "$output" == *"target_kind: desc"* ]]
+}
+
+@test "PB-96: the execute template documents the find-or-file cycle + target_kind" {
+  run grep -niE 'find-or-file' "$REPO_ROOT/commands/templates/plan-my-work/execute.txt"
+  [ "$status" -eq 0 ]
+  run grep -nE 'target_kind' "$REPO_ROOT/commands/templates/plan-my-work/execute.txt"
+  [ "$status" -eq 0 ]
+  run grep -nE 'file "\$\{TARGET_REF\}"' "$REPO_ROOT/commands/templates/plan-my-work/execute.txt"
+  [ "$status" -eq 0 ]
+}
+
+@test "PB-96: NL verb with only filler ('do some work') drives the LEDGER, never triage/desc" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW do some work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
+  # filler-only remainder → no target, full not-done ledger (cascade applies)
+  [[ "$output" == *"target_ref: (none)"* ]]
+  [[ "$output" == *"target_mode: none"* ]]
+  [[ "$output" == *"target_kind: none"* ]]
+}
+
+@test "PB-96: the no-arg planning form is UNTOUCHED (still SESSION, not execute)" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_SESSION"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_EXECUTE"* ]]
+}
+
+@test "PB-96: canonical 'task execute <id>' is unchanged by the NL normalizer (kind=id)" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW task execute pb96
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" == *"target_ref: pb96"* ]]
+  [[ "$output" == *"target_kind: id"* ]]
+}
+
+@test "PB-96: a non-verb planning-ish word ('plan') is NOT hijacked into execute" {
+  seed_profile
+  configure_plane
+  seed_plan_with_tracker
+  run PMW plan my work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_SESSION"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_EXECUTE"* ]]
+}
+
+@test "PB-96: the .md documents NL routing + argument-hint advertises it" {
+  run grep -nE 'fix/work on' "$REPO_ROOT/commands/plan-my-work.md"
+  [ "$status" -eq 0 ]
+  run grep -niE 'natural-language routing' "$REPO_ROOT/commands/plan-my-work.md"
+  [ "$status" -eq 0 ]
+  run grep -niE 'find-or-file cycle' "$REPO_ROOT/commands/plan-my-work.md"
+  [ "$status" -eq 0 ]
+}
+
 # PB-93: the EXECUTE template warns about a stale command checkout shadowing
 # merged wrappers (self-host case), and the .sh now enforces it deterministically
 # by emitting a SELFHOST_STALE line + documenting it in the PRE-FLIGHT prose.
