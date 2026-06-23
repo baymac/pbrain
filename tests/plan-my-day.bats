@@ -815,3 +815,49 @@ EOF
   run PMD
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
+
+@test "PB-49: plan path instructs confirming the fitness slot time before locking it" {
+  write_goals_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1c.5 — FITNESS SLOT TIME (confirm + reminder) [PB-49]"* ]]
+  [[ "$output" == *"do NOT silently place it"* ]]
+  [[ "$output" == *"confirm it before locking the slot"* ]]
+}
+
+@test "PB-49: plan path sets the fitness reminder to the confirmed time via the real habits cmd" {
+  write_goals_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"4a — FITNESS REMINDER (set to the confirmed time) [PB-49]"* ]]
+  # the habits command path must be substituted (not a literal ${HABITS_CMD})
+  [[ "$output" == *"commands/habits.sh reminders-reschedule --habit"* ]]
+  [[ "$output" != *'${HABITS_CMD}'* ]]
+}
+
+@test "PB-49: update path re-confirms the fitness time and reschedules its reminder when the slot moves" {
+  write_goals_profile
+  write_libraries
+  # an updatable plan must carry a "## Today at a glance"
+  cat > "$PBRAIN_VAULT/life/daily-planning/$TODAY.md" <<EOF
+---
+type: daily-plan
+date: $TODAY
+---
+# $TODAY
+
+## Today at a glance
+
+| Time | Block | Focus | Tie |
+|---|---|---|---|
+| 14:30–15:05 | Workout | Apple Fitness | — |
+
+## How it went
+EOF
+  run PMD update
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3.5 FITNESS SLOT TIME (confirm + reminder) [PB-49]"* ]]
+  [[ "$output" == *"reminders-reschedule --habit"* ]]
+}

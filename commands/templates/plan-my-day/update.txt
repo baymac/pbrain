@@ -13,6 +13,15 @@ profile current_focus + this week's/month's goals are there for re-tying rows.
    bed). Re-tie any changed row's Tie column to a current_focus item, a category, or
    "—". If a row maps to a current_focus goal, set/refresh `focus_today` in the
    frontmatter accordingly.
+3.5 FITNESS SLOT TIME (confirm + reminder) [PB-49]. If this update MOVES the fitness
+   slot to a new time (or adds a session), echo the new start time back and confirm
+   it before writing — "Workout now at HH:MM — good?" On confirmation, set that
+   habit's one-shot reminder to the confirmed time so it isn't missed, using the
+   HABIT SCAN block's reschedule command (below) with the exact fitness habit name
+   matching today's activity (e.g. "Apple Fitness" / "Gym"):
+     reminders-reschedule --habit "<exact fitness habit name>" --time "HH:MM" --date <today>
+   NOT_LINKED / NOT_FOUND (activity isn't a reminder-linked habit) → skip silently.
+   If the update doesn't touch the fitness slot, leave its reminder alone.
 4. Re-show the updated table, confirm, then write the whole file back to the same
    output_file in place. Do NOT create a second file.
 5. End-of-pass nudges (non-blocking). Gate STRICTLY on the precomputed flags in the

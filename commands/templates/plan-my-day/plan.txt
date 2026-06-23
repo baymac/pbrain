@@ -21,9 +21,13 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
         Its `focus:` field is surfaced as `fitness_today_activity` above — when
         it's set, pbrain has ALREADY reconciled the fitness-habit reminders to
         it (the chosen activity's reminder kept, the scheduled-but-not-chosen
-        ones cancelled + auto-skipped). The automatic HABIT SCAN at the end of
-        this session realigns reminders to the final plan times — you do not
-        touch reminders by hand here.
+        ones cancelled + auto-skipped). That reconcile anchors the reminder to
+        the activity's default schedule time, NOT today's placed slot — so you
+        still CONFIRM the fitness slot time with the user (Step 1c) and SET the
+        reminder to that confirmed time (Step 4a). The automatic HABIT SCAN at
+        the end of this session is a backstop that realigns any other timed-habit
+        reminders to their plan rows; for the FITNESS slot specifically you set
+        the reminder explicitly on confirmation rather than leaving it silent.
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's
     /journal is empty too — you can fill it in later." Do not block.
   - GRATITUDE NUDGE (soft, non-blocking) — gate STRICTLY on `gratitude_today_exists`
@@ -213,6 +217,20 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     Present: "That gives you N blocks: {compact list with times}. Want to add
     or reduce?" Adjust until they're happy — but lead with the derived layout,
     never with a question about how many hours they want.
+  1c.5 — FITNESS SLOT TIME (confirm + reminder) [PB-49]. Whenever today has a
+    fitness session (`fitness_today_schedule` is set, or a session surfaced in
+    1b.5 / was asked for inline above), do NOT silently place it. ALWAYS echo
+    the start time back and confirm it before locking the slot — one short line,
+    folded into the layout turn, e.g. "Workout at 14:30 — that work, or move
+    it?" Use the time you computed for the slot START (the session's actual
+    start, not the padded slot's leading buffer). If the user names a different
+    time, use theirs; reshape the surrounding meal/prep segments around it (the
+    same shift rules as 1b.5 — preserve durations, keep meal count). If there is
+    no clock time yet (`fitness_today_schedule` empty and none stated), ASK for
+    it here rather than guessing. Hold the CONFIRMED start time — Step 4a sets a
+    reminder for exactly that time so the session isn't missed. (Rest days with
+    no session, or a session the user explicitly skips in 1b.5: nothing to
+    confirm — skip this beat.)
   1d — WORK BLOCKS STAY EMPTY. /plan-my-day no longer proposes or assigns tasks —
     that's /plan-my-work's job (it pulls real tasks from Plane and packs them).
     Lay the work blocks 1c computed as GENERIC PLACEHOLDERS ("Block N — focus
@@ -380,8 +398,22 @@ Step 4 — After writing, confirm: "Saved → $OUT_FILE" and nudge once: "Blocks
   if you track habits, a HABIT SCAN block appears below — follow it silently. No
   block = no habits set up yet (nothing to do). A block reading "NOTE: habit
   reconcile unavailable" means the habit helper failed to load — flag it so it can
-  be fixed. Either way, do NOT reschedule habit reminders or check habits off by
-  hand here.
+  be fixed. Apart from the one explicit fitness-reminder set in 4a below, do NOT
+  reschedule other habit reminders or check habits off by hand here.
+
+  4a — FITNESS REMINDER (set to the confirmed time) [PB-49]. If 1c.5 confirmed a
+  fitness slot time AND habits are set up (a HABIT SCAN block appeared, i.e. the
+  fitness activity is a tracked, reminder-linked build habit), set that habit's
+  one-shot reminder to the CONFIRMED start time so the session isn't missed:
+      bash "${HABITS_CMD}" reminders-reschedule --habit "<exact fitness habit name>" --time "HH:MM" --date $TODAY
+  Use the fitness habit that matches today's chosen activity (the same one
+  fitness-reconcile kept — e.g. "Apple Fitness" for an Apple Fitness+ session,
+  "Gym" for a gym workout; honor the Apple-Fitness≠Gym preference). reschedule
+  acts on the pending one-shot that reminders-ensure/fitness-reconcile already
+  created, so this just moves it to the confirmed time — idempotent, safe to
+  re-run. If the command reports NOT_LINKED / NOT_FOUND (the activity isn't a
+  reminder-linked habit), skip silently — there's nothing to set. No habits set
+  up, no session, or no confirmed time → skip 4a entirely.
 
   4b — FITNESS JOURNAL OFFER (only if needed): check whether TODAY'S FITNESS
   JOURNAL (injected above) is "MISSING". If MISSING and a non-gym activity
