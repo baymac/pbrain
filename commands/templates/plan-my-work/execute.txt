@@ -42,6 +42,23 @@ PRE-FLIGHT.
   • Otherwise → take the FIRST row in NEXT TASKS as the current task. Name it back
     in one line (task · project · Plane id · priority · est) and confirm you'll
     start it.
+  • SELF-HOST CHECK (only when a task you're about to run targets pbrain's OWN
+    repo — i.e. its WORKING LOCATION is the pbrain checkout these very slash
+    commands are read from). Slash commands execute the LIVE working tree, so a
+    checkout parked on a stale/unmerged branch silently shadows a fix already
+    merged to main — the command you're running can be older than `main` without
+    any error (this is exactly how a quoted-$ARGUMENTS misroute survived after it
+    was fixed on main). Before starting such a task, check that the live checkout
+    is current:
+      git -C <pbrain-repo> rev-parse --abbrev-ref HEAD   # which branch?
+      git -C <pbrain-repo> fetch origin -q && git -C <pbrain-repo> status -sb | head -1
+    If it's not on a fresh `main` (detached/feature branch, or "behind origin/main
+    by N"), surface it in ONE line and offer to fast-forward
+    (`git -C <pbrain-repo> checkout main && git -C <pbrain-repo> pull --ff-only`)
+    before proceeding — don't silently run on stale command code. This is about
+    the COMMAND wrapper itself; the ISOLATE step below already gives the task's
+    own work a fresh worktree off origin/<base>. Targets that are NOT pbrain's
+    repo skip this check entirely.
 
 PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
 

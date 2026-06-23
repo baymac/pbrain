@@ -338,3 +338,16 @@ EOF
   [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
   [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
 }
+
+# PB-93: the EXECUTE template warns about a stale command checkout shadowing
+# merged wrappers when the task targets pbrain's own repo (self-host case).
+@test "PB-93: execute output carries the SELF-HOST stale-checkout PRE-FLIGHT note" {
+  seed_profile
+  configure_plane
+  seed_plan_for_execute
+  run PMW task execute
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SELF-HOST CHECK"* ]]
+  [[ "$output" == *"stale/unmerged branch"* ]]
+  [[ "$output" == *"fast-forward"* ]]
+}
