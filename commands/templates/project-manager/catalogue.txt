@@ -71,6 +71,12 @@ CATALOGUE — every verb is:  ${PM_SELF} <verb> …
   spec <ref>                                    spec/approval gate: draft+approve ONE issue's ## Implementation Plan
                                                 (approved → /plan-my-work task execute skips its live planning gate).
                                                 spec <ref> --read = JSON only (plan + approval state, no walk).
+  file "<dump>" [--project R] [--fast]          GENERIC work-item intake: explode a free-text dump into a
+                                                triage-ready item of ANY type (bug/feature/docs/chore/refactor/
+                                                improvement), then create it. Full path = Socratic build-up
+                                                (type/sub-issues/labels/estimate/priority/deadline); --fast =
+                                                infer + one confirm. Aliases: create|track|capture. "file this
+                                                …", "create an issue for …", "track this" route here.
   progress --projects <R,...>                   per-project progress
   ready --projects <R,...> [--require-approved]  ready work items (--require-approved = plan-approved only)
 
