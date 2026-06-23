@@ -40,6 +40,20 @@
 # override framing, so a standing preference is applied prominently. Callers pass
 # the resolved latest-profile path as the optional 2nd arg:
 #
+#   PB-60 — the generic "prefs" array is a FALLBACK BUCKET, not a permanent home.
+#   It exists only for prefs that have no semantic field to live in. A pref that
+#   IS a semantic profile field — a day-shape rule (nap/dinner/meal slot →
+#   typical_day), a working-style nuance (→ working_style/working_style.other_prefs),
+#   an anchor (→ daily_anchors) — belongs in that field, where the command
+#   consumes it as structure. Leaving such a pref in the generic array makes this
+#   read side re-dump it verbatim as a raw per-command block every run, even
+#   though the command already acts on the structural copy (redundant + noisy).
+#   So: when a captured pref maps onto a real field, re-home it there and DROP it
+#   from the generic array — an empty array emits no block (the whitespace guard
+#   below short-circuits). Migration 0011 only does the MECHANICAL fold into the
+#   generic bucket; semantic re-homing is a profile edit (mint the next version),
+#   done by the owning command's pref-capture flow or by hand.
+#
 #   pbrain_emit_prefs <command-name> [profile-file]
 #
 # A command WITHOUT a profile, or whose profile carries no "prefs" array, falls

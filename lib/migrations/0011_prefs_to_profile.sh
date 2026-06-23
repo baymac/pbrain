@@ -19,6 +19,17 @@
 # pref is a living-document edit, like the food/habits libraries). The original
 # prefs.md and a pre-edit copy of the profile are parked under .pbrain/backup/.
 #
+# PB-60 — the generic "prefs" array this migration writes into is a FALLBACK
+# bucket, not a final resting place. lib/prefs.sh re-dumps that array verbatim as
+# a raw per-command block every run, so any folded pref that is actually a
+# semantic profile field (a day-shape rule → typical_day, a working-style nuance
+# → working_style, an anchor → daily_anchors) gets surfaced as raw text even
+# though the command already consumes the structural copy. The right end state is
+# to re-home such prefs into their field (minting the next profile version) and
+# drop them from the generic array — see the PB-60 note in lib/prefs.sh. This
+# migration intentionally does NOT attempt that re-homing (no judgement in an AUTO
+# pass); it just lands prefs somewhere durable so nothing is lost.
+#
 # Profile-less commands (weekly-review, end-of-day, …) and _global/prefs.md are
 # left untouched — they keep using flat prefs.md. Idempotent: once a prefs.md has
 # been folded and parked, re-running is a no-op.
