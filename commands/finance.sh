@@ -557,9 +557,11 @@ if [[ "${1:-}" == "expense" ]]; then
   PARSED_AMOUNT="$(printf '%s' "$RAW" | python3 -c '
 import sys, re
 s = sys.stdin.read()
-# First number that looks like a money amount, allowing thousands separators,
-# decimals, and a leading/trailing currency symbol (handled by the regex around).
-m = re.search(r"(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)", s)
+# First number that looks like a money amount, allowing thousands separators
+# (Indian or Western grouping) and decimals. The comma-grouped form is tried
+# first but REQUIRES at least one comma, so a plain run like 3499 is matched
+# whole by the second alternative instead of being truncated to 349.
+m = re.search(r"(\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)", s)
 print(m.group(1).replace(",", "") if m else "")
 ')"
   cat <<QUICKADD

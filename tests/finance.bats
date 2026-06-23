@@ -285,6 +285,18 @@ EOF
   [[ "$output" == *"parsed_amount: 1200.50"* ]] && [[ "$output" == *"FINANCE_EXPENSE_QUICKADD"* ]]
 }
 
+@test "expense amount extraction keeps a bare 4-digit number whole (not truncated)" {
+  write_profile
+  run FIN expense 3499 sneakers on 12 jun
+  [[ "$output" == *"parsed_amount: 3499"* ]] && [[ "$output" == *"FINANCE_EXPENSE_QUICKADD"* ]]
+}
+
+@test "expense amount extraction handles Indian lakh grouping" {
+  write_profile
+  run FIN expense '1,50,000 down payment'
+  [[ "$output" == *"parsed_amount: 150000"* ]] && [[ "$output" == *"FINANCE_EXPENSE_QUICKADD"* ]]
+}
+
 @test "expense quick-add does not touch the balances section when off" {
   write_profile
   run FIN expense 100 coffee
