@@ -429,6 +429,12 @@ if [[ "${1:-}" == "focus" || "${1:-}" == "library" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Existence-only flag for the end-of-session diet nudge — we only need yes/no,
+# not the file contents. Computed here (before the UPDATE branch) so BOTH the
+# UPDATE and PLAN paths can emit it: the nudge must fire on a bare end-of-session
+# re-run (which takes the UPDATE path), not only on the fresh-plan path (PB-73).
+DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
+
 # UPDATE path — revise today's already-written plan (light, in-place). Triggered
 # by an explicit `update` verb, or by a bare invocation when today's plan exists.
 # Loads ONLY today's plan + the focus lens + this week's/month's goals — no
@@ -455,6 +461,7 @@ if [[ "$MODE" == "update" || ( -z "$MODE" && -f "$OUT_FILE" && "$GLANCE_PRESENT"
   echo "day_of_week: $DOW"
   echo "output_file: $OUT_FILE"
   echo "profile_file: $PROFILE_FILE"
+  echo "diet_today_exists: $DIET_TODAY_EXISTS"
   echo ""
   echo "=== TODAY'S PLAN (current) ==="
   cat "$OUT_FILE"
@@ -483,10 +490,6 @@ fi
 # ---------------------------------------------------------------------------
 FITNESS_TODAY="$(cat "$FITNESS_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 DAILY_TODAY="$(cat "$DAILY_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
-
-# Existence-only flag for the end-of-session diet nudge — we only need yes/no,
-# not the file contents.
-DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
 
 # Sleep data recorded by today's fitness check-in (frontmatter sleep_* fields)
 # — when present, the wake-time question is skipped (confirm in passing).

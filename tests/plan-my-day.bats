@@ -401,6 +401,31 @@ EOF
   [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"TODAY'S PLAN (current)"* && "$output" == *"plan content"* ]]
 }
 
+@test "UPDATE path emits diet_today_exists so the end-of-session diet nudge can fire (PB-73)" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PLAN"
+  # A bare re-run on an already-laid day takes the UPDATE path — the diet nudge
+  # must still reach the model there (it only lived on the plan path before PB-73).
+  printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* ]]
+  [[ "$output" == *"diet_today_exists: no"* ]]
+}
+
+@test "UPDATE path reports diet_today_exists: yes when today's diet log is present (PB-73)" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PLAN" "$PBRAIN_VAULT/fitness/diet-tracking"
+  printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
+  printf '# diet log\n' > "$PBRAIN_VAULT/fitness/diet-tracking/$TODAY.md"
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_UPDATE"* ]]
+  [[ "$output" == *"diet_today_exists: yes"* ]]
+}
+
 @test "PB-85: a pmw-scaffolded file (tracker, no glance) routes to the PLAN path and preserves the tracker" {
   write_plans_profile
   write_libraries

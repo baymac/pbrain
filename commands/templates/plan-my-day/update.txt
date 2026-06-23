@@ -15,6 +15,13 @@ profile current_focus + this week's/month's goals are there for re-tying rows.
    frontmatter accordingly.
 4. Re-show the updated table, confirm, then write the whole file back to the same
    output_file in place. Do NOT create a second file.
+5. Diet nudge (the very end, non-blocking). Read `diet_today_exists` above:
+   PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
+   diet nudge, skip this step.
+   - If `no`: one short line — "Today's /diet-journal isn't logged yet — want to
+     capture your meals? Otherwise the day's all set." Don't block; don't ask
+     whether anything is complete. Just the offer.
+   - If `yes`: say nothing.
 
 Notes:
 - For end-of-day reconciliation (actual vs plan, Plane sync, scoring), point them to
