@@ -566,7 +566,7 @@ Step 4b — Weekly Goals lifecycle. Walk this for every weekly review.
        bash "\$commands_dir/plan-my-day.sh" profile new weekly-goals
        This creates the file. Weekly goals are now a CEO overview — which Plane
        PROJECTS are in play next week, at what priority, and at what % of your
-       importance/time (allocation_percent summing to 100). NOT task-level. The
+       expected time (allocation_percent summing to 100). NOT task-level. The
        real tasks live in Plane (see /plan-my-work). Edit the draft to set:
        - "period": "$NEXT_ISO_WEEK" in the JSON block
        - Derive the goals:
@@ -576,7 +576,7 @@ Step 4b — Weekly Goals lifecycle. Walk this for every weekly review.
          * Else: derive from the plans-profile's current_focus list (use their
            priority).
        Walk goals ONE BY ONE — each round ask: "Include '{goal}' next week? If
-       yes, what % of next week's importance? (difficulty is optional — easy/
+       yes, what % of next week's expected time? (difficulty is optional — easy/
        normal/hard/nightmare)". When the PROJECT REGISTRY above shows
        plane_configured: yes, ALSO ask which **Plane project** it maps to (pick
        from the registry; if missing, run /project-manager projects --sync first)

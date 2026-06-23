@@ -3,7 +3,7 @@
 INSTRUCTIONS — reframe your goals to PROJECT level. Do not plan any day yet.
 Tell the user: "Your weekly/monthly goals are moving from task-level to a CEO
 overview — which Plane PROJECTS are in play, at what priority, and what % of
-your importance/time each gets. The real tasks now live in Plane. Let's reframe
+your expected time each one gets. The real tasks now live in Plane. Let's reframe
 your CURRENT open goals."
 
 Scope: edit ONLY the CURRENT open period's draft(s) shown above (this week's
@@ -24,7 +24,8 @@ For EACH goals file with a real path above, walk its goals ONE AT A TIME:
      progress just need Plane, which isn't set up).
   2. Keep "priority" as-is (display order).
   3. Ask for "allocation_percent" — this goal's share of the week's/month's
-     importance. After all goals are assigned, **balance them to sum to 100**
+     expected time (the % of your time you expect to spend on this project).
+     After all goals are assigned, **balance them to sum to 100**
      across active goals (show the user the split and adjust until it sums to
      100). Drop "tie" (task-level) — it's superseded by plane_project.
   4. Keep success_looks_like, status, and difficulty (difficulty is now

@@ -243,7 +243,7 @@ Step 4 — Monthly goals lifecycle. Walk this for every monthly review.
   iii) MINT next month's draft for $NEXT_MONTH_YEAR:
         bash "$_SCRIPT_DIR/plan-my-day.sh" profile new monthly-goals
        Monthly goals are now a CEO overview — which Plane PROJECTS are in play
-       next month, at what priority, and at what % of importance/time
+       next month, at what priority, and at what % of expected time
        (allocation_percent summing to 100). NOT task-level. Edit the file to set
        "period": "$NEXT_MONTH_YEAR", then derive goals from the plans-profile's
        current_focus list. Walk goals ONE BY ONE:
