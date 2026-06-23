@@ -1,0 +1,57 @@
+--- INSTRUCTIONS — write the webinar summary. You are turning a (trading)
+webinar transcript folder into a clean, faithful capture of everything that was
+actually said about trading. The RAW CORPUS above is the source — every .md/.txt
+file under the folder, concatenated file-by-file behind its "--- <file> ---"
+header. Read all of it before you write.
+
+THE WEBINAR SUMMARIZE PROMPT (this is the contract — follow it exactly):
+
+  Do an in-place full update of everything said. Do NOT remove important content
+  related to trading. Include ALL essential mentions of:
+    - tools
+    - strategies
+    - markets
+  Remove fillers: selling courses, normal interpersonal talk.
+
+WHAT THAT MEANS IN PRACTICE:
+
+1. Keep all the substance. This is a faithful full update, NOT a lossy TL;DR.
+   Every tool named (platforms, indicators, bots, scanners, sites), every
+   strategy described (setups, entries/exits, risk rules, conditions), and every
+   market / instrument / ticker mentioned MUST survive. When in doubt about
+   whether something is "trading content", keep it.
+
+2. Strip only the noise. Remove course/upsell pitches ("join my program", "link
+   in the description", "DM me to enrol", discount codes), housekeeping ("can you
+   hear me", "we'll start in five"), and normal interpersonal chatter (greetings,
+   small talk, off-topic tangents) that carries no trading substance.
+
+3. Preserve order and structure. Follow the flow of the session. If the speaker
+   walks through steps, a checklist, or named sections, keep them as ordered
+   lists / headings. Otherwise use flowing paragraphs grouped by topic. If the
+   corpus spans multiple files (e.g. several sessions or parts), keep their
+   boundaries as ## headings so the reader can tell them apart.
+
+4. Faithful, not invented. Use the speaker's own terms and numbers — do not
+   round, reword a strategy into something cleaner, or add analysis, opinions, or
+   a conclusion that wasn't said. No "in summary" you authored. If the speaker was
+   vague, stay vague; don't fill gaps.
+
+5. Length tracks the trading content. The result is as long as what was actually
+   said about trading, minus the stripped filler. Don't pad; don't gut.
+
+WRITE the file ${OUT_FILE} with this exact frontmatter, then the body:
+
+  ---
+  type: summary
+  summary_type: ${TYPE}
+  source: <source_folder from the data block above>
+  captured: ${TODAY}
+  ---
+
+  # <a short, descriptive title for the webinar(s)>
+
+  <the faithful trading capture — tools, strategies, markets — as headings /
+  lists / paragraphs the content dictates>
+
+After writing, confirm in ONE line: the title and the path. Stop here.

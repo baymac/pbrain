@@ -159,6 +159,7 @@ Packaged as the **pbrain** Claude plugin (manifest at `.claude-plugin/plugin.jso
 | `/fitness-journal` | Adaptive workout for today | `$VAULT/fitness/daily-tracking/` |
 | `/organize-clippings` | Sort `Clippings/` into the right folders | source: `$VAULT/Clippings/` |
 | `/clipper <platform> <url>` | Save an online video as a clean, faithful long-form transcript ("clip"). Platform subcommands — `x` (X/Twitter) and `yt` (YouTube). The script does the technical work (browser cookies → `yt-dlp` → VTT cleanup → local Parakeet v3 transcription fallback for caption-less videos); the model only reframes the captions into readable prose — keeps the speaker's words and length, drops filler/ads/plugs, adds punctuation + paragraphs. Not a summary | `$VAULT/agent-work/clips/<platform>/<slug>.md` |
+| `/summarize <type> <folder>` | Summarize a **vault folder** of notes/transcripts via a per-type **summarize prompt**. Content-type subcommands (mirroring `/clipper`'s shape) — `webinar` first. The script does the mechanical work (resolve the folder against the vault → walk it → concatenate every `.md`/`.txt` into one corpus); the model reframes that corpus into a faithful, prompt-driven summary. The input is read-only — a new file is written, your source notes are never touched | `$VAULT/agent-work/summaries/<type>/<slug>.md` |
 
 ### Daily flow
 
@@ -179,7 +180,7 @@ The commands compose into a full-day ritual. Run them top-to-bottom — most are
 | After the day is shaped | `/plan-my-work` | Fills the empty blocks with real tasks from Plane — picks today's projects, shows a progress report, packs the tasks. |
 | End of day | `/end-of-day` | Just run it — close-of-day reflection. Bookends the day: reconciles the work tracker (back to Plane), what shipped, what slipped, what carries over. |
 
-`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/project-manager`, `/finance`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, `/organize-clippings`, and `/clipper <platform> <url>` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
+`/thoughts [<text>]`, `/brainstorm <topic>`, `/discuss <topic>`, `/recall <query>`, `/loose-ends`, `/weekly-review`, `/monthly-review`, `/habits`, `/project-manager`, `/finance`, `/remind <text>`, `/remind-blocking <text>`, `/laptop-tracking`, `/organize-clippings`, `/clipper <platform> <url>`, and `/summarize <type> <folder>` are on-demand — not part of the daily loop. Pull them in when needed. (`/habits` also surfaces automatically inside `/plan-my-day` and `/end-of-day`, and habits get logged from your journaling sessions without you asking. `/remind` lives in Apple Reminders and does not surface there.)
 
 ![pbrain on-demand commands](docs/diagrams/on-demand.svg)
 
@@ -220,6 +221,8 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_CLIPPER_COOKIES_BROWSER` / `PBRAIN_CLIPPER_COOKIES_FILE` | `/clipper` (`yt-dlp` cookie source — browser jar / `cookies.txt`; `none` disables) | `brave` / unset |
 | `PBRAIN_CLIPPER_SUB_LANGS` | `/clipper` (subtitle langs to fetch) | `en,en-orig,en-US,en-GB` |
 | `PBRAIN_CLIPPER_FLUIDAUDIO_BIN` / `_DIR` / `_REF` / `_MODEL_DIR` | `/clipper` (no-caption fallback: prebuilt `fluidaudiocli` / build dir / git tag / Parakeet v3 model dir) | (unset) / `~/.config/pbrain/fluidaudio` / `v0.15.4` / FluidAudio cache |
+| `PBRAIN_SUMMARIZE_DIR` | `/summarize` (summaries parent; `<type>` are subdirs) | `$VAULT/agent-work/summaries` |
+| `PBRAIN_SUMMARIZE_EXTS` | `/summarize` (file extensions to gather from the folder) | `md,txt` |
 | `PBRAIN_JOURNAL_DIR` | `/journal`, read by `/plan-my-day`, `/loose-ends` | `$VAULT/life/daily-tracking` |
 | `PBRAIN_BRAINSTORMS_DIR` | `/brainstorm`, read by `/loose-ends` | `$VAULT/agent-work/brainstorms` |
 | `PBRAIN_NOTES_DIR` | `/discuss` | `$VAULT/agent-work/notes` |
