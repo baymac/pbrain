@@ -5,7 +5,7 @@ argument-hint: (none) | task add | task remove | task list | task execute
 Run this with your shell first (substituting any argument for `$ARGUMENTS`), then follow the INSTRUCTIONS in the token it prints:
 
 ```bash
-bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/plan-my-work.sh" "$ARGUMENTS"
+bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/plan-my-work.sh" $ARGUMENTS
 ```
 
 This is the **work layer** of the daily loop. `/plan-my-day` builds the day's *shape* — life anchors (calendar, fitness, meals, walk, bed, habit reminders) and empty work **blocks**. `/plan-my-work` then **fills those blocks with real tasks pulled from Plane**, the project brain (one pbrain project = one Plane PROJECT; see `/project-manager`). Weekly/monthly goals are now a CEO overview — which projects are in play, at what priority, and at what **% allocation** (summing to 100) — not task text. The tasks live in Plane.
