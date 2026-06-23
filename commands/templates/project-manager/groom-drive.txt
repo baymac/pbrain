@@ -1,0 +1,42 @@
+--- INSTRUCTIONS — groom: drive the ordered queue (PB-94). The mechanical scan above
+already ran (todo-only triage) and wrote the grooming-data artifact to the vault at
+$GROOM_DATA_FILE, including a `## Queue — ordered` table: the todo issues in the order
+to run them (blockers ahead of the issues they block). groom is a DUMB ORCHESTRATOR —
+it does NO code/git/PR work itself. It just feeds each queued id to `/plan-my-work`,
+which owns the whole execution loop. This block only appears when an agent is present
+(the headless nightly LaunchAgent skips it and just writes the queue for you to drive
+on waking).
+
+BACKLOG IS UNTOUCHED. groom only ever looks at `todo` — backlog is the user's staging
+area. An issue runs only once the user has moved it to todo; you never promote backlog
+here.
+
+READ FIRST. Open the `## Queue — ordered` table in $GROOM_DATA_FILE. An empty queue →
+nothing to drive; say so and stop (the `## Needs review` list still stands for the user
+to enrich). Otherwise, drive the queue top to bottom:
+
+DRIVE THE QUEUE — for each id in `## Queue — ordered`, in order:
+  1. Hand it to the execution loop: `/plan-my-work <PB-id>`. That command owns the
+     whole 5-stage pipeline (plan → implement → test → ship → land), the auto:<stage>
+     label checks, the worktree, the PR, the merge, and the PARK. Do NOT reimplement
+     any of it here — just invoke it per id.
+  2. Each id runs until it either completes (landed) or PARKS at the first stage whose
+     `auto:<stage>` label is absent. pmw writes the park breadcrumb onto the issue
+     itself, so you don't manage that — you just move to the next queued id.
+  3. RECORD the outcome in the grooming-data file's `## Auto-work` section (append one
+     line per id): `- **<PB-id>** <title> — <landed | parked at <stage>>; <PR/branch
+     link if any>`. This is the morning-review record of how far the night got.
+
+INVARIANTS (owned by execute.txt — never weakened here):
+  • The merge (stage land) is irreversible. Without `auto:land` it is a manual park
+    point; even WITH `auto:land`, CI must be green — a red CI parks the issue, never
+    merges. groom never types the confirm for you.
+  • groom never adds an `auto:<stage>` label to make something auto-run. The labels are
+    the user's (or the triage agent's) decision; groom only feeds ids and records
+    outcomes.
+  • Thin issues (in `## Needs review`) are NOT in the queue — they need enrichment
+    first and must not be driven.
+
+When the queue is exhausted (or you stop), give one tight summary: which ids landed,
+which parked (and at which stage), and "review the grooming data at $GROOM_DATA_FILE,
+then run `/plan-my-work <PB-id>` to resume any parked issue." Stop here.

@@ -150,8 +150,13 @@ except Exception: d={}
 print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || true)"
 fi
 COMPLETED_TODAY_JSON="[]"
+DOING_NOW_JSON="[]"
 if [[ "$PLANE_CONFIGURED" == "yes" ]]; then
   COMPLETED_TODAY_JSON="$(pbrain_projects_completed_today_json "$WEEKLY_PIDS" "$TODAY" 2>/dev/null || echo '[]')"
+  # PB-94: issues still IN PROGRESS in Plane (the doing group) — work that was
+  # started but not finished today (e.g. an issue /plan-my-work parked mid-pipeline).
+  # State is Plane-only now; there is no vault Work tracker to reconcile against.
+  DOING_NOW_JSON="$(pbrain_projects_doing_json "$WEEKLY_PIDS" 2>/dev/null || echo '[]')"
 fi
 PM_CMD="$(pbrain_projects_manager_cmd 2>/dev/null || true)"
 
@@ -170,6 +175,7 @@ plane_configured: $PLANE_CONFIGURED
 weekly_pids: ${WEEKLY_PIDS:-(none)}
 project_manager_cmd: ${PM_CMD:-(unavailable)}
 completed_in_plane_today: $COMPLETED_TODAY_JSON
+doing_in_plane_now: $DOING_NOW_JSON
 journal_file: $JOURNAL_FILE (exists: $(exists "$JOURNAL_FILE"))
 gratitude_file: $GRATITUDE_FILE (exists: $(exists "$GRATITUDE_FILE"))
 thoughts_file: $THOUGHTS_FILE (exists: $(exists "$THOUGHTS_FILE"))
@@ -205,26 +211,33 @@ make sure all the day's trackings are complete, then write a lean executive
 summary into the "## How it went" section of the plan file in place. The plan
 file is the single record for the day — no sibling close files.
 
-Step 0 — Preflight. PB-85: "## Today at a glance" (from /plan-my-day) and
-"## Work tracker" (from /plan-my-work) are INDEPENDENT — the day may have either,
-both, or neither. You are handed glance_present and work_tracker_present; close
-whatever exists and never assume the other is there:
+Step 0 — Preflight. WORK STATE IS PLANE-ONLY (PB-94): /plan-my-work no longer writes
+a "## Work tracker" — it drives issues directly in Plane. So the WORK side of the close
+reconciles from PLANE, via the context above: `completed_in_plane_today` (issues that
+reached done today) and `doing_in_plane_now` (issues still in progress — e.g. one
+/plan-my-work parked mid-pipeline). You read these through `${PM_CMD}` (the sole Plane
+reader) — there is no Plane logic in /end-of-day itself. "## Today at a glance" (from
+/plan-my-day) is still independent and may or may not be present (`glance_present`).
+A "## Work tracker" only appears on LEGACY daily files (pre-PB-94); if one is present
+(`work_tracker_present == yes`), reconcile it too, but never expect or create one.
   - plan_file exists == no: tell the user "No plan file for today — I'll write a
     free-form close at the top of a new $PLAN_FILE." Skip the Q1 table walk
-    (there's no table); still run Q2–Q5 and write the summary.
-  - work_tracker_present == yes, glance_present == no (PMW-ONLY day, e.g. ran
-    /plan-my-work standalone or via task execute): there is no day-shape table —
-    close the WORK side fully (reconcile the tracker, carry-forward, Plane sync in
-    Step 4k) and write the summary from the tracker + the other trackings. Do NOT
-    ask about or fabricate glance blocks. The executive summary still leads with
-    Work since that's the day's recorded shape.
-  - glance_present == yes, work_tracker_present == no (PMD-ONLY day): close the
-    day-shape normally; there is simply no work ledger to reconcile — skip the
-    tracker parts of Q1/3b/3c/4k silently.
-  - both present: full close (the original behaviour).
+    (there's no table); still reconcile WORK from Plane, run Q2–Q5, write the summary.
+  - glance_present == yes: close the day-shape ("## Today at a glance") normally.
+  - glance_present == no: no day-shape table — just reconcile WORK from Plane and
+    close the other trackings. Do NOT fabricate glance blocks.
+  - work_tracker_present == yes (legacy file): additionally reconcile that tracker's
+    rows (Status, links) the old way, but Plane is authoritative where they disagree.
   - If already_closed == yes: tell the user "Today's plan already has a
     filled-in 'How it went'. Want me to overwrite, append a note, or skip?"
     Wait for direction.
+
+WORK RECONCILE (Plane-only): the day's work = `completed_in_plane_today` (done) +
+`doing_in_plane_now` (in progress / parked). Recap both ("Shipped today: PB-…; still in
+progress: PB-… (parked at <stage>, see its comments)"). A parked issue's own Plane
+comments carry the `pbrain park:` breadcrumb + per-stage log — read them for status,
+don't ask the user to reconstruct it. The "Work the plan" / "Deep work" habits score off
+this Plane work (done count + in-progress effort), NOT a vault ledger.
 
 Step 1 — PHASE A: reconcile silently, then recap. Skim every section above and
 pull what's already known WITHOUT asking — work-tracker rows already resolved

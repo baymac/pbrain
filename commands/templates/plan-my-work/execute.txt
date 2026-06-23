@@ -1,271 +1,183 @@
----
-INSTRUCTIONS — task execute. You DRIVE the day's Work-tracker tasks to Done, one
-at a time, through the full lifecycle: pick → in-progress → spec/approval gate →
-implement → finish → PR → gated-merge → done, then cascade until the day's work is
-exhausted. This is the only pbrain command that touches code, branches, PRs, and
-merges — so be deliberate. Read-only until the user says go; get an explicit
-yes before each [GATE]. NEVER fabricate a PR, a CI result, or a merge.
 
-PB-85 — STANDALONE LEDGER, NOT BLOCKS. The "## Work tracker" is a flat, ordered
-ledger that is INDEPENDENT of "## Today at a glance". There is no "current block":
-the next task is simply the first not-done row, top to bottom (resume-safe). You do
-NOT touch, relabel, or re-flow any glance work-block rows — only the tracker.
+--- INSTRUCTIONS — /plan-my-work, the EXECUTION LOOP (PB-94). You drive ONE Plane issue
+through a fixed 5-STAGE pipeline: plan → implement → test → ship → land. This is the
+only pbrain command that touches code, branches, PRs, and merges — so be deliberate.
+State lives in PLANE ONLY: there is no vault Work tracker, no daily-planning file. You
+read issue state with `${PM_CMD} spec "<tie>" --read` and write it back with
+`${PM_CMD} move/comment/...`. Never fabricate a PR, a CI result, or a merge.
 
-PB-85 — PARALLEL EXECUTION. Each execute session drives its OWN task in its OWN
-worktree. Multiple tasks may be in-progress in parallel across sessions/worktrees.
-So: do NOT enforce "one task in-progress at a time", and do NOT stop to resume or
-clean up some OTHER in-progress row or another worktree you find. Ignore other
-in-progress rows and other worktrees entirely — work only the task handed to you.
+THE 5 STAGES + THEIR LABELS. Each stage checks the issue's own `auto:<stage>` label
+(from the `auto_gates` array in `spec --read`). Present → AUTO-ADVANCE the stage
+(announce it in one line, don't wait). Absent → it is a MANUAL [GATE]: stop, get an
+explicit yes, and if the user doesn't continue, PARK (step P). The stages:
+    1 plan      (auto:plan)      worktree + draft the plan + SAVE it to the issue
+    2 implement (auto:implement) write the code + commit locally
+    3 test      (auto:test)      run the repo's tests / linters, capture results
+    4 ship      (auto:ship)      push the branch + open the PR
+    5 land      (auto:land)      update docs/etc, then merge (NO new release)
+SEMANTICS — INDEPENDENT, STOP-AT-FIRST-GAP: each label clears ONLY its own stage, and
+a later label does NOT imply an earlier one. Walk the stages in order; the first stage
+whose label is absent is a manual gate — if you don't get the go, PARK there. An issue
+with no auto:* labels is fully manual (every stage gated), which is the safe default.
+You only READ these labels — never add an auto:* label mid-run to skip your own gate.
+INVARIANT — the merge is irreversible and stays SAFE even with auto:land: auto:land
+waives ONLY the typed-confirm half of stage 5. A red/failing CI HARD-STOPS the merge
+regardless of any label. And land NEVER cuts a release.
 
-THE SPEC/APPROVAL GATE (PB-45) is step 4. Issues whose `## Implementation Plan` was
-approved ahead of time (via `/project-manager spec`) take the FAST PATH — you
-implement straight against the recorded plan, no live planning gate. Issues without
-an approved plan FALL BACK to drafting the plan inline behind a [GATE], as before.
-Nothing is blocked — approval is a fast path, not a wall.
+YOU WERE HANDED (in the output above):
+  • target_ref = ${TARGET_REF} — the issue to run. target_kind = ${TARGET_KIND}:
+      - id   → a Plane id (pb96 / PB-96 / 96). Resolve it directly.
+      - desc → a free-text description, NOT an id. Run the FIND-OR-FILE cycle: search
+        Plane for a matching issue (`${PM_CMD} find "<desc>"`); if exactly one strong
+        match, use it; if none, OFFER to file a new issue (`${PM_CMD} file "<desc>"`)
+        and, on the user's yes, execute the id it returns; if several, ask which. Never
+        invent or substitute a different task.
+  • WORKING LOCATIONS (above) — plane.json projects[].work: {path,kind,base_branch,
+    isolation} per project. May be empty.
+  • ${PM_CMD} is the SOLE writer of Plane. ${PLANE_WEB_BASE} is the clickable link base.
 
-You were handed (in the output above):
-  • target_ref = ${TARGET_REF} (the PB-id, OR the free-text description, you were
-    asked to execute, if any; "(none)" means just take the ledger in order).
-  • target_kind = ${TARGET_KIND} (PB-96) — WHAT target_ref is, when unmatched:
-      - id   → target_ref is a Plane issue ref (pb96 / PB-96 / 96). Resolve it
-               directly against Plane (subtree read).
-      - desc → target_ref is a free-text DESCRIPTION of work (e.g. "fix the
-               routing bug"), NOT an id. Run the find-or-file cycle: search Plane
-               for a matching issue, and if none matches, triage a NEW issue via
-               `${PM_CMD} file "<desc>"`, THEN execute the resulting id. This is
-               the full cycle (PB-96) — a brief description, with no pre-existing
-               issue id, still ends in a concrete issue driven to Done.
-      - none → no target; drive the ledger in order.
-  • target_mode = ${TARGET_MODE} (PB-92) — how to read NEXT TASKS:
-      - none      → no target given. NEXT TASKS is the full not-done ledger in
-                    order; drive the first row, then cascade (step 10).
-      - solo      → target_ref matched a ledger row. NEXT TASKS holds ONLY that
-                    one row. Drive it to Done and then STOP — do NOT cascade to
-                    other in-progress rows or other worktrees. The user asked for
-                    THAT task; an explicit target is authoritative.
-      - unmatched → target_ref matched NO ledger row. NEXT TASKS is empty. Do NOT
-                    fall back to a pending row. Resolve it per target_kind above
-                    (id → subtree read; desc → find-or-file cycle), then run the
-                    lifecycle on the resolved issue. A leaf/childless issue → ONE
-                    row; a PARENT with open sub-issues → EACH child as its own row,
-                    lifecycle once per child, one PR each, parent closed last
-                    (PB-81) — see PRE-FLIGHT. If it resolves to nothing AND cannot
-                    be filed, say so and stop; never substitute a different task.
-  • NEXT TASKS — the not-done "## Work tracker" rows. With target_mode=solo it is
-    just the one targeted row; with =none it is the full ledger in order; with
-    =unmatched it is empty. Done rows are always filtered out, so a re-run resumes
-    the first unfinished task.
-  • WORKING LOCATIONS — plane.json projects[].work: {path,kind,base_branch,
-    isolation} per project. The map may be empty.
-  • TODAY'S PLAN (${OUT_FILE}), the plans profile, and the PROJECT REGISTRY.
-Every Plane write routes through the project manager: ${PM_CMD} (the SOLE writer of
-Plane).
+SELF-HOST CHECK. If a `SELFHOST_STALE <branch> <state>` line appeared above, the live
+pbrain checkout (this command's own code) is not on a clean, up-to-date main. Surface
+it in ONE line and offer to bring it current before proceeding (git -C <pbrain-repo>
+fetch origin -q && git -C <pbrain-repo> checkout main && git -C <pbrain-repo> pull
+--ff-only). No line → nothing to do. (This is about the command wrapper; each task's
+own work still gets a fresh worktree off origin/<base> in stage 1.)
 
-PRE-FLIGHT. Branch on target_mode (PB-92) FIRST:
-  • target_mode = unmatched → the target you were given matched no ledger row. Do
-    NOT take a pending row instead. FIRST resolve it to a CONCRETE Plane issue id,
-    branching on target_kind (PB-96):
+================================ PRE-FLIGHT =================================
+Resolve target_ref → a single tie (id: direct; desc: find-or-file above). Then read
+its state ONCE and branch on dependencies BEFORE touching any stage:
 
-    ── target_kind = desc → THE FIND-OR-FILE CYCLE (PB-96). target_ref is a
-       free-text description of work ("${TARGET_REF}"), not an id. You must end up
-       with a concrete issue id to execute — find an existing one, or file a new
-       one. Read-only until a [GATE] says go.
-       1. SEARCH Plane for a matching issue (fuzzy, across the week's projects;
-          add --project to scope if you know it):
-            ${PM_CMD} find "${TARGET_REF}"
-          Read the PM_FIND JSON (each card: tie, id, title, state, priority).
-          Apply judgement, not just substring overlap — does a returned issue
-          actually DESCRIBE THE SAME WORK as the description? Ignore done/cancelled
-          cards (you'd be re-doing finished work).
-            · exactly one good semantic match → name it back in one line
-              ("found PB-NN '<title>' — matches your request") and treat its tie as
-              the resolved target. Proceed to the subtree read below with that id.
-            · several plausible matches → list them tersely (id · title · state)
-              and [GATE] ask which one (or "none — file a new issue"). Do not guess.
-            · no card describes this work (empty PM_FIND, or only unrelated/closed
-              hits) → go to step 2 (file a new issue).
-       2. [GATE] FILE A NEW ISSUE. There is no existing issue for this work, so
-          triage one via the generic intake convention (PB-67) — the SOLE create
-          path; never hand-write an issue some other way. Tell the user in one line
-          "no existing issue matches — I'll file one" and, on their go, run:
-            ${PM_CMD} file "${TARGET_REF}"
-          Follow that command's own walk (it infers type/title/body/labels/priority
-          and dedupes against open items; a bug gets a severity-derived priority).
-          When it finishes it reports the NEW issue's id/tie — capture that. If the
-          user aborts the filing, STOP (do not invent or substitute a task).
-       3. RESOLVE THE ID. With the found-or-filed id in hand, fall through to the
-          subtree read below using THAT id as the ref (a freshly filed issue is
-          normally a childless leaf → one row → the lifecycle). From here on, desc
-          and id behave identically.
+  bash ${PM_CMD} spec "<tie>" --read     # JSON: auto_gates, approved, has_plan,
+                                         # description, comments, status, blocked_by
 
-    ── target_kind = id (or a found/filed id from the desc cycle) → resolve it
-       against Plane with the PARENT-AWARE read (PB-81). Use the resolved id as the
-       ref: ${PM_CMD} subtree "<id>" (for a raw id target this is just
-       "${TARGET_REF}"). Branch on the PM_SUBTREE JSON:
-      - status = none / ambiguous / error → it resolved to nothing (or needs
-        disambiguation). Relay that and stop — never substitute a different task.
-      - status = ok, has_open_children = false → an ordinary single issue (a leaf,
-        or a parent whose children are all done). Pull it into the tracker as ONE
-        new row (Status = planned, Plane id = the full <pid>:<iid> tie), name it
-        back in one line, and drive THAT issue through the lifecycle below (treat it
-        like a freshly pulled task — read its spec/approval state at step 4).
-      - status = ok, has_open_children = true → a PARENT with open sub-issues. This
-        is ONE logical target executed as SEPARATE SEQUENTIAL UNITS (PB-81): the
-        parent is a container, not a unit of work. State it back in one line:
-        "parent <id> (<title>) = one target, N sub-issues — one PR each, in order."
-        Then PULL EACH child in `children` (already sorted priority → due → id) into
-        the tracker as its own row (Status = planned, Plane id = the child's full
-        tie, Notes marker `↳ <parent-id>` so the grouping is visible). Do NOT add a
-        row for the parent itself. Now run the FULL per-task lifecycle below ONCE
-        PER CHILD, top to bottom, SEQUENTIALLY — each child gets its OWN worktree,
-        branch, PR, and double-gated merge; finish and merge one child before
-        starting the next. After the LAST child merges, run the PARENT-CLOSE step
-        (after step 9): mark the parent done only because all its children landed.
-        If the user declines a child's merge (or stops), STOP there — leave the
-        remaining children planned and the PARENT OPEN; never force-close a parent
-        whose children haven't all merged.
-  • target_mode = solo → NEXT TASKS holds the ONE row you asked for. Take it as
-    the current task, name it back in one line (task · project · Plane id ·
-    priority · est), and confirm you'll start it. After it reaches Done, STOP —
-    do NOT cascade (step 10 does not apply in solo mode); the user asked for that
-    single task.
-  • target_mode = none, NEXT TASKS empty → the ledger has no unfinished rows. Say
-    so, then offer to pull more ready tasks for a project (CASCADE B) or pick up a
-    new project (CASCADE C), and stop. Don't invent work.
-  • target_mode = none, otherwise → take the FIRST row in NEXT TASKS as the
-    current task. Name it back in one line (task · project · Plane id · priority ·
-    est) and confirm you'll start it; cascade (step 10) applies when it's done.
-  • SELF-HOST CHECK. Slash commands execute the LIVE pbrain working tree these
-    commands are read from, so a checkout parked on a stale/unmerged branch
-    silently shadows a fix already merged to main — the command you're running
-    can be older than `main` without any error (this is exactly how a
-    quoted-$ARGUMENTS misroute survived after it was fixed on main). The .sh now
-    guards this DETERMINISTICALLY (PB-93): it runs the check for you and, if the
-    pbrain checkout is not on a clean, up-to-date `main`, emits a single line
-    near the top of this output:
-      SELFHOST_STALE <branch-or-HEAD> <state>
-    where <state> is `detached`, `branch:<name>` (on a non-main branch), or
-    `behind:<N>` (on main but behind the last-fetched origin/main). No line means
-    the wrapper is current — nothing to do.
-    If you DO see a SELFHOST_STALE line, surface it in ONE line and offer to
-    bring the checkout current before proceeding — don't silently run on stale
-    command code:
-      git -C <pbrain-repo> fetch origin -q                      # refresh origin/main
-      git -C <pbrain-repo> checkout main && git -C <pbrain-repo> pull --ff-only
-    (The guard does NOT fetch — it compares against the last-fetched origin/main —
-    so a `fetch` here is what confirms whether `behind:N` is still live.) This is
-    about the COMMAND wrapper itself; the ISOLATE step below already gives the
-    task's own work a fresh worktree off origin/<base>.
+A) BLOCKED? If `blocked_by` is non-empty, this issue cannot run yet — its open
+   blockers must land first. State it in one line, then drive EACH blocker through the
+   FULL loop below first (iteration 1…N, in the order given), and only AFTER the last
+   blocker merges, come back and run THIS issue (final iteration). If a blocker can't
+   be finished (user stops, or it itself parks), STOP and leave this issue blocked —
+   do not force it. (On the groom path the ordered stream already put blockers first,
+   so `blocked_by` is normally empty here; this is the safety net for a manual run.)
 
-PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
+B) PARENT WITH SUB-ISSUES? Check `bash ${PM_CMD} subtree "<tie>"`. If
+   `has_open_children` is true, the parent is ONE logical target executed as SEPARATE
+   SEQUENTIAL UNITS: drive EACH child in `children` (already sorted priority→due→id)
+   through the full loop below, one branch/PR/merge per child, in order. Close the
+   PARENT only after the last child merges (PARENT-CLOSE, below). A childless issue (or
+   a parent whose children all landed) is driven as a single unit.
 
-1. RESOLVE WORKING LOCATION. Look up the task's project in WORKING LOCATIONS.
-   - Absent → [GATE] ask the user for the absolute path to the project's repo
-     / Conductor workspace, and offer to record it for next time:
-       bash "${PM_CMD}" workdir "<project-ref>" --path "<abs>" [--kind conductor|repo] [--base-branch <b>]
-   - Verify the path exists and is a git repo (git -C <path> rev-parse). If not,
-     stop and say so — do NOT create or guess a repo.
+C) RESUMING? If the issue's comments carry a `pbrain park:` breadcrumb (branch +
+   parked-stage), this is a resume — see stage 1 RE-ATTACH, then jump to the parked
+   stage (skip the stages already done).
 
-2. [GATE] MARK IN-PROGRESS. On the user's go:
-     bash "${PM_CMD}" move "<tie>" --to doing
-   and set that row's Status = in-progress in "## Work tracker", and Started = HH:MM.
-   (Parallel-safe: other rows may also be in-progress — that is expected, not a bug.)
+Once dependencies are clear, run the 5 stages for the (leaf) issue.
 
-3. ISOLATE. Branch off a FRESH base — never a stale HEAD:
+============================== THE 5 STAGES ================================
+Across all stages: keep the issue a LIVE, SUMMARIZED EXECUTION LOG — at each stage
+append a tight comment via `${PM_CMD} comment "<tie>" --body "..."` capturing what
+happened + the artifacts (plan link, files changed, TEST RESULTS, PR url, park note).
+At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
+
+0. RESOLVE WORKING LOCATION. Look up the issue's project in WORKING LOCATIONS.
+   Absent → [GATE] ask the user for the absolute path to the project's repo / workspace
+   and offer to record it: `${PM_CMD} workdir "<project-ref>" --path "<abs>"
+   [--kind conductor|repo] [--base-branch <b>]`. Verify the path is a git repo.
+
+1. PLAN  (auto:plan)
+   ISOLATE — branch off a FRESH base, never a stale HEAD:
      git -C <path> fetch origin
      git -C <path> worktree add <wt> -b pbrain/<short-slug> origin/<base_branch>
-   (isolation=branch → `git -C <path> switch -c pbrain/<slug> origin/<base>`
-   instead). READ the TARGET repo's CLAUDE.md / AGENTS.md conventions (NOT
-   pbrain's). State the branch + base you used.
+   (isolation=branch → `git -C <path> switch -c pbrain/<slug> origin/<base>` instead).
+   RE-ATTACH (resume) — if a park breadcrumb named a pushed `pbrain/<slug>` branch, do
+   NOT make a fresh empty branch (that orphans the partial work). Re-attach:
+     git -C <path> fetch origin
+     git -C <path> worktree add <wt> pbrain/<slug>                # local branch exists
+   or recreate from the pushed branch if the local one is gone:
+     git -C <path> worktree add <wt> -b pbrain/<slug> origin/pbrain/<slug>
+   READ the TARGET repo's CLAUDE.md / AGENTS.md conventions (not pbrain's). State the
+   branch + base. THEN the plan itself:
+     - approved == true (the issue already has an approved `## Implementation Plan` in
+       its description) → FAST PATH: read that plan and implement against it; do not
+       re-draft. Honor authoritative user comments if they override the description.
+     - approved == false → draft a tight implementation plan against the target repo's
+       conventions, and SAVE it to the issue so any later session (or a resume) can read
+       it — append a `## Implementation Plan` section to the issue's description:
+         ${PM_CMD} update --edits '[{"tie":"<tie>","field":"description","value":"<full existing description_html + the new ## Implementation Plan section>"}]'
+       (re-send the FULL existing description_html with the plan appended, so nothing is
+       clobbered). Offer once to approve it (`${PM_CMD} spec "<tie>"` → adds
+       plan-approved) so future runs fast-path.
+   GATE: auto:plan present → announce + proceed. Absent → [GATE] explicit yes before
+   writing ANY code; no go → PARK (step P).
 
-4. PLAN — SPEC/APPROVAL GATE. Read the issue's recorded plan + approval state
-   (read-only, JSON only — the --read flag suppresses the interactive walk):
-     bash "${PM_CMD}" spec "<tie>" --read
-   The PM_SPEC JSON carries `approved`, `has_plan`, a `description` that holds the
-   ## Implementation Plan (if one exists), and `comments` (the user's comments on
-   the issue, oldest→newest). If a comment contradicts the description (or an
-   approved plan), surface it in ONE line before proceeding (e.g. "note: a comment
-   says use X, the description said Y — going with the comment"), so a stale
-   description gets noticed. Empty `comments` → nothing changes; proceed as before.
-   - approved = true → FAST PATH. The approach was reviewed ahead of time. Read the
-     ## Implementation Plan out of `description` and implement straight against it
-     (as amended by any authoritative comments above). Do NOT re-open the approach
-     or ask for a planning [GATE] — state in one line the plan you're following
-     (and any comment override), then go to step 5.
-   - approved = false → FALLBACK. Draft a tight implementation plan against the
-     TARGET repo's conventions (use the PM_SPEC JSON — incl. `comments` — or
-     `bash "${PM_CMD}" find "<tie>"`, for context).
-       [GATE] explicit yes before you write ANY code.
-     OFFER once, without blocking: "want me to save this as an approved plan so
-     future runs skip this step?" — on yes, run the interactive walk
-     `bash "${PM_CMD}" spec "<tie>"` to record + approve it; on no, just proceed.
+2. IMPLEMENT  (auto:implement)
+   Write code per the plan + the target repo's conventions. Commit locally in the
+   worktree (clear message; reference the PB-id). Comment the issue with a one-line
+   summary + files changed. GATE: auto:implement → announce + proceed; absent → [GATE];
+   no go → PARK.
 
-5. IMPLEMENT. Write code to the target repo's conventions. Run its tests /
-   linters / build. Show a tight diff. Iterate until it's green and right.
+3. TEST  (auto:test)
+   Run the repo's tests / linters / build. Capture the RESULTS (pass/fail counts, any
+   failures) and comment them onto the issue — this is the part a CEO reviews. If tests
+   fail, fix and re-run until green (or surface the failure and stop). GATE: auto:test →
+   announce + proceed; absent → [GATE]; no go → PARK.
 
-6. [GATE] FINISH. Confirm the work is complete → commit in the worktree (a clear
-   message; reference the PB-id). Set the row's % complete = 100. Status STAYS
-   in-progress until the PR merges (it is not done yet).
+4. SHIP  (auto:ship)
+   Probe `command -v gh`.
+     - gh present → push the branch, then `gh pr create --fill --base <base_branch>`.
+       Put the PR url in the issue: `${PM_CMD} comment "<tie>" --body "PR: <url>"`.
+     - gh absent / push fails → push the branch and hand back the manual compare URL for
+       the user to open the PR. NEVER fake a PR.
+   GATE: auto:ship → announce + proceed; absent → [GATE]; no go → PARK.
 
-7. OPEN A PR. Probe `command -v gh` first.
-   - gh present → push the branch, then:
-       gh pr create --fill --base <base_branch>
-     Put the PR url in the row's Links column, and best-effort mirror it to Plane:
-       bash "${PM_CMD}" comment "<tie>" --body "PR: <url>"
-   - gh absent OR push fails → push the branch and hand back the manual compare URL
-     for the user to open the PR themselves. NEVER fake a PR.
+5. LAND  (auto:land) — IRREVERSIBLE
+   First update docs / changelog / any release-adjacent files the change needs (NO new
+   release — never cut or tag a release here). Commit + push those. Then the merge,
+   DOUBLE-gated:
+     a) CI green — watch it: `gh pr checks <pr> --watch` (or the manual URL). CI red →
+        STOP, report which check failed, do not merge. INVARIANT: auto:land NEVER
+        waives this — a red CI hard-stops regardless of the label. (No CI configured in
+        the repo = nothing to wait on; say so.)
+     b) Typed confirm — ask the user to type the exact word `land <PB-id>` (or
+        `merge <PB-id>`). PB-94: auto:land waives THIS half only — announce
+        "auto:land — merging on green" and proceed once (a) is green. Without auto:land,
+        the typed word is required.
+   With BOTH satisfied (green/waived AND [typed word OR auto:land]):
+     gh pr merge <pr> --squash --delete-branch
+   then clean up: git -C <path> worktree remove <wt>.
+   GATE: auto:land present → (typed half waived, CI still required); absent → manual
+   typed-confirm gate; no go → PARK (the PR stays open; resume re-attaches at this
+   stage).
 
-8. [GATE — TYPED CONFIRM, IRREVERSIBLE] GATED MERGE. Double-gated:
-   a) CI green — watch it: `gh pr checks <pr> --watch` (or the manual URL). CI
-      red → STOP, report which check failed, and do not merge. The user may
-      explicitly WAIVE a non-blocking check; record that they did.
-   b) TYPED confirm — ask the user to type the exact word `merge <PB-id>`
-      (not just "yes"). Only with BOTH (green/waived AND the typed word):
-        gh pr merge <pr> --squash --delete-branch
-      then clean up the worktree (git -C <path> worktree remove <wt>).
+6. MARK DONE (only AFTER the merge lands).
+     ${PM_CMD} move "<tie>" --to done --completed-at <iso8601>
+   Comment a final one-line summary (merged commit / PR). If a tracked habit applies and
+   ${HABITS_CMD} is available, mark it.
 
-9. MARK DONE (only AFTER the merge lands).
-     bash "${PM_CMD}" move "<tie>" --to done --completed-at <iso8601>
-   Set the row Status = done, Done at = HH:MM, % complete = 100, and Time taken =
-   (Done at − Started) when both are known. If a habit like "Work the plan" /
-   "Deep work" is tracked, mark it on completion only:
-     bash "${HABITS_CMD}" mark --habit "<name>" --date ${TODAY}
+PARENT-CLOSE (only when a parent target's LAST open child has merged — re-check
+`${PM_CMD} subtree "<parent-ref>"` reports has_open_children=false):
+     ${PM_CMD} move "<parent-tie>" --to done --completed-at <iso8601>
+   If ANY child is still unfinished (a child parked / user stopped), leave the parent
+   OPEN — never force-close it.
 
-9b. PARENT-CLOSE (PB-81 — only when this run is driving a PARENT's sub-issues).
-    After a child reaches Done, check whether it was the LAST open child of the
-    parent (the others in this run are already done, and `${PM_CMD} subtree
-    "<parent-ref>"` now reports has_open_children = false). Only then close the
-    parent — it has no work of its own; it's done because all its children landed:
-      bash "${PM_CMD}" move "<parent-tie>" --to done --completed-at <iso8601>
-    Mark the parent's tracker note `↳ all sub-issues merged` if you kept a parent
-    line. If ANY child is still planned/in-progress (user declined a merge or
-    stopped), leave the parent OPEN — never force-close it.
+============================ P. PARK (resumable) ==========================
+You PARK when you hit a manual stage you won't advance in this run (no go, or the user
+stops). Parking must leave the partial work DURABLE + RESUMABLE:
+  - Parked before isolate (no worktree yet) → nothing on disk; just leave the doing
+    status. Resume starts fresh.
+  - Parked with a WORKTREE but NO PR yet (plan / implement / test) → the work is local
+    and would be lost. Make it durable BEFORE parking:
+        git -C <wt> add -A
+        git -C <wt> commit -m "WIP: <PB-id> parked at <stage> (pbrain auto-exec)"   # ok if nothing to commit
+        git -C <wt> push -u origin pbrain/<slug>
+  - Parked after the PR opened (ship / land) → already durable (pushed + PR link in the
+    issue). No extra commit.
+THEN record the resume breadcrumb on the issue (this is the resume key):
+     ${PM_CMD} comment "<tie>" --body "pbrain park: branch pbrain/<slug>, parked at <stage>; <PR url if any>; resume with /plan-my-work <PB-id>"
+   Leave the status as doing. Never `worktree remove` a parked worktree — only a
+   successful merge (stage 5) removes it. A different machine can still resume from the
+   pushed branch (stage 1 RE-ATTACH recreates the worktree from origin/pbrain/<slug>).
 
-10. LOOP to the next not-done row in NEXT TASKS. When the handed list is exhausted
-    → CASCADE. EXCEPTION (PB-92): if target_mode = solo, do NOT loop or cascade —
-    the user asked for one specific task. Finish it, give the closing summary, and
-    stop. PARENT TARGET (PB-81): when this run expanded a parent into its children,
-    the children ARE the loop — drive them sequentially, run 9b after the last one,
-    then stop (a parent target is one logical target; do not cascade to other work).
-
-CASCADE (target_mode = none only — skip entirely in solo mode) — at each hand-off
-a [GATE] (confirm before continuing):
-  A — LIST DONE, more day left. There are no more rows in NEXT TASKS but the day
-    isn't over. Go to CASCADE B.
-  B — PROJECT-DAY EXHAUSTED. Offer to pull more ready tasks for the same project:
-      bash "${PM_CMD}" ready --projects <pid>
-    Append the chosen rows to "## Work tracker" (one row per task, Status =
-    planned), then continue the lifecycle on the first new row.
-  C — NEW PROJECT. Offer a project not already worked today. On the user's pick,
-    ensure its working location is recorded (step 1), pull its ready tasks, append
-    them to the tracker, and continue.
-
-WRITE ONLY THE TRACKER. On every status write, rewrite ONLY the "## Work tracker"
-table and save it back to ${OUT_FILE}. Do NOT touch "## Today at a glance", the
-life anchors, or any other section — the tracker is standalone now (PB-85). The
-Status column IS the lifecycle state — an in-progress row with a PR link in Links
-resumes at the merge gate (step 8) on a re-run.
-
-When the day's work is exhausted (or the user stops), give one tight summary: what
-merged, what's still in-progress, and "run /end-of-day to close + reconcile to
-Plane." Stop here.
+================================== CLOSE ==================================
+When the issue (or, for a parent, its last child) is done — or you parked — give one
+tight summary: which stages auto-advanced, where it parked (and the manual stage), and
+the branch/PR. This command drove ONE issue; it does not pick up another (selection is
+groom's job). Stop here.

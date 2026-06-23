@@ -566,6 +566,10 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 names = {l["name"] for l in m.CONVENTION_LABELS}
 assert names == {"bug","feature","chore","docs"}, names   # canon = type set
+# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94).
+seed_names = {s["name"] for s in m._seed_label_specs()}
+assert {"bug","feature","chore","docs", m.APPROVED_LABEL} <= seed_names, seed_names
+assert {"auto:%s" % g for g in m.GATE_NAMES} <= seed_names, seed_names
 
 class FC:
     def __init__(self, existing): self.labels=list(existing); self.created=[]
@@ -574,10 +578,12 @@ class FC:
         rec={"id":"n%d"%len(self.created),"name":name,"color":color}
         self.created.append(name); self.labels.append(rec); return rec
 
-# Start with one already present, fuzzily ('Bug' vs 'bug') -> only 3 created.
+# Start with one already present, fuzzily ('Bug' vs 'bug') -> it is skipped; the rest of
+# the seed set (convention types minus bug + plan-approved + auto:* gates) is created.
 fc=FC([{"id":"l1","name":"Bug"}])
 r1=m.seed_convention_labels(fc,"p")
-assert sorted(r1["created"])==["chore","docs","feature"], r1
+expected_created = sorted((seed_names - {"bug"}))
+assert sorted(r1["created"])==expected_created, (r1, expected_created)
 assert r1["existing"]==["bug"], r1
 assert "error" not in r1, r1
 # colors are applied on create
@@ -586,7 +592,7 @@ assert any(l.get("color") for l in fc.labels if l["name"]=="feature"), fc.labels
 # Idempotent: a second pass creates nothing.
 r2=m.seed_convention_labels(fc,"p")
 assert r2["created"]==[], r2
-assert sorted(r2["existing"])==["bug","chore","docs","feature"], r2
+assert sorted(r2["existing"])==sorted(seed_names), r2
 
 # list_labels failure degrades to a reported error, never raises.
 class Boom:
@@ -1059,6 +1065,147 @@ m.cmd_projects(argparse.Namespace(sync=True))
 saved = json.load(open(m.config_path()))
 work = {p["id"]: p.get("work") for p in saved["projects"]}
 assert work.get("A") and work["A"]["path"] == workpath, work
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+# ===== PB-94: per-gate auto-execution labels =====================================
+
+@test "PB-94 seed set includes auto:* gate labels + plan-approved" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+names = [s["name"] for s in m._seed_label_specs()]
+for g in m.GATE_NAMES:
+    assert ("auto:%s" % g) in names, (g, names)
+assert m.APPROVED_LABEL in names, names
+# convention labels still present (not displaced)
+for c in ("bug", "feature", "chore", "docs"):
+    assert c in names, names
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 issue_gate_clearances maps auto:* labels → gate names; empty when absent" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# gate_map: stage name -> set of label ids
+gate_map = {"plan": {"L1"}, "test": {"L2"}, "land": {"L3"}}
+# an issue carrying L1 + L2 is cleared for plan + test, in GATE_NAMES (pipeline) order
+issue = {"labels": ["L1", "L2", "Lother"]}
+assert m.issue_gate_clearances(issue, gate_map) == ["plan", "test"], \
+    m.issue_gate_clearances(issue, gate_map)
+# no auto label → empty (every stage manual / parks)
+assert m.issue_gate_clearances({"labels": ["Lz"]}, gate_map) == []
+# empty gate_map (labels unlistable) → degrade to all-manual
+assert m.issue_gate_clearances(issue, {}) == []
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 gate_label_map degrades to empty when labels can't be listed" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class Boom:
+    def list_labels(self, pid): raise RuntimeError("network down")
+assert m.gate_label_map(Boom(), "A") == {}, "must not raise; returns {}"
+# and a matching client surfaces the auto:* ids by stage
+class Good:
+    def list_labels(self, pid):
+        return [{"id":"i1","name":"auto:land"}, {"id":"i2","name":"bug"},
+                {"id":"i3","name":"auto:plan"}]
+gm = m.gate_label_map(Good(), "A")
+assert gm["land"] == {"i1"} and gm["plan"] == {"i3"} and gm["test"] == set(), gm
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+# ===== PB-94 Stage B: blocked_by read path =======================================
+
+@test "PB-94 _blocker_uuids extracts blocked_by issue ids from the observed payload" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# the real shape: normalised list with relation_type + issue_id (the blocker)
+rels = [{"project_id":"P","issue_id":"BLOCKER","relation_type":"blocked_by"},
+        {"project_id":"P","issue_id":"OTHER","relation_type":"blocking"}]
+assert m._blocker_uuids(rels) == ["BLOCKER"], m._blocker_uuids(rels)
+# tolerate alternate field names, and NEVER fall back to `id` (relation row id)
+assert m._blocker_uuids([{"relation":"blocked_by","related_issue":"B2"}]) == ["B2"]
+assert m._blocker_uuids([{"relation_type":"blocked_by","id":"RELROW"}]) == []
+assert m._blocker_uuids([]) == [] and m._blocker_uuids(None) == []
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 Client.list_relations normalises dict-keyed-by-type to a flat list" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# Bind the unbound method onto a lightweight stub so we exercise the real
+# normalisation logic without constructing a full Client.
+class Stub:
+    def __init__(self, payload, boom=False): self._payload, self._boom = payload, boom
+    def _request(self, method, path, params=None, body=None):
+        if self._boom: raise m.PlaneError("down")
+        return self._payload
+    list_relations = m.PlaneClient.list_relations
+# dict-keyed-by-type (the observed shape) → flat, relation_type stamped
+out = Stub({"blocking": [], "blocked_by": [{"issue_id":"B"}]}).list_relations("P","I")
+assert out == [{"issue_id":"B","relation_type":"blocked_by"}], out
+# flat list passes through
+assert Stub([{"issue_id":"B","relation_type":"blocked_by"}]).list_relations("P","I") \
+    == [{"issue_id":"B","relation_type":"blocked_by"}]
+# {results:[...]} wrapper
+assert Stub({"results":[{"issue_id":"B"}]}).list_relations("P","I") == [{"issue_id":"B"}]
+# unreadable → None (best-effort, never raises)
+assert Stub(None, boom=True).list_relations("P","I") is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 blocked_by_ids returns OPEN blockers as ready rows, drops terminal ones" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+PID = "P"
+class FC:
+    def list_states(self, pid):
+        return [{"id":"open","group":"unstarted","default":True},
+                {"id":"done","group":"completed","default":True}]
+    def list_work_items(self, pid):
+        return [{"id":"BO","sequence_id":7,"name":"open blocker","state":"open","priority":"high","labels":[]},
+                {"id":"BD","sequence_id":8,"name":"done blocker","state":"done","priority":"low","labels":[]}]
+    def list_relations(self, pid, iid):
+        return [{"issue_id":"BO","relation_type":"blocked_by"},
+                {"issue_id":"BD","relation_type":"blocked_by"}]
+    def list_labels(self, pid): return []
+# stub the resolution helpers blocked_by_ids leans on
+m.find_issues = lambda cfg, c, ref, project_ref=None: [{"tie":"P:SUBJ","id":1,"project_id":"P","issue_id":"SUBJ","title":"subj"}]
+m._module_map = lambda c, pid, x: {}
+m.ensure_estimate_scale = lambda cfg, c, pid: None
+m.est_uuid_to_hours = lambda cfg, pid: {}
+m.approved_label_ids = lambda c, pid: set()
+m.project_label = lambda cfg, pid: "pb"
+cfg = {"default_est_h": 2.0}
+res = m.blocked_by_ids(cfg, FC(), "PB-1")
+assert res["status"] == "ok", res
+ids = [b["id"] for b in res["blockers"]]
+assert ids == [7], ids            # only the OPEN blocker; done one dropped
 print("ok")
 PYEOF
   [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
