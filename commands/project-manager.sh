@@ -204,7 +204,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree spec enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -216,7 +216,7 @@ fi
 # Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|spec|enrich|move|priority|timeline|completed|issue|project-create|workdir)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|subtree|spec|enrich|move|priority|timeline|completed|issue|project-create|workdir)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — this needs a configured Plane instance."
@@ -607,6 +607,18 @@ PYEOF
     [[ -n "$ref" ]] || { echo "Usage: /project-manager find <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
     echo "PM_FIND"
     python3 "$PLANE" find "$ref" ${F_project:+--project "$F_project"} || true
+    ;;
+
+  # PB-81: resolve an execute TARGET that may be a PARENT issue → its open
+  # sub-issues as ready-shaped rows. Read-only. `/plan-my-work task execute`
+  # uses this to drive a parent as ONE logical target = SEPARATE sequential
+  # units (one branch/PR/gated-merge per child; parent closed last).
+  subtree)
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag ref)}"
+    [[ -n "$ref" ]] || { echo "Usage: /project-manager subtree <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
+    echo "PM_SUBTREE"
+    python3 "$PLANE" subtree "$ref" ${F_project:+--project "$F_project"} || true
     ;;
 
   update)
