@@ -24,8 +24,18 @@ an approved plan FALL BACK to drafting the plan inline behind a [GATE], as befor
 Nothing is blocked — approval is a fast path, not a wall.
 
 You were handed (in the output above):
-  • target_ref = ${TARGET_REF} (the PB-id/fragment you were asked to execute, if
-    any; "(none)" means just take the ledger in order).
+  • target_ref = ${TARGET_REF} (the PB-id, OR the free-text description, you were
+    asked to execute, if any; "(none)" means just take the ledger in order).
+  • target_kind = ${TARGET_KIND} (PB-96) — WHAT target_ref is, when unmatched:
+      - id   → target_ref is a Plane issue ref (pb96 / PB-96 / 96). Resolve it
+               directly against Plane (subtree read).
+      - desc → target_ref is a free-text DESCRIPTION of work (e.g. "fix the
+               routing bug"), NOT an id. Run the find-or-file cycle: search Plane
+               for a matching issue, and if none matches, triage a NEW issue via
+               `${PM_CMD} file "<desc>"`, THEN execute the resulting id. This is
+               the full cycle (PB-96) — a brief description, with no pre-existing
+               issue id, still ends in a concrete issue driven to Done.
+      - none → no target; drive the ledger in order.
   • target_mode = ${TARGET_MODE} (PB-92) — how to read NEXT TASKS:
       - none      → no target given. NEXT TASKS is the full not-done ledger in
                     order; drive the first row, then cascade (step 10).
@@ -34,13 +44,13 @@ You were handed (in the output above):
                     other in-progress rows or other worktrees. The user asked for
                     THAT task; an explicit target is authoritative.
       - unmatched → target_ref matched NO ledger row. NEXT TASKS is empty. Do NOT
-                    fall back to a pending row. Instead resolve target_ref against
-                    Plane with the parent-aware read (`${PM_CMD} subtree "<ref>"`):
-                    a leaf/childless issue → pull it as ONE row; a PARENT with open
-                    sub-issues → pull EACH child as its own row and run the lifecycle
-                    once per child, sequentially (one PR each), closing the parent
-                    last (PB-81) — see PRE-FLIGHT. If it resolves to nothing, say so
-                    and stop; never substitute a different task.
+                    fall back to a pending row. Resolve it per target_kind above
+                    (id → subtree read; desc → find-or-file cycle), then run the
+                    lifecycle on the resolved issue. A leaf/childless issue → ONE
+                    row; a PARENT with open sub-issues → EACH child as its own row,
+                    lifecycle once per child, one PR each, parent closed last
+                    (PB-81) — see PRE-FLIGHT. If it resolves to nothing AND cannot
+                    be filed, say so and stop; never substitute a different task.
   • NEXT TASKS — the not-done "## Work tracker" rows. With target_mode=solo it is
     just the one targeted row; with =none it is the full ledger in order; with
     =unmatched it is empty. Done rows are always filtered out, so a re-run resumes
@@ -52,9 +62,46 @@ Every Plane write routes through the project manager: ${PM_CMD} (the SOLE writer
 Plane).
 
 PRE-FLIGHT. Branch on target_mode (PB-92) FIRST:
-  • target_mode = unmatched → the ref you were given matched no ledger row. Do
-    NOT take a pending row instead. Resolve it against Plane with the PARENT-AWARE
-    read (PB-81): ${PM_CMD} subtree "${TARGET_REF}". Branch on the PM_SUBTREE JSON:
+  • target_mode = unmatched → the target you were given matched no ledger row. Do
+    NOT take a pending row instead. FIRST resolve it to a CONCRETE Plane issue id,
+    branching on target_kind (PB-96):
+
+    ── target_kind = desc → THE FIND-OR-FILE CYCLE (PB-96). target_ref is a
+       free-text description of work ("${TARGET_REF}"), not an id. You must end up
+       with a concrete issue id to execute — find an existing one, or file a new
+       one. Read-only until a [GATE] says go.
+       1. SEARCH Plane for a matching issue (fuzzy, across the week's projects;
+          add --project to scope if you know it):
+            ${PM_CMD} find "${TARGET_REF}"
+          Read the PM_FIND JSON (each card: tie, id, title, state, priority).
+          Apply judgement, not just substring overlap — does a returned issue
+          actually DESCRIBE THE SAME WORK as the description? Ignore done/cancelled
+          cards (you'd be re-doing finished work).
+            · exactly one good semantic match → name it back in one line
+              ("found PB-NN '<title>' — matches your request") and treat its tie as
+              the resolved target. Proceed to the subtree read below with that id.
+            · several plausible matches → list them tersely (id · title · state)
+              and [GATE] ask which one (or "none — file a new issue"). Do not guess.
+            · no card describes this work (empty PM_FIND, or only unrelated/closed
+              hits) → go to step 2 (file a new issue).
+       2. [GATE] FILE A NEW ISSUE. There is no existing issue for this work, so
+          triage one via the generic intake convention (PB-67) — the SOLE create
+          path; never hand-write an issue some other way. Tell the user in one line
+          "no existing issue matches — I'll file one" and, on their go, run:
+            ${PM_CMD} file "${TARGET_REF}"
+          Follow that command's own walk (it infers type/title/body/labels/priority
+          and dedupes against open items; a bug gets a severity-derived priority).
+          When it finishes it reports the NEW issue's id/tie — capture that. If the
+          user aborts the filing, STOP (do not invent or substitute a task).
+       3. RESOLVE THE ID. With the found-or-filed id in hand, fall through to the
+          subtree read below using THAT id as the ref (a freshly filed issue is
+          normally a childless leaf → one row → the lifecycle). From here on, desc
+          and id behave identically.
+
+    ── target_kind = id (or a found/filed id from the desc cycle) → resolve it
+       against Plane with the PARENT-AWARE read (PB-81). Use the resolved id as the
+       ref: ${PM_CMD} subtree "<id>" (for a raw id target this is just
+       "${TARGET_REF}"). Branch on the PM_SUBTREE JSON:
       - status = none / ambiguous / error → it resolved to nothing (or needs
         disambiguation). Relay that and stop — never substitute a different task.
       - status = ok, has_open_children = false → an ordinary single issue (a leaf,
