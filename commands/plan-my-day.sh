@@ -936,7 +936,11 @@ if [[ "$HABITS_SETUP_NEEDED" == no ]]; then
   pbrain_habit_track_init "$TODAY" >/dev/null 2>&1 || true
   # Habit↔reminder upkeep (best-effort, silent, degrades without Reminders access):
   # ensure today's one-shots exist for linked habits, then pull any the user
-  # already ticked off in the Reminders app back into today's tracker.
+  # already ticked off in the Reminders app back into today's tracker. This
+  # reminders-sync PULL is the canonical "mark habits from completed reminders"
+  # path (PB-75): each pending one-shot whose Reminders state is DONE marks its
+  # habit via `habits.sh mark`. It runs here, fully muted — the model never
+  # narrates it (see the HABIT SCAN no-narration directive).
   if [[ "$HABITS_CMD" =~ [^[:space:]] ]]; then
     bash "$HABITS_CMD" reminders-ensure --date "$TODAY" >/dev/null 2>&1 || true
     bash "$HABITS_CMD" reminders-sync   --date "$TODAY" >/dev/null 2>&1 || true

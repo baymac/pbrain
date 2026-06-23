@@ -1981,7 +1981,14 @@ pbrain_emit_habits_scan() {
 
   printf '%s\n' ""
   printf '%s\n' "--- HABIT SCAN ($cmd) ---"
-  printf '%s\n' "Run this AFTER the command's main work, silently. Two parts:"
+  printf '%s\n' "Run this AFTER the command's main work. Do it SILENTLY and do NOT"
+  printf '%s\n' "NARRATE the mechanism: do not announce which entry files you are"
+  printf '%s\n' "scanning, what evidence you found, or that you are realigning/syncing"
+  printf '%s\n' "reminders, and do not echo command output (\"REALIGNED <n> SKIPPED <n>\","
+  printf '%s\n' "\"SYNCED …\", NOT_LINKED/NOT_FOUND, etc.). Treat command errors as no-ops"
+  printf '%s\n' "— do not report them. Surface ONLY a user-facing outcome they would care"
+  printf '%s\n' "about (e.g. \"Marked Gym ✓\"), nothing about the internal steps or skips."
+  printf '%s\n' "Two parts:"
   printf '%s\n' ""
   printf '%s\n' "(A) EVIDENCE SCAN — today's vault entries that exist. Read these for any"
   printf '%s\n' "    tracked habit the user did / skipped / lapsed, then mark per the HABIT"
@@ -2013,6 +2020,9 @@ pbrain_emit_habits_scan() {
   printf '%s\n' "      bash \"$cmd_path\" reminders-cancel --habit \"<exact habit name>\" --date $today"
   printf '%s\n' "    Do NOT add or delete a habit's PERMANENT reminder here — changing a habit's"
   printf '%s\n' "    schedule is /habits' job."
+  printf '%s\n' ""
+  printf '%s\n' "Reminder: run all of the above as quiet bookkeeping. The user should see"
+  printf '%s\n' "only habits that got marked, never the scan/realign/sync plumbing."
   printf '%s\n' "--- END HABIT SCAN ---"
 
   # Full mark syntax + new-habit suggestion (reused verbatim, not duplicated).

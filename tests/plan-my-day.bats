@@ -202,6 +202,21 @@ EOF
   [[ "$output" != *"## Today's focus"* ]]
 }
 
+@test "PB-75: plan instructions forbid narrating internal preflight + habit-scan logic" {
+  write_plans_profile
+  write_libraries
+  run PMD
+  [ "$status" -eq 0 ]
+  # Step 0 nudges are gated on precomputed signals — the model must not narrate
+  # the check or the skip (no "gratitude_today_exists is yes so I'm skipping").
+  [[ "$output" == *"NO NARRATING INTERNAL LOGIC"* ]]
+  [[ "$output" == *"do NOT narrate the check or the skip"* ]]
+  # the end-of-session habit reconcile is quiet bookkeeping, not narrated
+  [[ "$output" == *"Do NOT narrate the scan/realign/sync mechanism"* ]]
+  # the weak "follow it silently" wording is gone
+  [[ "$output" != *"follow it silently"* ]]
+}
+
 @test "fresh setup block carries the typical_day + variation_rules template" {
   run PMD
   [ "$status" -eq 0 ]
