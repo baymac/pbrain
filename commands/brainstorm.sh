@@ -128,6 +128,3 @@ echo "$OUT_FILE"
 echo ""
 echo "File created. Open it and start writing, or describe your idea to Claude."
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
-pbrain_emit_self_improve "brainstorm" || true

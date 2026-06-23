@@ -1195,6 +1195,5 @@ Step 7C — Reconcile fitness-habit reminders to today's chosen activity (silent
   this step entirely on a rest day.
 PROMPT
 
-# Habit extraction (silent if no habits profile) + self-improvement capture.
+# Habit extraction (silent if no habits profile).
 pbrain_emit_habits_extract "fitness-journal" || true
-pbrain_emit_self_improve "fitness-journal" "$STORE" "fitness profiles (overall profile, library, per-activity profiles under this store)" || true

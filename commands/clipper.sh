@@ -460,4 +460,3 @@ echo ""
 export OUT_FILE PLATFORM SOURCE_KIND TODAY
 envsubst '$OUT_FILE $PLATFORM $SOURCE_KIND $TODAY' < "$_SCRIPT_DIR/templates/clipper/write.txt"
 
-pbrain_emit_self_improve "clipper" || true

@@ -53,4 +53,3 @@ output_file: $OUT_FILE
 raw: $THOUGHT
 ENTRY
 
-pbrain_emit_self_improve "thoughts" || true

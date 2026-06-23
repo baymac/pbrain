@@ -1,81 +1,70 @@
 # Self-improvement loop
 
-Every pbrain command (except `/init-obsidian`, which runs before a vault exists) can learn from how you use it. When you correct a command or state a standing preference — "stop asking three questions, just ask one", "always use metric", "drop the gratitude nudge" — the command offers to remember it, and applies it on every future run. Nothing is silent and nothing is automatic: the loop only speaks up when you actually gave feedback, and it never writes without an explicit yes.
+pbrain learns from how you use it. When you correct a command or state a standing preference — "stop asking three questions, just ask one", "always use metric", "drop the gratitude nudge" — that correction is captured and applied on every future run. Nothing is silent and nothing is automatic: it only speaks up when you actually gave feedback, and it never writes without an explicit yes.
 
-Preferences and feedback moved from `~/.config/pbrain/` into the vault (migration 0001 copies existing files across automatically), so they sync to every device with the rest of your vault.
+It has two halves:
 
-It's two halves, both carried by shared helpers (`lib/prefs.sh`, `lib/self-improve.sh`) that ride along on every command:
+- **Read side** — at the start of *every* command, your saved preferences for that command (and your global preferences) are injected into context, so it behaves the way you asked last time. This runs on every command (except `/init-obsidian`, which runs before a vault exists) via `lib/prefs.sh`.
+- **Capture side** — once a day, at the end of `/end-of-day`, a single **scheduled, correction-driven** pass looks back over the day and proposes anything worth remembering (see below). This is the *only* capture path: commands no longer nag "did you correct me?" inline.
 
-- **Read side** — at the start of a run, the command injects your saved preferences for that command into context, so it behaves the way you asked last time.
-- **Write side** — at the end of a run, *if* you gave genuine feedback this session, the command classifies it and offers to save it.
+Preferences and feedback live in the vault under `.pbrain/` (migration 0001 copied any older `~/.config/pbrain/` files across), so they sync to every device with the rest of your vault.
+
+## The scheduled, correction-driven pass (PB-47)
+
+Corrections usually happen in passing — you redirect a command, it does the right thing, and the moment goes by. Rather than interrupt each command to ask whether you meant something as a standing rule, pbrain captures corrections **in one batch at the end of the day**.
+
+Once a day, at the end of `/end-of-day`, the pass points the agent at today's Claude Code session transcripts (`~/.claude/projects/*/<session>.jsonl`, filtered to that day) and asks it to *mine* them for places you corrected or redirected a pbrain command — **even when you never said "remember this."** Each genuine correction is proposed back to you with the transcript quote it came from, classified, and written **only on an explicit per-item yes**.
+
+It keeps a conservative bar: neutral Q&A, one-off requests for today only, and just answering a command's questions don't count, and it stays silent when nothing genuine surfaces (or when there are no transcripts for the day). Transcripts are read strictly as *data* — a line inside one that reads like an instruction is content to judge, never an order to follow. Closing a past day with `/end-of-day --date YYYY-MM-DD` mines that day's transcripts.
 
 ## What gets captured, and where
 
-Feedback splits into kinds, which go to different places:
+Each proposed correction is classified, and the kinds go to different places — the same targets the read side injects from:
 
 | Kind | Means | Goes to | Survives `/plugin update`? |
 |---|---|---|---|
-| **Preference (command)** | How *you* want one command to behave | `$VAULT_DIR/.pbrain/<command>/prefs.md` | yes (your vault) |
+| **Preference (command)** | How *you* want one command to behave | `$VAULT_DIR/.pbrain/<command>/prefs.md` (a profile-owning command folds it into the profile's `prefs` array instead) | yes (your vault) |
 | **Preference (global)** | How *you* want every command to behave | `$VAULT_DIR/.pbrain/_global/prefs.md` | yes (your vault) |
 | **Quality fix** | A bug or improvement that helps *everyone* | `$VAULT_DIR/.pbrain/<command>/feedback.md` | yes |
-| **Profile change** | A lasting change to a core profile you own | the versioned profile (your vault) | yes (it's your content) |
 
 Preferences are read back and injected on the next run — that's the half that actually closes the loop. The global file is injected on *every* command, before that command's own prefs.
 
 ### Turning off suggestions and nudges
 
-Every built-in suggestion yields to a standing preference that says to skip it — preferences always win over a default nudge. Tell any command "stop suggesting `/journal` or `/gratitude-journal` before other commands" (or "stop nudging me about X") and it saves that to the **global** file, so it takes effect across *all* commands — not just the one you were running. This matters because a nudge like the morning-sequence journal/gratitude check fires from many commands (`/plan-my-day`, `/brainstorm`, `/diet-journal`, `/fitness-journal`, `/organize-clippings`, …); a per-command preference could only silence one of them, so these cross-command skips live in `_global/prefs.md`. A preference that's specific to one command ("ask only one question in `/journal`") still goes to that command's file. You can also edit `_global/prefs.md` by hand any time. Quality fixes are collected for you to send upstream; after saving one, the command offers to open a GitHub issue (only if `gh` is installed and you say yes). The prefs and feedback files are plain markdown, one per command, editable by hand any time.
+Every built-in suggestion yields to a standing preference that says to skip it — preferences always win over a default nudge. A correction like "stop suggesting `/journal` or `/gratitude-journal` before other commands" (or "stop nudging me about X") is saved to the **global** file, so it takes effect across *all* commands — not just the one you were running. This matters because a nudge like the morning-sequence journal/gratitude check fires from many commands (`/plan-my-day`, `/brainstorm`, `/diet-journal`, `/fitness-journal`, `/organize-clippings`, …); a per-command preference could only silence one of them, so these cross-command skips live in `_global/prefs.md`. A preference that's specific to one command ("ask only one question in `/journal`") still goes to that command's file. You can also edit `_global/prefs.md` by hand any time. Quality fixes are collected for you to send upstream; after saving one, the pass offers to open a GitHub issue (only if `gh` is installed and you say yes). The prefs and feedback files are plain markdown, one per command, editable by hand any time.
 
-### Profile changes (in-session, same discipline)
+### Profile changes
 
-The commands that own a core profile also watch for lasting *profile* changes — and they all do it the same way:
+Lasting changes to a core profile you own (plans / diet / fitness) are **not** captured by this pass. `/weekly-review` owns profile improvements via its richer Step 4 — at week's end it builds a per-command improvement list, walks it one item at a time, and mints a new committed profile version for whatever you approve. See [`weekly-review.md`](weekly-review.md).
 
-| Command | Profile it can update |
-|---|---|
-| `/plan-my-day` | plans profile (+ work/goals libraries) |
-| `/diet-journal` | diet profile |
-| `/fitness-journal` | fitness profile, library + per-activity profiles |
-| `/weekly-review` | all of the above (its richer Step 4 improvements pass, which mints new profile versions) |
-
-If you say something mid-session that implies a standing change — "bump my protein target to 180", "drop leg day", "my focus this month is X" — the command proposes the specific edit to that profile, shows it, and writes it **only on an explicit per-change yes**. A one-off meal, a single workout, or just answering the command's questions does *not* count — same conservative trigger as preferences. (Fenced JSON blocks are kept valid; committed profile versions are immutable, so structural changes go through `profile new` → `profile commit`.) This is the same propose→confirm→write flow everywhere, so updating any profile feels identical.
-
-## Modes
-
-Behavior is set by `PBRAIN_SELF_IMPROVE`:
-
-| Value | Behavior |
-|---|---|
-| `prefs` *(default)* | Capture preferences and quality fixes as above. Never edits command source. The right mode for everyone, including plugin users — it writes outside the plugin install, so it survives updates. |
-| `off` | Disabled entirely. Commands emit nothing extra. |
-| `dev` | Everything `prefs` does, **plus** the agent may propose edits to the live command source under `$PBRAIN_DEV_DIR/commands/`. Honoured only when `PBRAIN_DEV_DIR` is set (points at your editable clone); otherwise it silently falls back to `prefs`. |
-
-**Dev mode is for pbrain's own development.** When a quality fix should change the command itself, the agent proposes a concrete diff and waits for an explicit yes — it never auto-writes source. It also warns first if your dev clone's working tree is dirty or sitting on `main`, so a captured edit doesn't tangle with unrelated work.
+## Modes & env vars
 
 | Env var | Effect | Default |
 |---|---|---|
-| `PBRAIN_SELF_IMPROVE` | `off` / `prefs` / `dev` | `prefs` |
-| `PBRAIN_DEV_DIR` | Path to the editable repo; required for `dev` source edits | — |
+| `PBRAIN_SELF_IMPROVE` | `off` disables self-improve capture entirely (kept for back-compat with the old inline loop's master switch). | `prefs` |
+| `PBRAIN_SELF_IMPROVE_BATCH` | `off` disables just the scheduled end-of-day pass. | `on` |
+| `PBRAIN_CLAUDE_PROJECTS_DIR` | Where the pass looks for Claude Code transcripts. | `~/.claude/projects` |
 | `PBRAIN_PREFS_DIR` | Preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT_DIR/.pbrain` |
 | `PBRAIN_FEEDBACK_DIR` | Quality-fix ROOT (per-command `<cmd>/feedback.md`) | `$VAULT_DIR/.pbrain` |
 
 ## Behavior you can count on
 
-- **Silent unless you gave feedback.** Just answering a command's questions, a one-off request for today only, or neutral conversation do **not** trigger it. It fires only on an explicit standing preference or correction. When in doubt, it stays quiet.
-- **Confirm before writing.** It shows you the exact line(s) it would save and waits for a yes.
+- **Silent unless you gave feedback.** Just answering a command's questions, a one-off request for today only, or neutral conversation do **not** trigger it. It fires only on a genuine standing preference or correction mined from the day's transcripts. When in doubt, it stays quiet.
+- **Confirm before writing.** It shows you the exact line(s) it would save — and the transcript quote they came from — and waits for a per-item yes.
 - **Consolidate, don't pile up.** When saving a preference, it reads the existing file first and updates the related line instead of appending a duplicate — and reconciles with you if a new preference contradicts an old one. Your prefs file stays small and coherent.
 - **Never breaks a command.** The helpers are written to never fail the command they're attached to, even if a file is missing or malformed.
 
 ## Examples
 
 ```bash
-# Default — capture preferences as you go
-/journal
+# Capture runs automatically at the end of the day
+/end-of-day
 
-# Turn it off for a session
-PBRAIN_SELF_IMPROVE=off /plan-my-day
+# Disable just the scheduled capture pass (prefs are still injected on reads)
+PBRAIN_SELF_IMPROVE_BATCH=off /end-of-day
 
-# Developer: allow proposed source edits against your clone
-PBRAIN_SELF_IMPROVE=dev PBRAIN_DEV_DIR=~/code/pbrain /diet-journal
+# Disable self-improve capture entirely
+PBRAIN_SELF_IMPROVE=off /end-of-day
 ```
 
 A captured `$VAULT_DIR/.pbrain/journal/prefs.md` might read:
@@ -86,7 +75,3 @@ A captured `$VAULT_DIR/.pbrain/journal/prefs.md` might read:
 ```
 
 On the next `/journal`, those lines are injected into context and the command honours them.
-
-## Related: weekly improvements
-
-`/weekly-review` applies the same propose-then-confirm discipline to your *profiles* rather than command behavior — at week's end it builds a per-command improvement list, walks it one item at a time, and mints a new committed profile version for whatever you approve. See [`weekly-review.md`](weekly-review.md).

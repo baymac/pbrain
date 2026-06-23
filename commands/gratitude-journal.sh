@@ -182,6 +182,5 @@ tags: []
 {reflection answer — verbatim}
 PROMPT
 
-# Habit extraction (silent if no habits profile) + self-improvement capture.
+# Habit extraction (silent if no habits profile).
 pbrain_emit_habits_extract "gratitude-journal" || true
-pbrain_emit_self_improve "gratitude-journal" || true

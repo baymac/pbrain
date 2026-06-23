@@ -91,7 +91,6 @@ if [[ -f "$OUT_FILE" ]]; then
   echo "--- EXISTING NOTE ---"
   cat "$OUT_FILE"
   echo "--- END NOTE ---"
-  pbrain_emit_self_improve "discuss" || true
   exit 0
 fi
 
@@ -235,4 +234,3 @@ Rules:
   It's fine if they leave with more clarity but no decision.
 INSTRUCTIONS
 
-pbrain_emit_self_improve "discuss" || true

@@ -143,6 +143,5 @@ If a question was skipped, record "—" as the answer. If Step 2 produced
 no questions at all, write: —}
 PROMPT
 
-# Habit extraction (silent if no habits profile) + self-improvement capture.
+# Habit extraction (silent if no habits profile).
 pbrain_emit_habits_extract "journal" || true
-pbrain_emit_self_improve "journal" || true

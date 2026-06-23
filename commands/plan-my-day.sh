@@ -454,9 +454,8 @@ if [[ "$MODE" == "update" || ( -z "$MODE" && -f "$OUT_FILE" ) ]]; then
   echo ""
   echo "---"
   cat "$_SCRIPT_DIR/templates/plan-my-day/update.txt"
-  # Habit reconcile + self-improvement capture (silent without their profiles).
+  # Habit reconcile (silent without their profiles).
   _pmd_habit_scan
-  pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "plans profile" || true
   exit 0
 fi
 
@@ -1002,6 +1001,5 @@ envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD' < "$_SCRIPT_DIR/templates
 
 # Habit reconcile (silent if no habits profile): scan today's entries across the
 # vault for evidence, mark states, and realign today's one-shot reminders to the
-# planned times — the habit module owns this logic. Self-improvement runs after.
+# planned times — the habit module owns this logic.
 _pmd_habit_scan
-pbrain_emit_self_improve "plan-my-day" "$PROFILE_FILE" "plans profile" || true

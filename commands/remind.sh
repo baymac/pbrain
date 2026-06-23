@@ -540,6 +540,5 @@ Use the absolute path:
 
 The command's output is authoritative — relay it. Keep it tight; one line is enough.
 ENTRY
-    pbrain_emit_self_improve "remind" || true
     ;;
 esac

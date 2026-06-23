@@ -80,6 +80,3 @@ fi
 echo ""
 echo "--- END MATCHES ---"
 
-# Self-improvement: capture standing preferences / quality fixes the user
-# raised this session (silent unless there was genuine feedback).
-pbrain_emit_self_improve "recall" || true

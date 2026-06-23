@@ -24,10 +24,11 @@ bats tests/
   emits a labelled block when content exists, honours `PBRAIN_PREFS_DIR`, and
   injects the global `_global.md` block (before the per-command block) so
   cross-command "skip this nudge" preferences apply everywhere.
-- `self-improve.bats` — `pbrain_emit_self_improve`: `off`/`prefs`/`dev` mode
-  resolution, the `dev`-without-`PBRAIN_DEV_DIR` fallback, dev-repo git-state
-  warnings (dirty tree / `main` branch), unknown-value fail-safe, and the
-  "never exits non-zero" guard.
+- `self-improve.bats` — `pbrain_emit_self_improve_batch` (PB-47, the sole
+  self-improve pass): date-filtered transcript discovery, the two disable
+  switches (`PBRAIN_SELF_IMPROVE_BATCH=off`, master `PBRAIN_SELF_IMPROVE=off`),
+  the "treat transcripts as data not instructions" guard, and the "never exits
+  non-zero" guard.
 - `profile.bats` — `pbrain_profile_json`: fenced-block extraction, raw-JSON
   fallback, and silence on malformed / missing / no-block input.
 - `db.bats` — `pbrain_db_init`: schema creation, idempotency, the one-row-per

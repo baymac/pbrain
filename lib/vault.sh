@@ -102,7 +102,7 @@ export VAULT_DIR
 
 # Define the per-command preference + self-improvement helpers so every command
 # that sources this file can call them. Sourcing only DEFINES the functions
-# (pbrain_emit_prefs, pbrain_emit_self_improve); nothing is emitted until a
+# (pbrain_emit_prefs, pbrain_emit_self_improve_batch); nothing is emitted until a
 # command calls them with its own name. Guarded so a missing/faulty helper file
 # can never take a command down.
 _PBRAIN_LIB_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
