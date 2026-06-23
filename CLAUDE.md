@@ -91,7 +91,7 @@ pbrain/
 ├── lib/scaffold.sh              ← standalone vault-scaffold helpers (mkdir + git init + .gitignore + CLAUDE.md + config); sourced by init-obsidian.sh (pre-vault) AND vault.sh (auto-fallback)
 ├── lib/update-check.sh          ← upgrade nudge
 ├── lib/prefs.sh                 ← per-command preference injection (pbrain_emit_prefs; profile-owning cmds read prefs from the profile's "prefs" array, else <cmd>/prefs.md)
-├── lib/self-improve.sh          ← feedback capture: pbrain_emit_self_improve (inline, per-command) + pbrain_emit_self_improve_batch (PB-47: end-of-day, transcript-mining, correction-driven)
+├── lib/self-improve.sh          ← feedback capture: pbrain_emit_self_improve_batch (PB-47: the sole self-improve pass — end-of-day, transcript-mining, correction-driven; the old inline per-command reflection was removed)
 ├── lib/profile.sh               ← fenced-JSON-block extractor (pbrain_profile_json — reads ANY profile file)
 ├── lib/profiles.sh              ← versioned profile store (.profile/<base>.vN.md); store/latest/draft/new/commit API in its header
 ├── lib/projects.sh              ← shared Plane seam layer for the daily loop (degrades to []/{} when Plane is unconfigured); never exits non-zero; detail in its header
