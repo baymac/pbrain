@@ -66,6 +66,7 @@ set -euo pipefail
 #   habits.sh reminders-ensure      [--date]  create today's one-shot reminders for linked habits (idempotent)
 #   habits.sh reminders-sync        [--date] [--sweep]  reconcile linked habits ↔ their one-shots, both directions
 #   habits.sh reminders-reschedule  --habit <name> --time HH:MM [--date YYYY-MM-DD]  update a pending one-shot's due time
+#   habits.sh reminders-realign-plan [--plan <file>] [--date YYYY-MM-DD]  time-match every linked habit's one-shot to its row in today's plan (ensure→reschedule)
 #   habits.sh reminders-cancel      --habit <name|id> [--date YYYY-MM-DD]  delete a pending one-shot + mark its row cancelled
 #   habits.sh fitness-reconcile     --activity "<name|slug>" [--date YYYY-MM-DD]  align fitness-habit reminders to today's chosen activity (skip the rest)
 #   habits.sh autostatus            [--date YYYY-MM-DD]  end-of-day: mark scheduled-but-undone build habits 'missed' (skipped/done left)
@@ -1868,6 +1869,143 @@ PYEOF
     NOT_FOUND*)  echo "NOT_FOUND" ;;
     *)           echo "${RES:-UNAVAILABLE}" ;;
   esac
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# reminders-realign-plan --plan <file> [--date YYYY-MM-DD]
+# The deterministic time-match step /plan-my-day runs AT THE END of a run, once
+# the day's plan file exists (PB-88). For every LINKED habit whose name appears
+# in a TIMED row of the plan's "## Today at a glance" table, ensure its one-shot
+# for <date> exists (BYPASSING is_due — a habit may be re-anchored to a time it
+# isn't normally scheduled for, e.g. a late-woken day) and reschedule it to that
+# row's START time. This is what the old LLM-only HABIT SCAN realign step was
+# meant to do but did fragilely: reminders-reschedule alone returned NOT_FOUND
+# when no pending one-shot existed yet, so the re-timed plan and the reminders
+# silently drifted apart. Doing ensure→reschedule deterministically here closes
+# that gap. Caller is expected to run `reminders-sync` afterwards to push state.
+#
+# Matching: a habit matches a row when its (normalized) name is contained in the
+# row's Block or Focus cell text (case-insensitive, alphanumeric-folded) — the
+# same containment idiom fitness-reconcile uses for habit↔activity. Only habits
+# with reminder.state == "linked" are touched; everything else is left alone.
+# Rows without a clock time, and the bare "00:00 | Bed" style anchors, still
+# carry a start time and are matched normally (Bed → "Sleep before 12" etc. only
+# if the user named the habit that way; we never invent a mapping).
+# Echoes: REALIGNED <n> SKIPPED <n>  (always exits 0; best-effort + idempotent)
+# ---------------------------------------------------------------------------
+if [[ "$SUB" == "reminders-realign-plan" ]]; then
+  shift || true
+  RAP_DATE="$TODAY"; RAP_PLAN=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --plan) RAP_PLAN="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date) RAP_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ "$RAP_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$RAP_DATE'"; exit 0; }
+  # Default plan path = today's daily-planning file (honors the same override).
+  if [[ -z "${RAP_PLAN//[[:space:]]/}" ]]; then
+    RAP_PLAN="${PBRAIN_PLAN_DIR:-$VAULT_DIR/life/daily-planning}/$RAP_DATE.md"
+  fi
+  [[ -f "$PROFILE_FILE" ]] || { echo "REALIGNED 0 SKIPPED 0"; exit 0; }
+  [[ -f "$RAP_PLAN" ]] || { echo "REALIGNED 0 SKIPPED 0"; exit 0; }
+
+  # Emit "<HH:MM>\t<exact habit name>" lines: each LINKED habit matched to the
+  # EARLIEST timed glance row whose text contains its name. Python does the parse
+  # + match; the shell loop drives the existing ensure/reschedule primitives so
+  # there's one code path for the actual Apple-Reminder write.
+  RAP_MATCHES="$(python3 - "$PROFILE_FILE" "$RAP_PLAN" <<'PYEOF' 2>/dev/null || true
+import json, re, sys
+profile, plan = sys.argv[1:3]
+
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").strip().lower()).strip()
+
+try:
+    m = re.search(r"```json\s*\n(.*?)```", open(profile).read(), re.DOTALL)
+    data = json.loads(m.group(1)) if m else {}
+except Exception:
+    data = {}
+
+linked = []
+for h in (data.get("habits") or []):
+    if h.get("archived"):
+        continue
+    rem = h.get("reminder") if isinstance(h.get("reminder"), dict) else {}
+    if str(rem.get("state", "")).strip().lower() != "linked":
+        continue
+    name = str(h.get("name", "")).strip()
+    n = norm(name)
+    if name and n:
+        linked.append((name, n))
+if not linked:
+    sys.exit(0)
+
+# Parse the "## Today at a glance" table: pull each row start time + the
+# Block + Focus cells. A start time is the leading HH:MM of the first cell
+# (supports "HH:MM–HH:MM", "HH:MM-HH:MM", or a bare "HH:MM").
+try:
+    text = open(plan).read()
+except Exception:
+    sys.exit(0)
+
+mg = re.search(r"^##\s+Today at a glance\s*$(.*?)(?=^\s*##\s|\Z)",
+               text, re.DOTALL | re.MULTILINE | re.IGNORECASE)
+section = mg.group(1) if mg else text
+
+rows = []  # (time_str, haystack)
+for line in section.splitlines():
+    line = line.strip()
+    if not line.startswith("|"):
+        continue
+    cells = [c.strip() for c in line.strip("|").split("|")]
+    if len(cells) < 2:
+        continue
+    # Skip the header + separator rows.
+    if norm(cells[0]) in ("time",) or set(cells[0]) <= set("-: "):
+        continue
+    tm = re.match(r"^\s*(\d{1,2}:\d{2})", cells[0])
+    if not tm:
+        continue
+    hh, mm = tm.group(1).split(":")
+    time_str = "%02d:%02d" % (int(hh), int(mm))
+    # Search the Block + Focus columns (cells 1 and 2 when present).
+    hay = norm(" ".join(cells[1:3]))
+    rows.append((time_str, hay))
+
+# For each linked habit, find the EARLIEST row whose text contains the habit
+# name (substring on the folded form). One reminder per habit.
+seen = set()
+out = []
+for name, n in linked:
+    if name in seen:
+        continue
+    for time_str, hay in rows:  # rows are in plan order (top = earliest block)
+        if n and (" %s " % n) in (" %s " % hay):
+            out.append("%s\t%s" % (time_str, name))
+            seen.add(name)
+            break
+print("\n".join(out))
+PYEOF
+)"
+
+  RAP_REALIGNED=0; RAP_SKIPPED=0
+  if [[ -n "${RAP_MATCHES//[[:space:]]/}" ]]; then
+    while IFS=$'\t' read -r RAP_TIME RAP_NAME; do
+      [[ -n "${RAP_NAME//[[:space:]]/}" ]] || continue
+      [[ "$RAP_TIME" =~ ^[0-9]{2}:[0-9]{2}$ ]] || { RAP_SKIPPED=$((RAP_SKIPPED + 1)); continue; }
+      # Ensure the one-shot exists (bypass is_due), then move it to the plan time.
+      bash "$_SCRIPT_DIR/habits.sh" reminders-ensure --habit "$RAP_NAME" --date "$RAP_DATE" >/dev/null 2>&1 || true
+      RES="$(bash "$_SCRIPT_DIR/habits.sh" reminders-reschedule --habit "$RAP_NAME" --time "$RAP_TIME" --date "$RAP_DATE" 2>/dev/null || true)"
+      case "$RES" in
+        RESCHEDULED*) RAP_REALIGNED=$((RAP_REALIGNED + 1)) ;;
+        *)            RAP_SKIPPED=$((RAP_SKIPPED + 1)) ;;
+      esac
+    done <<< "$RAP_MATCHES"
+  fi
+  echo "REALIGNED ${RAP_REALIGNED} SKIPPED ${RAP_SKIPPED}"
   exit 0
 fi
 

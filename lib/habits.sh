@@ -1935,8 +1935,10 @@ print("\n".join(out))
 # the script provides, then the model acts on:
 #   (A) enumerate which of TODAY'S vault entries exist (journal, gratitude, thoughts,
 #       fitness, diet, planning) → the model reads them for habit evidence and marks;
-#   (B) realign today's ONE-SHOT habit reminders to the planned times in today's
-#       plan (reminders-reschedule / reminders-cancel — pending one-shots only).
+#   (B) time-match today's ONE-SHOT habit reminders to the planned block times —
+#       a single deterministic batch (reminders-realign-plan, run AFTER the plan
+#       file is written) ensures+reschedules every linked habit's one-shot; the
+#       model only cancels one-shots for habits clearly not happening today.
 # Reuses pbrain_emit_habits_extract verbatim for the full mark + suggest mechanics
 # (no duplication). Silent when no habits profile exists. PERMANENT reminder
 # add/delete (changing a habit's schedule) stays in /habits, not here.
@@ -1996,17 +1998,21 @@ pbrain_emit_habits_scan() {
   printf '%s\n' "    or a meal the user only intends to eat later, does not evidence its"
   printf '%s\n' "    habit. Mark only what actually happened."
   printf '%s\n' ""
-  printf '%s\n' "(B) REMINDER ALIGNMENT — for any tracked habit that maps to a TIMED row in"
-  printf '%s\n' "    today's plan ($plan_dir/$today.md), realign its one-shot Apple Reminder to"
-  printf '%s\n' "    that planned start time:"
-  printf '%s\n' "      bash \"$cmd_path\" reminders-reschedule --habit \"<exact habit name>\" --time \"HH:MM\" --date $today"
-  printf '%s\n' "    Only for habits at a specific clock time in the plan. NOT_LINKED / NOT_FOUND"
-  printf '%s\n' "    → skip silently. To stand down a one-shot for a habit clearly NOT happening"
-  printf '%s\n' "    today, cancel it:"
+  printf '%s\n' "(B) REMINDER ALIGNMENT — run this ONCE, AFTER you have written today's plan"
+  printf '%s\n' "    file ($plan_dir/$today.md), so the realign reads the FINAL block times."
+  printf '%s\n' "    One deterministic batch command time-matches every linked habit's one-shot"
+  printf '%s\n' "    Apple Reminder to its row in the plan's \"## Today at a glance\" table"
+  printf '%s\n' "    (it ensures the one-shot exists first, then reschedules — so it no longer"
+  printf '%s\n' "    silently NOT_FOUNDs when the day was re-timed), then pushes state through:"
+  printf '%s\n' "      bash \"$cmd_path\" reminders-realign-plan --plan \"$plan_dir/$today.md\" --date $today"
+  printf '%s\n' "      bash \"$cmd_path\" reminders-sync --date $today"
+  printf '%s\n' "    It prints \"REALIGNED <n> SKIPPED <n>\" — no per-habit looping needed. Do NOT"
+  printf '%s\n' "    hand-call reminders-reschedule per habit; the batch owns the matching."
+  printf '%s\n' "    To stand down a one-shot for a habit clearly NOT happening today (e.g. a"
+  printf '%s\n' "    scheduled activity the user dropped), cancel it explicitly:"
   printf '%s\n' "      bash \"$cmd_path\" reminders-cancel --habit \"<exact habit name>\" --date $today"
   printf '%s\n' "    Do NOT add or delete a habit's PERMANENT reminder here — changing a habit's"
-  printf '%s\n' "    schedule is /habits' job. After any reschedule/cancel, push state through:"
-  printf '%s\n' "      bash \"$cmd_path\" reminders-sync --date $today"
+  printf '%s\n' "    schedule is /habits' job."
   printf '%s\n' "--- END HABIT SCAN ---"
 
   # Full mark syntax + new-habit suggestion (reused verbatim, not duplicated).
