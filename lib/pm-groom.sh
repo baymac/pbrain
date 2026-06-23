@@ -89,6 +89,13 @@ pmg_run() {
   mkdir -p "$(dirname "$logf")" 2>/dev/null || true
   json="$(python3 "$py" "${scan_args[@]}" 2>>"$logf")"
   rc=$?
+
+  # PB-94: the ORDERED hand-off queue groom feeds to /plan-my-work (blockers ahead
+  # of the issues they block). Best-effort — an empty array if it can't be built.
+  local queue_args=(ready --ordered)
+  [[ -n "$projects" ]] && queue_args+=(--projects "$projects")
+  local queue_json; queue_json="$(python3 "$py" "${queue_args[@]}" 2>>"$logf" || echo '[]')"
+  [[ -n "$queue_json" ]] || queue_json='[]'
   if [[ $rc -ne 0 || -z "$json" ]]; then
     return $rc
   fi
@@ -107,37 +114,33 @@ projs = data.get("projects", [])
 if projs:
     lines.append("## Per-project")
     lines.append("")
-    lines.append("| Project | triaged | needs review | skipped |")
+    lines.append("| Project | todo (ready) | needs review | skipped |")
     lines.append("|---|---|---|---|")
     for p in projs:
         c = p.get("counts", {})
         lines.append("| %s | %d | %d | %d |" % (
             p.get("project", p.get("project_id", "?")),
-            c.get("triaged", 0), c.get("needs_review", 0), c.get("skipped", 0)))
+            c.get("todo", 0), c.get("needs_review", 0), c.get("skipped", 0)))
     lines.append("")
-triaged = data.get("triaged", [])
-lines.append("## Triaged backlog → todo (%s)" % ("written" if applied else "proposed"))
+todo = data.get("todo", [])
+lines.append("## Todo — pipeline-ready (%d)" % len(todo))
 lines.append("")
-if triaged:
-    for t in triaged:
-        mark = ""
-        if applied:
-            mark = " ✅" if t.get("ok") else " ⚠️ %s" % t.get("error", "failed")
-        lines.append("- **%s** %s — %s → %s%s" % (
-            t.get("id"), t.get("title", ""), t.get("from"), t.get("to"), mark))
+if todo:
+    for t in todo:
+        lines.append("- **%s** %s" % (t.get("id"), t.get("title", "")))
 else:
-    lines.append("_None — no well-formed backlog issues to promote._")
+    lines.append("_None — no well-formed todo issues. (Backlog is the user's staging "
+                 "area — groom never promotes it.)_")
 lines.append("")
 nr = data.get("needs_review", [])
-lines.append("## Needs review (thin — left for the interactive walk)")
+lines.append("## Needs review (thin todo — enrich before running)")
 lines.append("")
 if nr:
     for r in nr:
-        lines.append("- **%s** %s [%s] — %s" % (
-            r.get("id"), r.get("title", ""), r.get("group", ""),
-            ", ".join(r.get("flags", []))))
+        lines.append("- **%s** %s — %s" % (
+            r.get("id"), r.get("title", ""), ", ".join(r.get("flags", []))))
 else:
-    lines.append("_None — every top-level issue is well-formed._")
+    lines.append("_None — every todo issue is well-formed._")
 lines.append("")
 errs = data.get("errors", [])
 if errs:
@@ -156,14 +159,18 @@ PYEOF
   # must not fail the (headless) groom run, so it's wrapped and never fatal.
   local data_out; data_out="$(pmg_data_file "$date")"
   mkdir -p "$(pmg_data_dir)" 2>/dev/null || true
-  PMG_JSON="$json" PMG_DATE="$date" PMG_DATA_OUT="$data_out" python3 - <<'PYEOF' 2>>"$logf" || true
+  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" PMG_DATA_OUT="$data_out" python3 - <<'PYEOF' 2>>"$logf" || true
 import json, os
 data = json.loads(os.environ["PMG_JSON"])
+try:
+    queue = json.loads(os.environ.get("PMG_QUEUE") or "[]")
+except Exception:
+    queue = []
 date = os.environ["PMG_DATE"]
 out = os.environ["PMG_DATA_OUT"]
-applied = data.get("applied")
-# Preserve an existing "## Auto-work" section (the execute loop writes into it as it
-# parks issues), so a re-run of the scan doesn't clobber the day's recorded outcomes.
+# Preserve an existing "## Auto-work" section (the execute loop / pmw writes into it
+# as it drives + parks issues), so a re-run of the scan doesn't clobber the day's
+# recorded outcomes.
 existing_autowork = ""
 if os.path.exists(out):
     try:
@@ -182,59 +189,44 @@ L.append("---")
 L.append("")
 L.append("# Grooming — %s" % date)
 L.append("")
-L.append("_Mechanical triage (%s) + the auto-exec queue. Review on waking, then run"
-         " `/plan-my-work` to drive or resume._" % ("applied" if applied else "dry-run"))
+L.append("_Todo-only triage + the ordered run queue. Backlog is your staging area — "
+         "groom never touches it. Review on waking, then run `/plan-my-work <id>` to "
+         "drive or resume any queued issue._")
 L.append("")
-# Triage info.
-L.append("## Triaged backlog → todo")
+# The ordered run queue: todo issues in the order pmw should run them (blockers ahead
+# of the issues they block). groom feeds these ids to /plan-my-work one at a time.
+L.append("## Queue — ordered (%d)" % len(queue))
 L.append("")
-triaged = data.get("triaged", [])
-if triaged:
-    for t in triaged:
-        mark = ""
-        if applied:
-            mark = " ✅" if t.get("ok") else " ⚠️ %s" % t.get("error", "failed")
-        ag = t.get("auto_gates") or []
-        tag = (" · auto:%s" % ",".join(ag)) if ag else ""
-        L.append("- **%s** %s%s%s" % (t.get("id"), t.get("title", ""), mark, tag))
+if queue:
+    L.append("| # | Issue | Priority | Title |")
+    L.append("|---|---|---|---|")
+    for i, r in enumerate(queue, 1):
+        L.append("| %d | %s | %s | %s |" % (
+            i, r.get("id"), r.get("priority", ""), r.get("title", "")))
 else:
-    L.append("_None — no well-formed backlog issues to promote._")
+    L.append("_None — no todo issues ready to run. (Move a backlog issue to todo to "
+             "queue it.)_")
 L.append("")
+# Thin todo issues to enrich before running.
 nr = data.get("needs_review", [])
-L.append("## Needs review (thin — groom first, not auto-exec eligible)")
+L.append("## Needs review (thin todo — enrich before running)")
 L.append("")
 if nr:
     for r in nr:
-        L.append("- **%s** %s [%s] — %s" % (
-            r.get("id"), r.get("title", ""), r.get("group", ""),
-            ", ".join(r.get("flags", []))))
+        L.append("- **%s** %s — %s" % (
+            r.get("id"), r.get("title", ""), ", ".join(r.get("flags", []))))
 else:
-    L.append("_None — every top-level issue is well-formed._")
-L.append("")
-# The auto-exec queue: well-formed issues carrying auto:<gate> labels, with the
-# gates that will auto-advance. The execute loop drives these and parks each at its
-# first manual (non-auto) gate.
-ax = data.get("auto_exec", [])
-L.append("## Auto-exec queue (%d)" % len(ax))
-L.append("")
-if ax:
-    L.append("| Issue | Title | Auto-cleared gates |")
-    L.append("|---|---|---|")
-    for r in ax:
-        L.append("| %s | %s | %s |" % (
-            r.get("id"), r.get("title", ""), ", ".join(r.get("auto_gates", []))))
-else:
-    L.append("_None — no triaged issue carries an `auto:<gate>` label._")
+    L.append("_None — every todo issue is well-formed._")
 L.append("")
 if existing_autowork:
     L.append(existing_autowork.rstrip())
     L.append("")
 else:
-    # Seed an empty Auto-work section the execute loop appends to.
+    # Seed an empty Auto-work section pmw appends to as it drives each queued id.
     L.append("## Auto-work")
     L.append("")
-    L.append("_Empty until `/plan-my-work` drives the queue — each issue records the"
-             " gates it auto-advanced and the manual gate it parked at._")
+    L.append("_Empty until `/plan-my-work` drives the queue — each id records how far "
+             "it got (which stages auto-advanced) and the manual stage it parked at._")
     L.append("")
 with open(out, "w") as f:
     f.write("\n".join(L).rstrip() + "\n")

@@ -33,208 +33,112 @@ teardown() { rm -rf "$TMP"; }
 
 # --- pure logic: groom_run ---------------------------------------------------
 
-@test "groom_run triages a well-formed backlog issue → todo (dry-run, no write)" {
+@test "groom_run reports a well-formed TODO issue as pipeline-ready (todo-only, PB-94)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
 class FakeClient:
     DATA = {"A": {
-      "states":[{"id":"bk","group":"backlog","default":True},
-                {"id":"td","group":"unstarted","default":True}],
-      "items":[{"id":"a1","sequence_id":1,"name":"well-formed","priority":"high",
-                "description_stripped":"has body","state":"bk"}],
+      "states":[{"id":"td","group":"unstarted","default":True}],
+      "items":[{"id":"a1","sequence_id":1,"name":"ready one","priority":"high",
+                "description_stripped":"has body","state":"td"}],
     }}
     def list_states(self,pid): return self.DATA[pid]["states"]
     def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def update_work_item(self,pid,iid,body): raise AssertionError("must not write in dry-run")
-m.ensure_estimate_scale = lambda cfg,c,pid: None  # no estimate scale → no_estimate not flagged
+    def update_work_item(self,pid,iid,body): raise AssertionError("groom must not write")
+m.ensure_estimate_scale = lambda cfg,c,pid: None
 cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
 rep = m.groom_run(cfg, FakeClient(), ["A"], apply=False)
-assert rep["applied"] is False, rep
-assert len(rep["triaged"])==1 and rep["triaged"][0]["to"]=="todo", rep
-assert rep["needs_review"]==[], rep
+assert "triaged" not in rep and "auto_exec" not in rep, rep   # old keys gone
+assert [r["id"] for r in rep["todo"]] == [1], rep
+assert rep["needs_review"] == [], rep
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "groom_run queues a thin issue into needs_review and never edits it" {
+@test "groom_run SKIPS backlog entirely — no promotion, no thin-flagging (PB-94)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-class FakeClient:
-    DATA = {"A": {
-      "states":[{"id":"bk","group":"backlog","default":True}],
-      "items":[{"id":"a1","sequence_id":1,"name":"thin","priority":"none",
-                "description_stripped":"","description_html":"<p></p>","state":"bk"}],
-    }}
-    def list_states(self,pid): return self.DATA[pid]["states"]
-    def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def update_work_item(self,pid,iid,body): raise AssertionError("must not write a thin issue")
-m.ensure_estimate_scale = lambda cfg,c,pid: None
-cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
-rep = m.groom_run(cfg, FakeClient(), ["A"], apply=True)
-assert rep["triaged"]==[], rep
-assert len(rep["needs_review"])==1, rep
-flags = rep["needs_review"][0]["flags"]
-assert "no_description" in flags and "no_priority" in flags, flags
-print("ok")
-PYEOF
-  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
-}
-
-@test "groom_run skips sub-issues and non-backlog issues" {
-  run python3 - "$PLANE" <<'PYEOF'
-import sys, importlib.util
-spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-class FakeClient:
-    DATA = {"A": {
-      "states":[{"id":"bk","group":"backlog","default":True},
-                {"id":"st","group":"started","default":True}],
-      "items":[
-        {"id":"sub","sequence_id":1,"name":"child","priority":"high",
-         "description_stripped":"x","state":"bk","parent":"a0"},
-        {"id":"started","sequence_id":2,"name":"in progress","priority":"high",
-         "description_stripped":"x","state":"st"},
-      ],
-    }}
-    def list_states(self,pid): return self.DATA[pid]["states"]
-    def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def update_work_item(self,pid,iid,body): raise AssertionError("must not write")
-m.ensure_estimate_scale = lambda cfg,c,pid: None
-cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
-rep = m.groom_run(cfg, FakeClient(), ["A"], apply=True)
-assert rep["triaged"]==[] and rep["needs_review"]==[], rep
-assert rep["projects"][0]["counts"]["skipped"]==2, rep
-print("ok")
-PYEOF
-  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
-}
-
-@test "groom_run apply=True performs the backlog→todo write" {
-  run python3 - "$PLANE" <<'PYEOF'
-import sys, importlib.util
-spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-writes = []
 class FakeClient:
     DATA = {"A": {
       "states":[{"id":"bk","group":"backlog","default":True},
                 {"id":"td","group":"unstarted","default":True}],
-      "items":[{"id":"a1","sequence_id":1,"name":"ok","priority":"high",
-                "description_stripped":"body","state":"bk"}],
+      # one well-formed backlog issue + one THIN backlog issue — both must be ignored
+      "items":[{"id":"b1","sequence_id":1,"name":"wf backlog","priority":"high",
+                "description_stripped":"body","state":"bk"},
+               {"id":"b2","sequence_id":2,"name":"thin backlog","priority":"none",
+                "description_stripped":"","state":"bk"}],
     }}
     def list_states(self,pid): return self.DATA[pid]["states"]
     def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def update_work_item(self,pid,iid,body): writes.append((pid,iid,body))
+    def update_work_item(self,pid,iid,body): raise AssertionError("never write backlog")
 m.ensure_estimate_scale = lambda cfg,c,pid: None
 cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
 rep = m.groom_run(cfg, FakeClient(), ["A"], apply=True)
-assert rep["applied"] is True and len(writes)==1, (rep, writes)
-assert rep["triaged"][0]["ok"] is True, rep
+assert rep["todo"] == [], rep            # backlog never enters the pipeline
+assert rep["needs_review"] == [], rep    # backlog is NOT thin-flagged
+assert rep["projects"][0]["counts"]["skipped"] == 2, rep
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "groom_run records a per-project error and keeps going" {
+@test "groom_run flags a THIN todo issue into needs_review (enrich before running)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
 class FakeClient:
+    DATA = {"A": {
+      "states":[{"id":"td","group":"unstarted","default":True}],
+      # thin: no description, no priority
+      "items":[{"id":"a1","sequence_id":1,"name":"thin todo","priority":"none",
+                "description_stripped":"","description_html":"<p></p>","state":"td"}],
+    }}
+    def list_states(self,pid): return self.DATA[pid]["states"]
+    def list_work_items(self,pid): return self.DATA[pid]["items"]
+    def update_work_item(self,pid,iid,body): raise AssertionError("groom must not write")
+m.ensure_estimate_scale = lambda cfg,c,pid: None
+cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
+rep = m.groom_run(cfg, FakeClient(), ["A"], apply=False)
+assert rep["todo"] == [], rep
+assert len(rep["needs_review"]) == 1 and rep["needs_review"][0]["id"] == 1, rep
+assert "flags" in rep["needs_review"][0], rep
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "groom_run skips sub-issues, and records a per-project error and keeps going" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FakeClient:
+    DATA = {"A": {
+      "states":[{"id":"td","group":"unstarted","default":True}],
+      "items":[{"id":"a1","sequence_id":1,"name":"child","priority":"high",
+                "description_stripped":"body","state":"td","parent":"P1"}],  # sub-issue
+    }}
     def list_states(self,pid):
-        if pid=="BAD": raise m.PlaneError("boom")
-        return [{"id":"bk","group":"backlog","default":True},
-                {"id":"td","group":"unstarted","default":True}]
-    def list_work_items(self,pid):
-        return [{"id":"g1","sequence_id":1,"name":"ok","priority":"high",
-                 "description_stripped":"body","state":"bk"}]
-    def update_work_item(self,pid,iid,body): pass
-m.ensure_estimate_scale = lambda cfg,c,pid: None
-cfg = {"projects":[{"id":"BAD","name":"Bad","shortcut":""},{"id":"A","name":"Alpha","shortcut":""}]}
-rep = m.groom_run(cfg, FakeClient(), ["BAD","A"], apply=True)
-assert len(rep["errors"])==1 and rep["errors"][0]["project_id"]=="BAD", rep
-assert len(rep["triaged"])==1, rep  # the good project still triaged
-print("ok")
-PYEOF
-  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
-}
-
-# --- PB-94: auto-exec queue surfaced by groom_run ----------------------------
-
-@test "groom_run lists a well-formed issue carrying auto:* labels in auto_exec" {
-  run python3 - "$PLANE" <<'PYEOF'
-import sys, importlib.util
-spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-class FakeClient:
-    DATA = {"A": {
-      "states":[{"id":"bk","group":"backlog","default":True},
-                {"id":"td","group":"unstarted","default":True}],
-      "items":[{"id":"a1","sequence_id":1,"name":"cleared","priority":"high",
-                "description_stripped":"has body","state":"bk",
-                "labels":["Lmerge","Lfinish"]}],
-      "labels":[{"id":"Lmerge","name":"auto:merge"},
-                {"id":"Lfinish","name":"auto:finish"},
-                {"id":"Lbug","name":"bug"}],
-    }}
-    def list_states(self,pid): return self.DATA[pid]["states"]
+        if pid == "B": raise m.PlaneError("boom")
+        return self.DATA[pid]["states"]
     def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def list_labels(self,pid): return self.DATA[pid]["labels"]
-    def update_work_item(self,pid,iid,body): pass
 m.ensure_estimate_scale = lambda cfg,c,pid: None
-cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
-rep = m.groom_run(cfg, FakeClient(), ["A"], apply=False)
-ax = rep["auto_exec"]
-assert len(ax)==1, rep
-assert ax[0]["auto_gates"]==["finish","merge"], ax  # GATE_NAMES order
-# the triaged row also carries its clearances
-assert rep["triaged"][0]["auto_gates"]==["finish","merge"], rep["triaged"]
+cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""},
+                   {"id":"B","name":"Beta","shortcut":""}]}
+rep = m.groom_run(cfg, FakeClient(), ["A","B"], apply=False)
+assert rep["todo"] == [] and rep["needs_review"] == [], rep   # the only A item is a sub-issue
+assert rep["projects"][0]["counts"]["skipped"] == 1, rep
+assert len(rep["errors"]) == 1 and rep["errors"][0]["project_id"] == "B", rep
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
-
-@test "groom_run does NOT auto-exec a thin issue even if it carries auto:* labels" {
-  run python3 - "$PLANE" <<'PYEOF'
-import sys, importlib.util
-spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-class FakeClient:
-    DATA = {"A": {
-      "states":[{"id":"bk","group":"backlog","default":True}],
-      # thin: no description, no priority — must go to needs_review, not auto_exec
-      "items":[{"id":"a1","sequence_id":1,"name":"thin-but-labelled","priority":"none",
-                "description_stripped":"","description_html":"<p></p>","state":"bk",
-                "labels":["Lmerge"]}],
-      "labels":[{"id":"Lmerge","name":"auto:merge"}],
-    }}
-    def list_states(self,pid): return self.DATA[pid]["states"]
-    def list_work_items(self,pid): return self.DATA[pid]["items"]
-    def list_labels(self,pid): return self.DATA[pid]["labels"]
-    def update_work_item(self,pid,iid,body): raise AssertionError("must not write a thin issue")
-m.ensure_estimate_scale = lambda cfg,c,pid: None
-cfg = {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
-rep = m.groom_run(cfg, FakeClient(), ["A"], apply=True)
-assert rep["auto_exec"]==[], rep          # thin → never auto-exec eligible
-assert len(rep["needs_review"])==1, rep   # surfaced for grooming instead
-print("ok")
-PYEOF
-  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
-}
-
-# --- report rendering: pmg_run (python3 groom stubbed) -----------------------
 
 @test "pmg_run renders a dated markdown report from the scan JSON" {
   # Stub python3 so `groom` returns canned JSON, but the rendering heredoc still
@@ -246,7 +150,7 @@ PYEOF
 #!/usr/bin/env bash
 for a in "\$@"; do
   if [[ "\$a" == groom ]]; then
-    echo '{"applied":true,"projects":[{"project_id":"A","project":"Alpha","counts":{"triaged":1,"needs_review":1,"skipped":0}}],"triaged":[{"id":1,"title":"promote me","from":"backlog","to":"todo","ok":true}],"needs_review":[{"id":2,"title":"too thin","group":"backlog","flags":["no_description"]}],"errors":[]}'
+    echo '{"applied":true,"projects":[{"project_id":"A","project":"Alpha","counts":{"todo":1,"needs_review":1,"skipped":0}}],"todo":[{"id":1,"title":"ready one"}],"needs_review":[{"id":2,"title":"too thin","flags":["no_description"]}],"errors":[]}'
     exit 0
   fi
 done
@@ -258,7 +162,7 @@ SHIM
   report="$TMP/pmg/2026-06-22.md"
   [ -f "$report" ] \
     && grep -q "PM groom report — 2026-06-22 (applied)" "$report" \
-    && grep -q "promote me" "$report" \
+    && grep -q "ready one" "$report" \
     && grep -q "too thin" "$report" \
     && grep -q "no_description" "$report"
 }
@@ -278,7 +182,7 @@ class FakeClient:
                 {"id":"td","group":"unstarted","default":True}]
     def list_work_items(self, pid):
         return [{"id":"x1","sequence_id":42,"name":"groom me","priority":"high",
-                 "description_stripped":"body","state":"bk"}]
+                 "description_stripped":"body","state":"td"}]
     def update_work_item(self, pid, iid, body): pass
 m.load_config = lambda: {"projects":[{"id":"A","name":"Alpha","shortcut":""}]}
 m.make_client = lambda cfg: FakeClient()
@@ -292,18 +196,22 @@ PYFAKE
   [ -f "$report" ] \
     && grep -q "(applied)" "$report" \
     && grep -q "groom me" "$report" \
-    && grep -q "backlog → todo" "$report"
+    && grep -q "Todo — pipeline-ready" "$report"
 }
 
 # --- PB-94: vault grooming-data artifact + agent-drive block -----------------
 
-@test "pmg_run writes the vault grooming-data file with the auto-exec queue" {
+@test "pmg_run writes the vault grooming-data file with the ordered queue (PB-94)" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM
 #!/usr/bin/env bash
 for a in "\$@"; do
   if [[ "\$a" == groom ]]; then
-    echo '{"applied":true,"projects":[],"triaged":[{"id":1,"title":"promote me","from":"backlog","to":"todo","ok":true,"auto_gates":["in-progress"]}],"needs_review":[{"id":2,"title":"too thin","group":"backlog","flags":["no_estimate"]}],"auto_exec":[{"id":1,"title":"promote me","auto_gates":["in-progress","finish"]}],"errors":[]}'
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"ready one"}],"needs_review":[{"id":2,"title":"too thin","flags":["no_estimate"]}],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"ready one","priority":"high"}]'
     exit 0
   fi
 done
@@ -316,10 +224,10 @@ SHIM
   data="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
   [ -f "$data" ]
   grep -q "type: daily-grooming" "$data"
-  grep -q "## Auto-exec queue (1)" "$data"
-  grep -q "in-progress, finish" "$data"
+  grep -q "## Queue — ordered (1)" "$data"
+  grep -q "ready one" "$data"
   grep -q "## Auto-work" "$data"
-  grep -q "promote me" "$data"
+  grep -q "## Needs review" "$data"
 }
 
 @test "groom run emits the agent-drive block interactively, suppresses it headless" {
@@ -328,7 +236,11 @@ SHIM
 #!/usr/bin/env bash
 for a in "\$@"; do
   if [[ "\$a" == groom ]]; then
-    echo '{"applied":true,"projects":[],"triaged":[],"needs_review":[],"auto_exec":[{"id":1,"title":"x","auto_gates":["finish"]}],"errors":[]}'
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"x"}],"needs_review":[],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"x","priority":"high"}]'
     exit 0
   fi
 done
@@ -338,12 +250,12 @@ SHIM
   # Interactive (no headless marker): the drive block IS emitted.
   run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/project-manager.sh" groom run --projects A --apply
   [ "$status" -eq 0 ]
-  [[ "$output" == *"groom: drive the auto-exec queue"* ]]
+  [[ "$output" == *"groom: drive the ordered queue"* ]]
   # Headless (LaunchAgent path): the block is suppressed.
   run env PATH="$STUB:$PATH" PBRAIN_PMG_HEADLESS=1 \
     bash "$REPO_ROOT/commands/project-manager.sh" groom run --projects A --apply
   [ "$status" -eq 0 ]
-  [[ "$output" != *"groom: drive the auto-exec queue"* ]]
+  [[ "$output" != *"groom: drive the ordered queue"* ]]
 }
 
 @test "pmg_prune keeps the newest N dated reports and deletes the rest" {

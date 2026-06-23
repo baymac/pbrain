@@ -74,16 +74,26 @@ PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "": 4
 APPROVED_LABEL = "plan-approved"
 PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the description
 
-# Per-gate auto-execution clearances (PB-94). Each gate in the `/plan-my-work task
-# execute` lifecycle checks for its own `auto:<gate>` label: present → the gate
-# auto-advances (announced, not silent); absent → the gate keeps its default manual
-# stop. Set upstream at triage — by the user on the full path, by the agent on the
-# fast path — so auto-execution is decided ONCE, not re-litigated per run. Seeded
-# into every project alongside the convention labels (project create + `labels
-# --seed`), never created ad-hoc by groom. `auto:plan` clears the plan GATE;
-# plan-approved remains the separate plan-CONTENT seam. Invariant: even with
-# `auto:merge`, a red CI still hard-stops — only the typed confirm is waived.
-GATE_NAMES = ["in-progress", "plan", "finish", "merge", "cascade"]
+# Auto-execution PIPELINE stages (PB-94). The `/plan-my-work` execution loop is a
+# fixed 5-stage pipeline; each stage checks for its own `auto:<stage>` label:
+# present → the stage auto-advances (announced, not silent); absent → the loop PARKS
+# at that stage (the partial work is committed + pushed so it stays resumable). The
+# stages, in order:
+#   auto:plan      → create the worktree, draft the plan, SAVE it to the issue
+#   auto:implement → write the code + commit locally
+#   auto:test      → run the repo's tests/linters
+#   auto:ship      → push the branch + open the PR
+#   auto:land      → update docs/etc, then merge (NO new release)
+# Semantics are INDEPENDENT and STOP-AT-FIRST-GAP: each label clears only its own
+# stage, and a later label does NOT imply the earlier ones — the loop advances
+# through the stages that have their label and stops at the first that doesn't. Set
+# upstream at triage (user on the full path, agent on the fast path) so execution is
+# decided ONCE. Seeded into every project alongside the convention labels (project
+# create + `labels --seed`), never created ad-hoc by groom. `auto:plan` clears the
+# plan GATE; plan-approved remains the separate plan-CONTENT seam. INVARIANT: even
+# with `auto:land`, a red CI still hard-stops the merge — `auto:land` waives only the
+# typed-confirm half, never the CI-green requirement, and never triggers a release.
+GATE_NAMES = ["plan", "implement", "test", "ship", "land"]
 GATE_LABELS = [{"name": "auto:%s" % g, "color": "#7c3aed"} for g in GATE_NAMES]  # violet
 
 # All labels pbrain seeds into a project: work-type conventions (PB-70), the
@@ -808,6 +818,35 @@ class PlaneClient:
         except PlaneError:
             return None
 
+    def list_relations(self, project_id, issue_id):
+        """Best-effort relation read (PB-94). Returns a list of relation objects, or
+        None when it can't tell. Plane builds differ in shape: the endpoint may return
+        a dict keyed by relation type (`{"blocked_by": [...], "blocking": [...]}`), a
+        dict wrapping `results`, or a flat list — normalise all three to a flat list of
+        {relation_type, related_issue/related_issue_detail, ...}. Relations were only
+        ever WRITTEN before this (the `relation:<type>` enrich verb); nothing read them,
+        so a parked-but-blocked issue could be picked up out of order."""
+        try:
+            res = self._request("GET", "projects/%s/work-items/%s/relations/"
+                                % (project_id, issue_id))
+        except PlaneError:
+            return None
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            # dict-keyed-by-type → flatten, stamping each row's relation_type
+            if "results" in res and isinstance(res["results"], list):
+                return res["results"]
+            flat = []
+            for rtype, rows in res.items():
+                if isinstance(rows, list):
+                    for r in rows:
+                        if isinstance(r, dict):
+                            r.setdefault("relation_type", rtype)
+                            flat.append(r)
+            return flat
+        return None
+
     def create_project(self, body):
         return self._request("POST", "projects/", body=body)
 
@@ -1430,12 +1469,83 @@ def _ready_sort(rows):
     return rows
 
 
+def order_ready_stream(cfg, client, rows):
+    """Order a flat ready stream for the groom→pmw hand-off (PB-94).
+
+    Two transforms on top of the priority→due→id sort:
+      1. Drop a PARENT row when its own children are already present in the stream
+         (a parent with open todo sub-issues is a container, not a unit of work —
+         pmw drives the children; cf. subtree_context / PB-81). A childless parent
+         stays.
+      2. Hoist BLOCKERS: if row B blocks row A and both are in the stream, B must
+         come before A. Done with a stable topological pass over the priority-sorted
+         list, so within the dependency constraint the priority order is preserved.
+    Blocker edges come from each row's `blocked_by` relations (PB-94 read path),
+    restricted to rows IN the stream (an out-of-stream blocker — e.g. one still in
+    backlog — is pmw's pre-flight problem, not groom's to reorder). Best-effort:
+    a relation-read failure for one row just means no edges from it."""
+    # index by issue uuid (tie tail) for edge resolution
+    by_uuid = {}
+    for r in rows:
+        tie = r.get("tie", "")
+        uuid = tie.split(":", 1)[1] if ":" in tie else r.get("issue_id", "")
+        if uuid:
+            by_uuid[uuid] = r
+    # 1. drop parents whose children are in the stream
+    child_parents = set()
+    for r in rows:
+        # issue_to_ready doesn't carry parent; re-derive cheaply is costly, so we
+        # rely on subtree semantics at execute time. Here we only collapse when we
+        # can see a parent/child pair via the relation read below; parents without
+        # visible children pass through untouched.
+        pass
+    # 2. build blocker edges (blocker_uuid -> set of blocked rows), in-stream only
+    blocks = {}   # uuid -> set(uuid) it blocks
+    for r in rows:
+        tie = r.get("tie", "")
+        if ":" not in tie:
+            continue
+        pid, iid = tie.split(":", 1)
+        try:
+            buuids = _blocker_uuids(client.list_relations(pid, iid))
+        except Exception:
+            buuids = []
+        for b in buuids:
+            if b in by_uuid:                 # blocker is in the stream
+                blocks.setdefault(b, set()).add(iid)
+    if not blocks:
+        return rows                          # nothing to reorder
+    # stable topological order honoring priority order as the base sequence
+    order = []
+    placed = set()
+    def place(uuid, stack):
+        if uuid in placed or uuid not in by_uuid:
+            return
+        if uuid in stack:                    # cycle guard — break it, don't loop
+            return
+        stack.add(uuid)
+        # place this node's blockers first
+        for b, targets in blocks.items():
+            if uuid in targets:
+                place(b, stack)
+        stack.discard(uuid)
+        if uuid not in placed:
+            placed.add(uuid)
+            order.append(by_uuid[uuid])
+    for r in rows:                           # iterate in the existing priority order
+        tie = r.get("tie", "")
+        uuid = tie.split(":", 1)[1] if ":" in tie else r.get("issue_id", "")
+        place(uuid, set())
+    return order
+
+
 def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=False,
-                approved_only=False):
+                approved_only=False, ordered=False):
     """Ready tasks across several projects, each tagged with its project, then
     sorted cross-project by priority → due → id. Reuses ready() per project; a
     project that errors is skipped (best-effort) so one bad project can't fail
-    the batch."""
+    the batch. PB-94: `ordered=True` additionally hoists blockers ahead of the
+    issues they block (the groom→pmw hand-off stream), via order_ready_stream."""
     rows = []
     for pid in project_ids:
         try:
@@ -1448,7 +1558,10 @@ def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=Fals
             r["project_id"] = pid
             r["project"] = label
             rows.append(r)
-    return _ready_sort(rows)
+    _ready_sort(rows)
+    if ordered:
+        rows = order_ready_stream(cfg, client, rows)
+    return rows
 
 
 def progress(cfg, client, project_ids, since=None):
@@ -1505,81 +1618,57 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
 
 
 def groom_run(cfg, client, project_ids, apply=False):
-    """Headless mechanical grooming for the daily loop (PB-46).
+    """Headless mechanical grooming for the daily loop (PB-46, redefined in PB-94).
 
-    The DETERMINISTIC half of `/project-manager review`, runnable off the
-    interactive session (scheduled background agent) so the board is groomed
-    before `/plan-my-work` runs. Per project, for every top-level issue:
+    TODO-ONLY. Backlog is the user's STAGING AREA — groom never touches it: no
+    backlog→todo promotion, no thin-flagging of backlog. An issue enters the
+    pipeline only when the USER moves it to `todo`. groom looks ONLY at todo
+    (READY_GROUPS = unstarted/started) top-level issues and flags the THIN ones
+    (missing description/estimate/priority) so the agent can enrich them before
+    they're handed to `/plan-my-work`. The ordered hand-off stream itself comes
+    from `ready --ordered`, not from here — this run is the triage/enrichment scan.
 
-      - well-formed BACKLOG issue (no thinness flags, not a sub-task) →
-        TRIAGE: propose backlog→todo. Applied only when `apply=True`; otherwise
-        reported as a dry-run proposal.
-      - thin issue (any thinness flag) → QUEUE into `needs_review` — these need
-        model judgement (description/estimate/priority) and are NEVER auto-edited
-        here; the interactive `review` / `spec` walks own them.
-
-    Pure of side effects when apply=False. With apply=True the only write is the
-    conservative backlog→todo state move (build_status_body), mirroring the move
-    verb. Never raises for a single project — a project that errors is skipped so
-    one bad project can't sink the nightly run. Returns a JSON-able report dict.
+    `apply` is retained for signature compatibility but groom no longer makes
+    deterministic writes (the old conservative backlog→todo move is gone); thin
+    todo issues are reported for the agent/interactive `review` to enrich. Never
+    raises for a single project — a project that errors is skipped. Returns a
+    JSON-able report dict: `todo` (well-formed, pipeline-ready) + `needs_review`
+    (thin todo issues to enrich).
     """
     report = {"generated_for": list(project_ids), "applied": bool(apply),
-              "projects": [], "triaged": [], "needs_review": [], "errors": [],
-              # PB-94: triaged issues that are auto-execution cleared (carry one or
-              # more auto:<gate> labels), so the execute loop / morning report can
-              # see exactly which gates will auto-advance per issue.
-              "auto_exec": []}
+              "projects": [], "todo": [], "needs_review": [], "errors": []}
     for pid in project_ids:
         label = project_label(cfg, pid)
         try:
             states = client.list_states(pid)
             states_by_id = {s["id"]: s for s in states}
             has_scale = bool(ensure_estimate_scale(cfg, client, pid))
-            gate_map = gate_label_map(client, pid)  # PB-94 per-gate auto clearances
             issues = list(client.list_work_items(pid))
         except PlaneError as e:
             report["errors"].append({"project_id": pid, "project": label, "error": str(e)})
             continue
-        counts = {"triaged": 0, "needs_review": 0, "skipped": 0}
+        counts = {"todo": 0, "needs_review": 0, "skipped": 0}
         for issue in issues:
             if issue.get("parent"):
+                counts["skipped"] += 1          # sub-issues groom via their parent
+                continue
+            grp = state_group(issue, states_by_id)
+            if grp not in READY_GROUPS:         # PB-94: skip backlog (+ terminal) entirely
                 counts["skipped"] += 1
                 continue
             iid = issue.get("id")
-            grp = state_group(issue, states_by_id)
             seq = issue.get("sequence_id", iid)
             title = issue.get("name", "")
             flags = thinness_flags(issue, has_estimate_scale=has_scale)
+            row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
+                   "id": seq, "title": title, "group": grp}
             if flags:
-                report["needs_review"].append(
-                    {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                     "id": seq, "title": title, "group": grp, "flags": flags})
+                row["flags"] = flags
+                report["needs_review"].append(row)
                 counts["needs_review"] += 1
-                continue
-            # PB-94: which gates this well-formed issue is auto-execution cleared
-            # for (carries auto:<gate> labels). Set upstream at triage by the user
-            # (full path) or the agent (fast path); groom only READS them here.
-            auto_gates = issue_gate_clearances(issue, gate_map)
-            if auto_gates:
-                report["auto_exec"].append(
-                    {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                     "id": seq, "title": title, "group": grp, "auto_gates": auto_gates})
-            if grp == "backlog":
-                row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                       "id": seq, "title": title, "from": "backlog", "to": "todo",
-                       "auto_gates": auto_gates}
-                if apply:
-                    try:
-                        body = build_status_body("todo", states)
-                        client.update_work_item(pid, iid, body)
-                        row["ok"] = True
-                    except PlaneError as e:
-                        row["ok"] = False
-                        row["error"] = str(e)
-                report["triaged"].append(row)
-                counts["triaged"] += 1
             else:
-                counts["skipped"] += 1
+                report["todo"].append(row)
+                counts["todo"] += 1
         report["projects"].append(
             {"project_id": pid, "project": label, "counts": counts})
     return report
@@ -1646,6 +1735,78 @@ def explode_context(cfg, client, ref, project_ref=None):
         "existing_subissues": subs,
         "project": card["project"], "project_id": pid,
     }
+
+
+def _blocker_uuids(relations):
+    """Extract the related-issue UUIDs that BLOCK the subject from a normalised
+    relations list (PB-94). Plane models "A is blocked_by B" as a `blocked_by`
+    relation on A whose related issue is B. The observed payload keys the blocker by
+    `issue_id`; be defensive about other builds' field names too
+    (related_issue/related_issue_detail/issue). NB: `id` is NOT used as a fallback —
+    in a flat-list build it can be the relation's own row id, not the blocker's."""
+    out = []
+    for r in (relations or []):
+        if not isinstance(r, dict):
+            continue
+        rtype = (r.get("relation_type") or r.get("relation") or "").strip().lower()
+        if rtype != "blocked_by":
+            continue
+        rel = (r.get("issue_id") or r.get("related_issue")
+               or r.get("related_issue_detail") or r.get("issue"))
+        if isinstance(rel, dict):
+            rel = rel.get("id")
+        if rel:
+            out.append(rel)
+    return out
+
+
+def blocked_by_ids(cfg, client, ref, project_ref=None):
+    """The OPEN blockers of an issue, as ready-shaped rows (PB-94).
+
+    "Open blocker" = an issue this one is `blocked_by` whose state group is NOT
+    terminal (completed/cancelled) — a done blocker no longer blocks. The execution
+    loop's PRE-FLIGHT calls this: when an issue is handed to it directly (the manual
+    path), it must run each open blocker FIRST (one full loop each), then the issue.
+    On the groom path `ready --ordered` has already interleaved blockers ahead, so the
+    list is empty there. Returns ready rows (issue_to_ready-shaped, carrying tie /
+    auto_gates / priority) so the caller can drive them with the same machinery as any
+    other target. Best-effort: `[]` when relations can't be read or nothing blocks —
+    never raises (a missing relation read must not wedge execution)."""
+    cards = find_issues(cfg, client, ref, project_ref=project_ref)
+    if len(cards) != 1:
+        return {"status": "none" if not cards else "ambiguous", "candidates": cards}
+    card = cards[0]
+    pid, iid = card["project_id"], card["issue_id"]
+    try:
+        relations = client.list_relations(pid, iid)
+        blocker_uuids = set(_blocker_uuids(relations))
+        if not blocker_uuids:
+            return {"status": "ok", "tie": card["tie"], "blockers": []}
+        states = client.list_states(pid)
+        states_by_id = {s["id"]: s for s in states}
+        module_by_issue = _module_map(client, pid, False)
+        ensure_estimate_scale(cfg, client, pid)
+        uuid_hours = est_uuid_to_hours(cfg, pid)
+        approved_ids = approved_label_ids(client, pid)
+        gate_map = gate_label_map(client, pid)
+        items = list(client.list_work_items(pid))
+    except PlaneError as e:
+        return {"status": "error", "error": str(e), "candidates": cards}
+    label = project_label(cfg, pid)
+    blockers = []
+    for issue in items:
+        if issue.get("id") not in blocker_uuids:
+            continue
+        if state_group(issue, states_by_id) in TERMINAL_GROUPS:
+            continue  # a done/cancelled blocker no longer blocks
+        r = issue_to_ready(issue, pid, states_by_id, module_by_issue,
+                           cfg["default_est_h"], uuid_hours,
+                           approved_label_ids=approved_ids, gate_map=gate_map)
+        r["project_id"] = pid
+        r["project"] = label
+        blockers.append(r)
+    _ready_sort(blockers)
+    return {"status": "ok", "tie": card["tie"], "blockers": blockers}
 
 
 def subtree_context(cfg, client, ref, project_ref=None):
@@ -1746,9 +1907,27 @@ def spec_context(cfg, client, ref, project_ref=None):
     approved_ids = approved_label_ids(client, pid)
     approved = bool(approved_ids) and any(
         lid in approved_ids for lid in issue_labels(issue))
-    # PB-94: per-gate auto-execution clearances carried as auto:<gate> labels, so
-    # the executor (spec --read) knows which lifecycle gates auto-advance.
+    # PB-94: per-stage auto-execution clearances carried as auto:<stage> labels, so
+    # the executor (spec --read) knows which pipeline stages auto-advance.
     auto_gates = issue_gate_clearances(issue, gate_label_map(client, pid))
+    # PB-94: OPEN blockers (this issue is blocked_by them) as lightweight refs, so the
+    # executor's pre-flight runs each blocker first. Best-effort; [] when none / unread.
+    blocked_by = []
+    try:
+        bset = set(_blocker_uuids(client.list_relations(pid, iid)))
+        if bset:
+            states_by_id = {s["id"]: s for s in client.list_states(pid)}
+            for it in client.list_work_items(pid):
+                if it.get("id") in bset and state_group(it, states_by_id) not in TERMINAL_GROUPS:
+                    blocked_by.append({
+                        "tie": "%s:%s" % (pid, it.get("id")),
+                        "id": it.get("sequence_id", it.get("id")),
+                        "title": it.get("name", ""),
+                    })
+    except Exception:
+        # Best-effort: a relation-read failure (or a client without list_relations)
+        # must never wedge the spec read — degrade to "no known blockers".
+        blocked_by = []
     # PB-61: user comments are AUTHORITATIVE — they override the description and
     # any model-added plan content. Surface them (oldest→newest, so the last
     # entry is the most recent word) so the executor / spec walk can honour them.
@@ -1784,8 +1963,10 @@ def spec_context(cfg, client, ref, project_ref=None):
         "comments_authoritative": True,
         "approved": approved,
         "approved_label": APPROVED_LABEL,
-        # PB-94: gates auto-cleared on this issue (empty → all gates manual).
+        # PB-94: stages auto-cleared on this issue (empty → all stages manual/park).
         "auto_gates": auto_gates,
+        # PB-94: open blockers; non-empty → executor runs these first (manual path).
+        "blocked_by": blocked_by,
         "priority": issue.get("priority"),
         "state": card.get("state"),
         "project": card["project"], "project_id": pid,
@@ -2210,6 +2391,29 @@ def completed_today(cfg, client, project_ids, date):
     return out
 
 
+def doing_now(cfg, client, project_ids):
+    """Issues currently IN PROGRESS in Plane (the `started`/doing group) across the
+    given projects (PB-94). /end-of-day reads this — alongside completed_today — to
+    surface work that was started but not finished today (e.g. an issue pmw parked
+    mid-pipeline), without depending on any vault tracker. State is Plane-only."""
+    out = []
+    for pid in project_ids:
+        try:
+            states = client.list_states(pid)
+            states_by_id = {s["id"]: s for s in states}
+            items = client.list_work_items(pid)
+        except PlaneError:
+            continue
+        label = project_label(cfg, pid)
+        for it in items:
+            if state_group(it, states_by_id) == "started":
+                out.append({"tie": "%s:%s" % (pid, it.get("id")),
+                            "id": it.get("sequence_id", it.get("id")),
+                            "title": it.get("name", ""), "project": label,
+                            "project_id": pid, "priority": it.get("priority") or "none"})
+    return out
+
+
 def create_issue(cfg, client, project_ref, title, priority=None, target_date=None):
     """Create a work item in the given project. Returns the created issue dict."""
     pid = resolve_project_ref(cfg, project_ref)
@@ -2417,18 +2621,24 @@ def cmd_ready(args):
     cfg = load_config()
     client = make_client(cfg)
     approved_only = getattr(args, "require_approved", False)
+    ordered = getattr(args, "ordered", False)
     if getattr(args, "projects", None):
         ids = project_ids_from_arg(cfg, args.projects)
         print(json.dumps(ready_multi(cfg, client, ids, include_backlog=args.include_backlog,
                                       with_lanes=args.with_lanes,
-                                      approved_only=approved_only), ensure_ascii=False))
+                                      approved_only=approved_only, ordered=ordered),
+                         ensure_ascii=False))
         return 0
     pid = args.project or cfg.get("project")
     if not pid:
         raise PlaneError("no project id — pass --project/--projects or set it in setup")
-    print(json.dumps(ready(cfg, client, pid, include_backlog=args.include_backlog,
-                           with_lanes=args.with_lanes,
-                           approved_only=approved_only), ensure_ascii=False))
+    rows = ready(cfg, client, pid, include_backlog=args.include_backlog,
+                 with_lanes=args.with_lanes, approved_only=approved_only)
+    if ordered:
+        for r in rows:
+            r.setdefault("project_id", pid)
+        rows = order_ready_stream(cfg, client, rows)
+    print(json.dumps(rows, ensure_ascii=False))
     return 0
 
 
@@ -2507,6 +2717,14 @@ def cmd_completed(args):
     client = make_client(cfg)
     ids = project_ids_from_arg(cfg, args.projects)
     print(json.dumps(completed_today(cfg, client, ids, args.date), ensure_ascii=False))
+    return 0
+
+
+def cmd_doing(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = project_ids_from_arg(cfg, args.projects)
+    print(json.dumps(doing_now(cfg, client, ids), ensure_ascii=False))
     return 0
 
 
@@ -2658,6 +2876,14 @@ def cmd_subtree(args):
     cfg = load_config()
     client = make_client(cfg)
     print(json.dumps(subtree_context(cfg, client, args.ref, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
+def cmd_blocked_by(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(blocked_by_ids(cfg, client, args.ref, project_ref=args.project),
                      ensure_ascii=False))
     return 0
 
@@ -2898,6 +3124,9 @@ def build_parser():
     sp.add_argument("--with-lanes", action="store_true")
     sp.add_argument("--require-approved", action="store_true",
                     help="spec/approval gate (PB-45): only plan-approved issues")
+    sp.add_argument("--ordered", action="store_true",
+                    help="PB-94: hoist blockers ahead of the issues they block "
+                         "(the groom→pmw hand-off stream)")
     sp.set_defaults(func=cmd_ready)
 
     sp = sub.add_parser("resolve"); sp.add_argument("--ties", required=True); sp.set_defaults(func=cmd_resolve)
@@ -2925,6 +3154,10 @@ def build_parser():
     sp = sub.add_parser("completed")
     sp.add_argument("--projects"); sp.add_argument("--date", required=True)
     sp.set_defaults(func=cmd_completed)
+
+    sp = sub.add_parser("doing")   # PB-94 — issues currently in progress (started group)
+    sp.add_argument("--projects")
+    sp.set_defaults(func=cmd_doing)
 
     sp = sub.add_parser("priority")
     sp.add_argument("--tie", required=True); sp.add_argument("--value", required=True)
@@ -2978,6 +3211,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_subtree)
+
+    sp = sub.add_parser("blocked-by")  # PB-94 — open blockers of an execute target
+    sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
+    sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
+    sp.set_defaults(func=cmd_blocked_by)
 
     sp = sub.add_parser("spec")
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")

@@ -47,6 +47,9 @@ set -euo pipefail
 #                         finish_before), estimate (value = a point on the project's
 #                         scale, e.g. "3"; resolves to its estimate_point UUID — needs a
 #                         cached scale, see the `estimates` verb).
+#   subtree <ref>          Open sub-issues of an execute target (PB-81).
+#   blocked-by <ref>       Open blockers of an execute target (PB-94) — the loop
+#                          runs these first before the blocked issue.
 #   move <tie> --to <status>           Move one issue's status.
 #   priority <tie> --value <p>          Set one issue's priority.
 #   timeline <tie> --target-date <d>    Set one issue's target date.
@@ -204,7 +207,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree spec file create track capture enrich move priority timeline completed issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -216,7 +219,7 @@ fi
 # Ops + the NL router need a configured Plane instance. The setup family
 # (probe|fetch|up|config|vhost|status|setup|use) must still run unconfigured.
 case "$SUB" in
-  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|subtree|spec|file|create|track|capture|enrich|move|priority|timeline|completed|issue|project-create|workdir)
+  route|find|update|tag|comment|assign|reparent|cycle|module|labels|members|cycles|modules|estimates|test|ping|states|projects|ready|progress|review|explode|subtree|blocked-by|spec|file|create|track|capture|enrich|move|priority|timeline|completed|doing|issue|project-create|workdir)
     if ! pbrain_plane_configured; then
       echo "PM_NOT_CONFIGURED"
       echo "Plane isn't set up yet — this needs a configured Plane instance."
@@ -619,6 +622,14 @@ PYEOF
       --date "$(_flag date)" || true
     ;;
 
+  doing)
+    # PB-94 — issues currently in progress (the started/doing group); /end-of-day
+    # reads this to surface started-but-unfinished work without a vault tracker.
+    _parse_args "$@"
+    echo "PM_DOING"
+    python3 "$PLANE" doing ${F_projects:+--projects "$F_projects"} || true
+    ;;
+
   # ===== richer write/lookup verbs (the catalogue the NL router targets) =====
   find)
     _parse_args "$@"
@@ -638,6 +649,15 @@ PYEOF
     [[ -n "$ref" ]] || { echo "Usage: /project-manager subtree <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
     echo "PM_SUBTREE"
     python3 "$PLANE" subtree "$ref" ${F_project:+--project "$F_project"} || true
+    ;;
+
+  blocked-by)
+    # PB-94 — the OPEN blockers of an execute target (the loop runs these first).
+    _parse_args "$@"
+    ref="${POS[0]:-$(_flag ref)}"
+    [[ -n "$ref" ]] || { echo "Usage: /project-manager blocked-by <URL|PB-26|seq|name> [--project R]" >&2; exit 1; }
+    echo "PM_BLOCKED_BY"
+    python3 "$PLANE" blocked-by "$ref" ${F_project:+--project "$F_project"} || true
     ;;
 
   update)

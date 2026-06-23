@@ -138,6 +138,19 @@ pbrain_projects_completed_today_json() {
   echo "[]"
 }
 
+# Issues currently IN PROGRESS in Plane (the started/doing group) across the given
+# projects (PB-94). /end-of-day reads this to surface started-but-unfinished work
+# (e.g. an issue pmw parked) without a vault tracker. [] when Plane is off.
+pbrain_projects_doing_json() {
+  local pids="${1:-}"
+  if pbrain_plane_configured; then
+    local out; out="$(pbrain_plane_run doing ${pids:+--projects "$pids"})"
+    [[ -n "$out" && "$out" != PLANE_ERROR* ]] && echo "$out" || echo "[]"
+    return 0
+  fi
+  echo "[]"
+}
+
 # Resolve an issue reference (URL | PB-26 | bare seq | name fragment) → JSON array
 # of candidate cards {tie,id,issue_id,project,title,state,priority}. The caller
 # (the model) disambiguates when >1 comes back. Empty array when Plane is off.

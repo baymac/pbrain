@@ -1094,13 +1094,13 @@ PYEOF
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-# gate_map: gate name -> set of label ids
-gate_map = {"in-progress": {"L1"}, "finish": {"L2"}, "merge": {"L3"}}
-# an issue carrying L1 + L2 is cleared for in-progress + finish, in GATE_NAMES order
+# gate_map: stage name -> set of label ids
+gate_map = {"plan": {"L1"}, "test": {"L2"}, "land": {"L3"}}
+# an issue carrying L1 + L2 is cleared for plan + test, in GATE_NAMES (pipeline) order
 issue = {"labels": ["L1", "L2", "Lother"]}
-assert m.issue_gate_clearances(issue, gate_map) == ["in-progress", "finish"], \
+assert m.issue_gate_clearances(issue, gate_map) == ["plan", "test"], \
     m.issue_gate_clearances(issue, gate_map)
-# no auto label → empty (every gate manual)
+# no auto label → empty (every stage manual / parks)
 assert m.issue_gate_clearances({"labels": ["Lz"]}, gate_map) == []
 # empty gate_map (labels unlistable) → degrade to all-manual
 assert m.issue_gate_clearances(issue, {}) == []
@@ -1117,13 +1117,95 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 class Boom:
     def list_labels(self, pid): raise RuntimeError("network down")
 assert m.gate_label_map(Boom(), "A") == {}, "must not raise; returns {}"
-# and a matching client surfaces the auto:* ids by gate
+# and a matching client surfaces the auto:* ids by stage
 class Good:
     def list_labels(self, pid):
-        return [{"id":"i1","name":"auto:merge"}, {"id":"i2","name":"bug"},
+        return [{"id":"i1","name":"auto:land"}, {"id":"i2","name":"bug"},
                 {"id":"i3","name":"auto:plan"}]
 gm = m.gate_label_map(Good(), "A")
-assert gm["merge"] == {"i1"} and gm["plan"] == {"i3"} and gm["finish"] == set(), gm
+assert gm["land"] == {"i1"} and gm["plan"] == {"i3"} and gm["test"] == set(), gm
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+# ===== PB-94 Stage B: blocked_by read path =======================================
+
+@test "PB-94 _blocker_uuids extracts blocked_by issue ids from the observed payload" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# the real shape: normalised list with relation_type + issue_id (the blocker)
+rels = [{"project_id":"P","issue_id":"BLOCKER","relation_type":"blocked_by"},
+        {"project_id":"P","issue_id":"OTHER","relation_type":"blocking"}]
+assert m._blocker_uuids(rels) == ["BLOCKER"], m._blocker_uuids(rels)
+# tolerate alternate field names, and NEVER fall back to `id` (relation row id)
+assert m._blocker_uuids([{"relation":"blocked_by","related_issue":"B2"}]) == ["B2"]
+assert m._blocker_uuids([{"relation_type":"blocked_by","id":"RELROW"}]) == []
+assert m._blocker_uuids([]) == [] and m._blocker_uuids(None) == []
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 Client.list_relations normalises dict-keyed-by-type to a flat list" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# Bind the unbound method onto a lightweight stub so we exercise the real
+# normalisation logic without constructing a full Client.
+class Stub:
+    def __init__(self, payload, boom=False): self._payload, self._boom = payload, boom
+    def _request(self, method, path, params=None, body=None):
+        if self._boom: raise m.PlaneError("down")
+        return self._payload
+    list_relations = m.PlaneClient.list_relations
+# dict-keyed-by-type (the observed shape) → flat, relation_type stamped
+out = Stub({"blocking": [], "blocked_by": [{"issue_id":"B"}]}).list_relations("P","I")
+assert out == [{"issue_id":"B","relation_type":"blocked_by"}], out
+# flat list passes through
+assert Stub([{"issue_id":"B","relation_type":"blocked_by"}]).list_relations("P","I") \
+    == [{"issue_id":"B","relation_type":"blocked_by"}]
+# {results:[...]} wrapper
+assert Stub({"results":[{"issue_id":"B"}]}).list_relations("P","I") == [{"issue_id":"B"}]
+# unreadable → None (best-effort, never raises)
+assert Stub(None, boom=True).list_relations("P","I") is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]
+}
+
+@test "PB-94 blocked_by_ids returns OPEN blockers as ready rows, drops terminal ones" {
+  run python3 - "$PLANE" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+PID = "P"
+class FC:
+    def list_states(self, pid):
+        return [{"id":"open","group":"unstarted","default":True},
+                {"id":"done","group":"completed","default":True}]
+    def list_work_items(self, pid):
+        return [{"id":"BO","sequence_id":7,"name":"open blocker","state":"open","priority":"high","labels":[]},
+                {"id":"BD","sequence_id":8,"name":"done blocker","state":"done","priority":"low","labels":[]}]
+    def list_relations(self, pid, iid):
+        return [{"issue_id":"BO","relation_type":"blocked_by"},
+                {"issue_id":"BD","relation_type":"blocked_by"}]
+    def list_labels(self, pid): return []
+# stub the resolution helpers blocked_by_ids leans on
+m.find_issues = lambda cfg, c, ref, project_ref=None: [{"tie":"P:SUBJ","id":1,"project_id":"P","issue_id":"SUBJ","title":"subj"}]
+m._module_map = lambda c, pid, x: {}
+m.ensure_estimate_scale = lambda cfg, c, pid: None
+m.est_uuid_to_hours = lambda cfg, pid: {}
+m.approved_label_ids = lambda c, pid: set()
+m.project_label = lambda cfg, pid: "pb"
+cfg = {"default_est_h": 2.0}
+res = m.blocked_by_ids(cfg, FC(), "PB-1")
+assert res["status"] == "ok", res
+ids = [b["id"] for b in res["blockers"]]
+assert ids == [7], ids            # only the OPEN blocker; done one dropped
 print("ok")
 PYEOF
   [ "$status" -eq 0 ] && [[ "$output" == *ok* ]]

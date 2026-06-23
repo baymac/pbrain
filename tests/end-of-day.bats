@@ -109,20 +109,24 @@ EOD() { bash "$SH" "$@"; }
   [[ "$output" == *"work_tracker_present:"* ]]
 }
 
-@test "PB-85: end-of-day handles all 4 plan combos (preflight branches present)" {
+@test "PB-94: end-of-day reconciles WORK from Plane (Plane-only, no vault tracker)" {
   run EOD --date 2026-06-01
   [ "$status" -eq 0 ]
-  # the close branches on each combo: pmw-only, pmd-only, both, neither
-  [[ "$output" == *"PMW-ONLY"* ]]
-  [[ "$output" == *"PMD-ONLY"* ]]
-  [[ "$output" == *"both present"* ]]
+  # the close reconciles the work side from Plane, not a vault Work tracker
+  [[ "$output" == *"WORK STATE IS PLANE-ONLY"* ]]
+  [[ "$output" == *"WORK RECONCILE"* ]]
+  # glance is still independent; a legacy tracker is reconciled only if present
+  [[ "$output" == *"glance_present"* ]]
+  [[ "$output" == *"work_tracker_present"* ]]
 }
 
-@test "end-of-day: injects the Plane reconcile context (configured + completed-today)" {
+@test "end-of-day: injects the Plane reconcile context (completed + doing today)" {
   run EOD --date 2026-06-01
   [ "$status" -eq 0 ]
   [[ "$output" == *"plane_configured:"* ]]
   [[ "$output" == *"weekly_pids:"* ]]
+  [[ "$output" == *"completed_in_plane_today:"* ]]
+  [[ "$output" == *"doing_in_plane_now:"* ]]
   [[ "$output" == *"completed_in_plane_today:"* ]]
 }
 
