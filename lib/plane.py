@@ -724,17 +724,32 @@ class PlaneClient:
         return self._request("GET", "projects/%s/work-items/%s/" % (project_id, issue_id))
 
     def list_sub_issues(self, project_id, issue_id):
-        """Best-effort sub-issue read. Returns a list, or None when it can't tell."""
+        """Best-effort sub-issue read. Returns a list, or None when it can't tell.
+
+        Fast path: the dedicated `/sub-issues/` endpoint. Some Plane builds don't
+        expose it (it 404s), in which case the parent→child link still lives on
+        each child's `parent` field — so we FALL BACK to scanning the project's
+        work items for `parent == issue_id` (the same technique subtree_context
+        relies on). Without the fallback, a 404 here made explode/`existing_subissues`
+        silently report zero children for every issue (PB-67)."""
+        res = None
         try:
             res = self._request("GET", "projects/%s/work-items/%s/sub-issues/"
                                 % (project_id, issue_id))
         except PlaneError:
-            return None
+            res = None
         if isinstance(res, dict):
-            return res.get("sub_issues") or res.get("results") or []
-        if isinstance(res, list):
+            subs = res.get("sub_issues") or res.get("results")
+            if subs is not None:
+                return subs
+        elif isinstance(res, list):
             return res
-        return None
+        # Endpoint unavailable / unrecognised shape → parent-scan fallback.
+        try:
+            return [w for w in self.list_work_items(project_id)
+                    if w.get("parent") == issue_id]
+        except PlaneError:
+            return None
 
     def create_project(self, body):
         return self._request("POST", "projects/", body=body)
