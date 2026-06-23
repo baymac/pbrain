@@ -330,3 +330,26 @@ EOF
   run PMW task frobnicate
   [ "$status" -eq 2 ] && [[ "$output" == *"add|remove|list|execute"* ]]
 }
+
+# PB-83 regression: the .md wrapper must pass $ARGUMENTS UNQUOTED, so a multi-word
+# verb like `task execute pb83` reaches the script as separate $1/$2/$3 and the
+# `task` dispatch guard matches. Quoting collapses it into a single $1 and the
+# dispatcher silently falls through to the session flow (the original hiccup).
+@test "PB-83: plan-my-work.md invokes the script with unquoted \$ARGUMENTS" {
+  run grep -nE 'plan-my-work\.sh" +\$ARGUMENTS *$' "$REPO_ROOT/commands/plan-my-work.md"
+  [ "$status" -eq 0 ]
+  # and must NOT carry the quoted form that caused the fall-through
+  run grep -nE 'plan-my-work\.sh" +"\$ARGUMENTS"' "$REPO_ROOT/commands/plan-my-work.md"
+  [ "$status" -ne 0 ]
+}
+
+# PB-83 regression (functional): a word-split `task execute …` must route to the
+# EXECUTE path — the dispatch the unquoted-wrapper fix guarantees the args reach.
+@test "PB-83: word-split 'task execute' routes to PLAN_MY_WORK_EXECUTE" {
+  seed_profile
+  seed_plan_with_tracker
+  run PMW task execute pb83
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_WORK_EXECUTE"* ]]
+  [[ "$output" != *"PLAN_MY_WORK_SESSION"* ]]
+}
