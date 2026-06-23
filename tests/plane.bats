@@ -589,14 +589,15 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "subtree_context: parent target -> open children as ready rows (sorted, done excluded); leaf -> none; branches" {
+@test "subtree_context: parent target -> not-done children as ready rows (sorted, incl backlog, done/cancelled excluded); leaf -> none; branches" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 class FC:
-    # parent p1 (seq 7) has three children: two OPEN (different priority), one DONE.
-    # a separate leaf l1 (seq 9) has no children at all.
+    # parent p1 (seq 7) has five children: two OPEN (different priority), one BACKLOG,
+    # one DONE, one CANCELLED. a separate leaf l1 (seq 9) has no children at all.
+    # PB-81: a parent execute target drives EVERY not-done child, backlog included.
     items={
       "p1":{"id":"p1","sequence_id":7,"name":"build payment flow",
             "state":{"name":"In Progress","group":"started"},"priority":"high","parent":None},
@@ -604,8 +605,12 @@ class FC:
             "state":{"name":"Todo","group":"unstarted"},"priority":"medium"},
       "cB":{"id":"cB","sequence_id":12,"name":"wire stripe","parent":"p1",
             "state":{"name":"In Progress","group":"started"},"priority":"high"},
+      "cBack":{"id":"cBack","sequence_id":14,"name":"sample data gen","parent":"p1",
+               "state":{"name":"Backlog","group":"backlog"},"priority":"medium"},
       "cDone":{"id":"cDone","sequence_id":13,"name":"already shipped","parent":"p1",
                "state":{"name":"Done","group":"completed"},"priority":"high"},
+      "cCancel":{"id":"cCancel","sequence_id":15,"name":"scrapped idea","parent":"p1",
+                 "state":{"name":"Cancelled","group":"cancelled"},"priority":"high"},
       "l1":{"id":"l1","sequence_id":9,"name":"standalone leaf task",
             "state":{"name":"Todo","group":"unstarted"},"priority":"low","parent":None},
     }
@@ -613,21 +618,27 @@ class FC:
     def list_work_items(self,pid): return list(self.items.values()) if pid=="P" else []
     def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
                                        {"id":"s2","name":"In Progress","group":"started"},
-                                       {"id":"s3","name":"Done","group":"completed"}]
+                                       {"id":"s0","name":"Backlog","group":"backlog"},
+                                       {"id":"s3","name":"Done","group":"completed"},
+                                       {"id":"s4","name":"Cancelled","group":"cancelled"}]
     def list_modules(self,pid): return []
     def list_module_issues(self,pid,mid): return []
 cfg={"projects":[{"id":"P","name":"pb","shortcut":"pb"}],"default_est_h":2}
 fc=FC()
 
-# PARENT target: open children only, sorted priority -> due -> id (high cB before medium cA)
+# PARENT target: not-done children, sorted priority -> due -> id.
+# high cB, then medium cA / cBack by id; done + cancelled excluded.
 ctx=m.subtree_context(cfg,fc,"PB-7")
 assert ctx["status"]=="ok", ctx
 assert ctx["has_open_children"] is True, ctx
 ids=[c["id"] for c in ctx["children"]]
-assert ids==[12,11], ids                               # cB(high) before cA(medium); cDone excluded
+assert ids==[12,11,14], ids                            # cB(high) > cA(med id11) > cBack(med id14); done+cancelled out
 assert all(c["is_sub"] for c in ctx["children"]), ctx  # every child flagged is_sub
 assert ctx["children"][0]["tie"]=="P:cB"               # full tie carried for execute
 assert ctx["children"][0]["project"]=="pb"
+# the backlog child carries a sane status so execute treats it as a real unit of work
+back=[c for c in ctx["children"] if c["id"]==14][0]
+assert back["tie"]=="P:cBack" and back["status"]=="todo", back
 
 # LEAF target: no children -> treat the issue itself as the unit of work
 leaf=m.subtree_context(cfg,fc,"PB-9")
