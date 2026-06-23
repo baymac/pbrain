@@ -246,8 +246,13 @@ if [[ "${1:-}" == "task" ]]; then
   if [[ "$TASK_ACTION" == execute ]]; then
     TARGET_REF="${3:-}"
     # ONE $()-captured python heredoc (bash-3.2 trap — no apostrophes inside).
-    # Emits the not-done rows as a single JSON line, in ledger order, with the
-    # targeted row (if any) moved to the front.
+    # PB-92: an explicit target is AUTHORITATIVE. With no target, emit the full
+    # not-done ledger (first row leads, cascade applies). With a target:
+    #   - matched   → emit ONLY that row (solo) so execute drives that one task
+    #                 and does NOT cascade to other in-progress rows/worktrees;
+    #   - unmatched → emit an EMPTY list (the agent resolves the ref against
+    #                 Plane and pulls it in, never substitutes a pending row).
+    # The mode is reported on its own stdout line (TARGET_MODE=...) parsed below.
     NEXT_TASKS_JSON="$(python3 - "$OUT_FILE" "$TARGET_REF" <<'PY'
 import sys, re, json
 path = sys.argv[1]
@@ -299,13 +304,28 @@ def matches(r, t):
     if re.search(r"\bpb-%s\b" % re.escape(t2), blob) or re.search(r"\b%s\b" % re.escape(t2), blob):
         return True
     return t in blob
+mode = "none"
 if target:
     lead = [r for r in notdone if matches(r, target)]
-    rest = [r for r in notdone if not matches(r, target)]
-    notdone = lead + rest
+    if lead:
+        # PB-92: solo — drive ONLY the matched row, no cascade tail.
+        notdone = lead
+        mode = "solo"
+    else:
+        # PB-92: the ref matched no ledger row. Emit nothing so the agent
+        # resolves it against Plane and pulls it in, rather than silently
+        # falling back to the first pending row.
+        notdone = []
+        mode = "unmatched"
+# Line 1 = mode, line 2 = the JSON array (split by the caller).
+print(mode)
 print(json.dumps(notdone, ensure_ascii=False))
 PY
 )"
+    # Split the heredoc output: first line is the mode, the rest is the JSON.
+    TARGET_MODE="$(printf '%s\n' "$NEXT_TASKS_JSON" | sed -n '1p')"
+    NEXT_TASKS_JSON="$(printf '%s\n' "$NEXT_TASKS_JSON" | sed -n '2,$p')"
+    [[ -n "$TARGET_MODE" ]] || TARGET_MODE="none"
     [[ -n "$NEXT_TASKS_JSON" ]] || NEXT_TASKS_JSON="[]"
     WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
     PM_CMD="${PM_CMD:-/project-manager}"
@@ -316,6 +336,7 @@ PY
     echo "today: $TODAY"
     echo "now_time: $NOW_TIME"
     echo "target_ref: ${TARGET_REF:-(none)}"
+    echo "target_mode: ${TARGET_MODE}"
     echo "weekly_pids: ${WEEKLY_PIDS:-(none)}"
     echo "project_manager_cmd: ${PM_CMD:-(unavailable)}"
     echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
@@ -341,8 +362,8 @@ PY
     echo "=== PROJECT REGISTRY ==="
     echo "$REGISTRY_JSON"
     echo ""
-    export OUT_FILE TODAY NOW_TIME TARGET_REF NEXT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
-    envsubst '$OUT_FILE $TODAY $NOW_TIME $TARGET_REF $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
+    export OUT_FILE TODAY NOW_TIME TARGET_REF TARGET_MODE NEXT_TASKS_JSON WORKING_LOCATIONS_JSON WEEKLY_PIDS REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
+    envsubst '$OUT_FILE $TODAY $NOW_TIME $TARGET_REF $TARGET_MODE $WEEKLY_PIDS $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
     exit 0
   fi
 

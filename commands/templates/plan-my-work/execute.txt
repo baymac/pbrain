@@ -26,22 +26,48 @@ Nothing is blocked — approval is a fast path, not a wall.
 You were handed (in the output above):
   • target_ref = ${TARGET_REF} (the PB-id/fragment you were asked to execute, if
     any; "(none)" means just take the ledger in order).
-  • NEXT TASKS — the not-done "## Work tracker" rows, in ledger order, with the
-    target row (if target_ref was given) moved to the FRONT. Done rows are already
-    filtered out, so a re-run resumes the first unfinished task.
+  • target_mode = ${TARGET_MODE} (PB-92) — how to read NEXT TASKS:
+      - none      → no target given. NEXT TASKS is the full not-done ledger in
+                    order; drive the first row, then cascade (step 10).
+      - solo      → target_ref matched a ledger row. NEXT TASKS holds ONLY that
+                    one row. Drive it to Done and then STOP — do NOT cascade to
+                    other in-progress rows or other worktrees. The user asked for
+                    THAT task; an explicit target is authoritative.
+      - unmatched → target_ref matched NO ledger row. NEXT TASKS is empty. Do NOT
+                    fall back to a pending row. Instead resolve target_ref against
+                    Plane (`${PM_CMD} find "<ref>"`), and if it's a real issue,
+                    pull it into the tracker as a new row (Status = planned) and
+                    drive THAT — see PRE-FLIGHT. If it resolves to nothing, say so
+                    and stop; never substitute a different task.
+  • NEXT TASKS — the not-done "## Work tracker" rows. With target_mode=solo it is
+    just the one targeted row; with =none it is the full ledger in order; with
+    =unmatched it is empty. Done rows are always filtered out, so a re-run resumes
+    the first unfinished task.
   • WORKING LOCATIONS — plane.json projects[].work: {path,kind,base_branch,
     isolation} per project. The map may be empty.
   • TODAY'S PLAN (${OUT_FILE}), the plans profile, and the PROJECT REGISTRY.
 Every Plane write routes through the project manager: ${PM_CMD} (the SOLE writer of
 Plane).
 
-PRE-FLIGHT.
-  • NEXT TASKS empty → the ledger has no unfinished rows. Say so, then offer to
-    pull more ready tasks for a project (CASCADE B) or pick up a new project
-    (CASCADE C), and stop. Don't invent work.
-  • Otherwise → take the FIRST row in NEXT TASKS as the current task. Name it back
-    in one line (task · project · Plane id · priority · est) and confirm you'll
-    start it.
+PRE-FLIGHT. Branch on target_mode (PB-92) FIRST:
+  • target_mode = unmatched → the ref you were given matched no ledger row. Do
+    NOT take a pending row instead. Resolve it against Plane: ${PM_CMD} find
+    "${TARGET_REF}". If it resolves to a real issue, pull it into the tracker as a
+    new row (Status = planned, Plane id = the full <pid>:<iid> tie), name it back
+    in one line, and drive THAT issue through the lifecycle below (treat it like a
+    freshly pulled task — read its spec/approval state at step 4). If it resolves
+    to nothing, say so plainly and stop — never substitute a different task.
+  • target_mode = solo → NEXT TASKS holds the ONE row you asked for. Take it as
+    the current task, name it back in one line (task · project · Plane id ·
+    priority · est), and confirm you'll start it. After it reaches Done, STOP —
+    do NOT cascade (step 10 does not apply in solo mode); the user asked for that
+    single task.
+  • target_mode = none, NEXT TASKS empty → the ledger has no unfinished rows. Say
+    so, then offer to pull more ready tasks for a project (CASCADE B) or pick up a
+    new project (CASCADE C), and stop. Don't invent work.
+  • target_mode = none, otherwise → take the FIRST row in NEXT TASKS as the
+    current task. Name it back in one line (task · project · Plane id · priority ·
+    est) and confirm you'll start it; cascade (step 10) applies when it's done.
   • SELF-HOST CHECK. Slash commands execute the LIVE pbrain working tree these
     commands are read from, so a checkout parked on a stale/unmerged branch
     silently shadows a fix already merged to main — the command you're running
@@ -139,9 +165,12 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
      bash "${HABITS_CMD}" mark --habit "<name>" --date ${TODAY}
 
 10. LOOP to the next not-done row in NEXT TASKS. When the handed list is exhausted
-    → CASCADE.
+    → CASCADE. EXCEPTION (PB-92): if target_mode = solo, do NOT loop or cascade —
+    the user asked for one specific task. Finish it, give the closing summary, and
+    stop.
 
-CASCADE — at each hand-off a [GATE] (confirm before continuing):
+CASCADE (target_mode = none only — skip entirely in solo mode) — at each hand-off
+a [GATE] (confirm before continuing):
   A — LIST DONE, more day left. There are no more rows in NEXT TASKS but the day
     isn't over. Go to CASCADE B.
   B — PROJECT-DAY EXHAUSTED. Offer to pull more ready tasks for the same project:
