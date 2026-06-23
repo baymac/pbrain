@@ -35,9 +35,11 @@ You were handed (in the output above):
                     THAT task; an explicit target is authoritative.
       - unmatched → target_ref matched NO ledger row. NEXT TASKS is empty. Do NOT
                     fall back to a pending row. Instead resolve target_ref against
-                    Plane (`${PM_CMD} find "<ref>"`), and if it's a real issue,
-                    pull it into the tracker as a new row (Status = planned) and
-                    drive THAT — see PRE-FLIGHT. If it resolves to nothing, say so
+                    Plane with the parent-aware read (`${PM_CMD} subtree "<ref>"`):
+                    a leaf/childless issue → pull it as ONE row; a PARENT with open
+                    sub-issues → pull EACH child as its own row and run the lifecycle
+                    once per child, sequentially (one PR each), closing the parent
+                    last (PB-81) — see PRE-FLIGHT. If it resolves to nothing, say so
                     and stop; never substitute a different task.
   • NEXT TASKS — the not-done "## Work tracker" rows. With target_mode=solo it is
     just the one targeted row; with =none it is the full ledger in order; with
@@ -51,12 +53,30 @@ Plane).
 
 PRE-FLIGHT. Branch on target_mode (PB-92) FIRST:
   • target_mode = unmatched → the ref you were given matched no ledger row. Do
-    NOT take a pending row instead. Resolve it against Plane: ${PM_CMD} find
-    "${TARGET_REF}". If it resolves to a real issue, pull it into the tracker as a
-    new row (Status = planned, Plane id = the full <pid>:<iid> tie), name it back
-    in one line, and drive THAT issue through the lifecycle below (treat it like a
-    freshly pulled task — read its spec/approval state at step 4). If it resolves
-    to nothing, say so plainly and stop — never substitute a different task.
+    NOT take a pending row instead. Resolve it against Plane with the PARENT-AWARE
+    read (PB-81): ${PM_CMD} subtree "${TARGET_REF}". Branch on the PM_SUBTREE JSON:
+      - status = none / ambiguous / error → it resolved to nothing (or needs
+        disambiguation). Relay that and stop — never substitute a different task.
+      - status = ok, has_open_children = false → an ordinary single issue (a leaf,
+        or a parent whose children are all done). Pull it into the tracker as ONE
+        new row (Status = planned, Plane id = the full <pid>:<iid> tie), name it
+        back in one line, and drive THAT issue through the lifecycle below (treat it
+        like a freshly pulled task — read its spec/approval state at step 4).
+      - status = ok, has_open_children = true → a PARENT with open sub-issues. This
+        is ONE logical target executed as SEPARATE SEQUENTIAL UNITS (PB-81): the
+        parent is a container, not a unit of work. State it back in one line:
+        "parent <id> (<title>) = one target, N sub-issues — one PR each, in order."
+        Then PULL EACH child in `children` (already sorted priority → due → id) into
+        the tracker as its own row (Status = planned, Plane id = the child's full
+        tie, Notes marker `↳ <parent-id>` so the grouping is visible). Do NOT add a
+        row for the parent itself. Now run the FULL per-task lifecycle below ONCE
+        PER CHILD, top to bottom, SEQUENTIALLY — each child gets its OWN worktree,
+        branch, PR, and double-gated merge; finish and merge one child before
+        starting the next. After the LAST child merges, run the PARENT-CLOSE step
+        (after step 9): mark the parent done only because all its children landed.
+        If the user declines a child's merge (or stops), STOP there — leave the
+        remaining children planned and the PARENT OPEN; never force-close a parent
+        whose children haven't all merged.
   • target_mode = solo → NEXT TASKS holds the ONE row you asked for. Take it as
     the current task, name it back in one line (task · project · Plane id ·
     priority · est), and confirm you'll start it. After it reaches Done, STOP —
@@ -164,10 +184,22 @@ PER-TASK LIFECYCLE (loop over the not-done ledger rows, top to bottom):
    "Deep work" is tracked, mark it on completion only:
      bash "${HABITS_CMD}" mark --habit "<name>" --date ${TODAY}
 
+9b. PARENT-CLOSE (PB-81 — only when this run is driving a PARENT's sub-issues).
+    After a child reaches Done, check whether it was the LAST open child of the
+    parent (the others in this run are already done, and `${PM_CMD} subtree
+    "<parent-ref>"` now reports has_open_children = false). Only then close the
+    parent — it has no work of its own; it's done because all its children landed:
+      bash "${PM_CMD}" move "<parent-tie>" --to done --completed-at <iso8601>
+    Mark the parent's tracker note `↳ all sub-issues merged` if you kept a parent
+    line. If ANY child is still planned/in-progress (user declined a merge or
+    stopped), leave the parent OPEN — never force-close it.
+
 10. LOOP to the next not-done row in NEXT TASKS. When the handed list is exhausted
     → CASCADE. EXCEPTION (PB-92): if target_mode = solo, do NOT loop or cascade —
     the user asked for one specific task. Finish it, give the closing summary, and
-    stop.
+    stop. PARENT TARGET (PB-81): when this run expanded a parent into its children,
+    the children ARE the loop — drive them sequentially, run 9b after the last one,
+    then stop (a parent target is one logical target; do not cascade to other work).
 
 CASCADE (target_mode = none only — skip entirely in solo mode) — at each hand-off
 a [GATE] (confirm before continuing):

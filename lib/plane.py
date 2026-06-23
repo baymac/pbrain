@@ -1524,6 +1524,71 @@ def explode_context(cfg, client, ref, project_ref=None):
     }
 
 
+def subtree_context(cfg, client, ref, project_ref=None):
+    """Read-only resolution of an execute TARGET that may be a PARENT issue (PB-81).
+
+    Resolve `ref` via find_issues; 0 or >1 cards → return candidates so the caller
+    disambiguates (same shape as explode/spec). Exactly one → report whether it has
+    OPEN sub-issues and, if so, return them as ready-shaped rows.
+
+    The contract `/plan-my-work task execute` relies on: a parent with sub-issues is
+    ONE logical target executed as SEPARATE sequential units (one branch/PR/gated-merge
+    per child, parent closed only after all children merge). So when `has_open_children`
+    is true, the caller drives `children` (NOT the parent) — sorted priority → due → id,
+    the same order `ready()` packs — and closes the parent last.
+
+    Children are built through the SAME machinery as `ready()` (issue_to_ready + the
+    open-state filter + _ready_sort) so an execute target and a freshly-pulled ready row
+    are byte-for-byte the same kind of row. A childless issue (or a parent whose children
+    are all done) comes back with `has_open_children: false` and an empty `children` list,
+    and the caller treats the issue itself as the unit of work. Never writes."""
+    cards = find_issues(cfg, client, ref, project_ref=project_ref)
+    if len(cards) != 1:
+        return {"status": "none" if not cards else "ambiguous", "candidates": cards}
+    card = cards[0]
+    pid, iid = card["project_id"], card["issue_id"]
+
+    # Build the parent's open children as ready rows. We filter list_work_items by
+    # parent == iid rather than trusting the lean /sub-issues payload, so each child
+    # carries the fully-expanded state/estimate/labels that issue_to_ready needs.
+    try:
+        states = client.list_states(pid)
+        states_by_id = {s["id"]: s for s in states}
+        module_by_issue = _module_map(client, pid, False)
+        ensure_estimate_scale(cfg, client, pid)
+        uuid_hours = est_uuid_to_hours(cfg, pid)
+        approved_ids = approved_label_ids(client, pid)
+        items = list(client.list_work_items(pid))
+    except PlaneError as e:
+        return {"status": "error", "error": str(e), "candidates": cards}
+
+    label = project_label(cfg, pid)
+    children = []
+    for issue in items:
+        if issue.get("parent") != iid:
+            continue
+        if state_group(issue, states_by_id) not in READY_GROUPS:
+            continue  # skip done/cancelled/backlog children — only open units of work
+        r = issue_to_ready(issue, pid, states_by_id, module_by_issue,
+                           cfg["default_est_h"], uuid_hours,
+                           approved_label_ids=approved_ids)
+        r["project_id"] = pid
+        r["project"] = label
+        children.append(r)
+    _ready_sort(children)
+
+    return {
+        "status": "ok",
+        "tie": card["tie"], "id": card["id"], "issue_id": iid,
+        "title": card.get("title", ""),
+        "priority": card.get("priority"),
+        "state": card.get("state"),
+        "project": label, "project_id": pid,
+        "has_open_children": bool(children),
+        "children": children,
+    }
+
+
 def spec_context(cfg, client, ref, project_ref=None):
     """Read-only context for the spec/approval gate (PB-45): drafting an
     `## Implementation Plan` for ONE issue and/or approving it. Resolve `ref` via
@@ -2336,6 +2401,14 @@ def cmd_explode(args):
     return 0
 
 
+def cmd_subtree(args):
+    cfg = load_config()
+    client = make_client(cfg)
+    print(json.dumps(subtree_context(cfg, client, args.ref, project_ref=args.project),
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_spec(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -2618,6 +2691,11 @@ def build_parser():
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
     sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_explode)
+
+    sp = sub.add_parser("subtree")  # PB-81 — resolve an execute target's open sub-issues
+    sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")
+    sp.add_argument("--project", help="restrict to one project (uuid|name|shortcut)")
+    sp.set_defaults(func=cmd_subtree)
 
     sp = sub.add_parser("spec")
     sp.add_argument("ref", help="URL | PB-26 | bare seq (with --project) | name fragment")

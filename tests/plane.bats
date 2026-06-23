@@ -511,6 +511,58 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "subtree_context: parent target -> open children as ready rows (sorted, done excluded); leaf -> none; branches" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class FC:
+    # parent p1 (seq 7) has three children: two OPEN (different priority), one DONE.
+    # a separate leaf l1 (seq 9) has no children at all.
+    items={
+      "p1":{"id":"p1","sequence_id":7,"name":"build payment flow",
+            "state":{"name":"In Progress","group":"started"},"priority":"high","parent":None},
+      "cA":{"id":"cA","sequence_id":11,"name":"add webhook","parent":"p1",
+            "state":{"name":"Todo","group":"unstarted"},"priority":"medium"},
+      "cB":{"id":"cB","sequence_id":12,"name":"wire stripe","parent":"p1",
+            "state":{"name":"In Progress","group":"started"},"priority":"high"},
+      "cDone":{"id":"cDone","sequence_id":13,"name":"already shipped","parent":"p1",
+               "state":{"name":"Done","group":"completed"},"priority":"high"},
+      "l1":{"id":"l1","sequence_id":9,"name":"standalone leaf task",
+            "state":{"name":"Todo","group":"unstarted"},"priority":"low","parent":None},
+    }
+    def list_projects(self): return [{"id":"P","identifier":"PB","name":"pb"}]
+    def list_work_items(self,pid): return list(self.items.values()) if pid=="P" else []
+    def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
+                                       {"id":"s2","name":"In Progress","group":"started"},
+                                       {"id":"s3","name":"Done","group":"completed"}]
+    def list_modules(self,pid): return []
+    def list_module_issues(self,pid,mid): return []
+cfg={"projects":[{"id":"P","name":"pb","shortcut":"pb"}],"default_est_h":2}
+fc=FC()
+
+# PARENT target: open children only, sorted priority -> due -> id (high cB before medium cA)
+ctx=m.subtree_context(cfg,fc,"PB-7")
+assert ctx["status"]=="ok", ctx
+assert ctx["has_open_children"] is True, ctx
+ids=[c["id"] for c in ctx["children"]]
+assert ids==[12,11], ids                               # cB(high) before cA(medium); cDone excluded
+assert all(c["is_sub"] for c in ctx["children"]), ctx  # every child flagged is_sub
+assert ctx["children"][0]["tie"]=="P:cB"               # full tie carried for execute
+assert ctx["children"][0]["project"]=="pb"
+
+# LEAF target: no children -> treat the issue itself as the unit of work
+leaf=m.subtree_context(cfg,fc,"PB-9")
+assert leaf["status"]=="ok" and leaf["has_open_children"] is False and leaf["children"]==[], leaf
+
+# none branch like explode/spec (no card matches the fragment)
+non=m.subtree_context(cfg,fc,"zzz no such issue")
+assert non["status"]=="none" and non["candidates"]==[], non
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "estimate scale: parse payload, resolve value<->uuid, points->hours" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

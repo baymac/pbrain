@@ -290,6 +290,19 @@ EOF
   [[ "$next" != *"ship login"* && "$next" != *"polish UI"* ]]
 }
 
+@test "PB-81: an unmatched execute target is resolved with the parent-aware subtree read (one PR per sub-issue)" {
+  seed_profile
+  configure_plane
+  seed_plan_for_execute
+  # An unmatched ref must instruct the agent to use `subtree` (parent-aware),
+  # not the old plain `find`, so a parent expands into per-child sequential PRs.
+  run PMW task execute 999
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target_mode: unmatched"* ]]
+  [[ "$output" == *"subtree"* ]]                       # parent-aware resolution wired in
+  [[ "$output" == *"one PR each"* || "$output" == *"one PR per"* || "$output" == *"PR each"* ]]
+}
+
 @test "PB-92: task execute with NO target → mode none, full ledger in order (cascade applies)" {
   seed_profile
   configure_plane
