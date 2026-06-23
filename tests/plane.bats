@@ -511,6 +511,42 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "list_sub_issues: uses /sub-issues/ payload when present; parent-scan fallback when endpoint 404s (PB-67)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# A child whose parent points UP at the parent, plus an unrelated issue.
+KIDS=[{"id":"c1","name":"wire stripe","parent":"PARENT","state":{"name":"Backlog","group":"backlog"}},
+      {"id":"x9","name":"unrelated","parent":None,"state":{"name":"Todo","group":"unstarted"}}]
+
+# Build a real Client without running __init__ (no network/creds needed); we only
+# override the two methods list_sub_issues touches.
+def client(endpoint):
+    c = m.PlaneClient.__new__(m.PlaneClient)
+    def list_work_items(pid): return list(KIDS)
+    c.list_work_items = list_work_items
+    if endpoint == "ok":
+        c._request = lambda method, path, **kw: {"sub_issues":[{"id":"c1","name":"wire stripe","state":"s1"}]}
+    elif endpoint == "404":
+        def boom(method, path, **kw): raise m.PlaneError("HTTP 404 Page not found")
+        c._request = boom
+    return c
+
+# fast path: endpoint returns a payload -> use it verbatim (no parent-scan)
+subs = client("ok").list_sub_issues("PARENT","PARENT")
+assert [s["id"] for s in subs]==["c1"], subs
+
+# fallback: endpoint 404s -> scan work items for parent==issue_id
+subs = client("404").list_sub_issues("PARENT","PARENT")
+assert [s["id"] for s in subs]==["c1"], subs          # only the real child, not x9
+assert all(s["parent"]=="PARENT" for s in subs), subs
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "subtree_context: parent target -> open children as ready rows (sorted, done excluded); leaf -> none; branches" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
