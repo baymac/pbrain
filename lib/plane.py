@@ -47,6 +47,10 @@ import urllib.request
 
 # State group ordering for "active / ready"
 READY_GROUPS = ("unstarted", "started")
+# Terminal groups: an issue here is finished/closed, never a unit of work.
+# Used by subtree_context (PB-81) to include backlog + open children but drop
+# done/cancelled when a PARENT is the execute target.
+TERMINAL_GROUPS = ("completed", "cancelled")
 GROUP_TO_STATUS = {
     "backlog": "todo",
     "unstarted": "todo",
@@ -1564,7 +1568,7 @@ def subtree_context(cfg, client, ref, project_ref=None):
 
     Resolve `ref` via find_issues; 0 or >1 cards → return candidates so the caller
     disambiguates (same shape as explode/spec). Exactly one → report whether it has
-    OPEN sub-issues and, if so, return them as ready-shaped rows.
+    any NOT-DONE sub-issues and, if so, return them as ready-shaped rows.
 
     The contract `/plan-my-work task execute` relies on: a parent with sub-issues is
     ONE logical target executed as SEPARATE sequential units (one branch/PR/gated-merge
@@ -1572,11 +1576,17 @@ def subtree_context(cfg, client, ref, project_ref=None):
     is true, the caller drives `children` (NOT the parent) — sorted priority → due → id,
     the same order `ready()` packs — and closes the parent last.
 
-    Children are built through the SAME machinery as `ready()` (issue_to_ready + the
-    open-state filter + _ready_sort) so an execute target and a freshly-pulled ready row
-    are byte-for-byte the same kind of row. A childless issue (or a parent whose children
-    are all done) comes back with `has_open_children: false` and an empty `children` list,
-    and the caller treats the issue itself as the unit of work. Never writes."""
+    Children are built through the SAME machinery as `ready()` (issue_to_ready +
+    _ready_sort) so an execute target and a freshly-pulled ready row are byte-for-byte
+    the same kind of row — but the state filter here is DELIBERATELY WIDER than `ready()`'s
+    daily lane: a parent execute target drives every NOT-DONE child, BACKLOG included
+    (only TERMINAL_GROUPS = completed/cancelled are dropped). The daily `ready()` pull
+    hides backlog by design; targeting a parent for execution does not, because a backlog
+    sub-issue is still unfinished work under that parent (PB-81 / the bug where a parent
+    whose only remaining child sat in Backlog resolved as a childless leaf and was skipped).
+    A childless issue (or a parent whose children are all done/cancelled) comes back with
+    `has_open_children: false` and an empty `children` list, and the caller treats the
+    issue itself as the unit of work. Never writes."""
     cards = find_issues(cfg, client, ref, project_ref=project_ref)
     if len(cards) != 1:
         return {"status": "none" if not cards else "ambiguous", "candidates": cards}
@@ -1602,8 +1612,14 @@ def subtree_context(cfg, client, ref, project_ref=None):
     for issue in items:
         if issue.get("parent") != iid:
             continue
-        if state_group(issue, states_by_id) not in READY_GROUPS:
-            continue  # skip done/cancelled/backlog children — only open units of work
+        # PB-81 contract: when a PARENT is the execute target, EVERY not-done child
+        # is a unit of work to drive — including BACKLOG ones. This is wider than the
+        # daily `ready()` lane (READY_GROUPS = unstarted/started), which deliberately
+        # hides backlog from the day's pull. Here we exclude only the terminal groups
+        # (completed/cancelled); a backlog sub-issue is unfinished work under the
+        # parent, so dropping it would silently skip work the user explicitly targeted.
+        if state_group(issue, states_by_id) in TERMINAL_GROUPS:
+            continue  # skip done/cancelled children — they are not units of work
         r = issue_to_ready(issue, pid, states_by_id, module_by_issue,
                            cfg["default_est_h"], uuid_hours,
                            approved_label_ids=approved_ids)
