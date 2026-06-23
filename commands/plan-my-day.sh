@@ -1013,8 +1013,8 @@ PROMPT
 # Planning instructions (the judgment layer) live in the externalized plan.txt,
 # loaded only on this path. envsubst fills the date/command vars via an explicit
 # allow-list; every other $-token (context field names, etc.) stays literal.
-export TODAY DOW ISO_WEEK OUT_FILE REMIND_CMD WORK_TRACKER_PRESENT
-envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD $WORK_TRACKER_PRESENT' < "$_SCRIPT_DIR/templates/plan-my-day/plan.txt"
+export TODAY DOW ISO_WEEK OUT_FILE REMIND_CMD WORK_TRACKER_PRESENT HABITS_CMD
+envsubst '$TODAY $DOW $ISO_WEEK $OUT_FILE $REMIND_CMD $WORK_TRACKER_PRESENT $HABITS_CMD' < "$_SCRIPT_DIR/templates/plan-my-day/plan.txt"
 
 # Habit reconcile (silent if no habits profile): scan today's entries across the
 # vault for evidence + mark states, then — once the model has written today's
