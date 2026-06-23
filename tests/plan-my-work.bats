@@ -262,16 +262,44 @@ EOF
      && "$output" == *"INSTRUCTIONS — task execute"* ]]
 }
 
-@test "PB-85: task execute <PB-id> moves the targeted row to the FRONT of NEXT TASKS" {
+@test "PB-92: task execute <PB-id> matching a row → SOLO (only that row, no cascade tail)" {
   seed_profile
   configure_plane
   seed_plan_for_execute
-  # Target the low-priority 'polish UI' row by its PB-91 note; it should lead.
+  # Target the low-priority 'polish UI' row by its PB-91 note; SOLO emits only it.
   run PMW task execute 91
   [ "$status" -eq 0 ]
   [[ "$output" == *"target_ref: 91"* ]]
+  [[ "$output" == *"target_mode: solo"* ]]
   next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
-  [[ "${next%%ship login*}" == *"polish UI"* ]]   # polish UI now precedes ship login
+  # ONLY the matched row is present; the other not-done row is dropped.
+  [[ "$next" == *"polish UI"* && "$next" != *"ship login"* ]]
+}
+
+@test "PB-92: task execute <ref> matching NO row → UNMATCHED (empty list, no fallback row)" {
+  seed_profile
+  configure_plane
+  seed_plan_for_execute
+  # PB-999 is in neither row; we must NOT fall back to a pending row.
+  run PMW task execute 999
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target_ref: 999"* ]]
+  [[ "$output" == *"target_mode: unmatched"* ]]
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "$next" == *"[]"* ]]
+  [[ "$next" != *"ship login"* && "$next" != *"polish UI"* ]]
+}
+
+@test "PB-92: task execute with NO target → mode none, full ledger in order (cascade applies)" {
+  seed_profile
+  configure_plane
+  seed_plan_for_execute
+  run PMW task execute
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target_mode: none"* ]]
+  next="$(printf '%s\n' "$output" | grep -A1 '=== NEXT TASKS' | tail -1)"
+  [[ "$next" == *"ship login"* && "$next" == *"polish UI"* ]]
+  [[ "${next%%polish UI*}" == *"ship login"* ]]   # ledger order preserved
 }
 
 @test "PB-85: task execute on a day with no plan SCAFFOLDS the file and emits an empty ledger (no nudge)" {
