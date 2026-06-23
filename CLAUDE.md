@@ -132,6 +132,7 @@ There's no `.claude/commands` symlink at the repo root — by design. Slash comm
 - All `.sh` files must be executable (`chmod +x`).
 - Slash command sources live **only** in `commands/`. Commands become available globally via `~/.claude/commands` → `<repo>/commands` (one-time user symlink). Never duplicate sources elsewhere.
 - gbrain operational scripts live in `gbrain/scripts/`. Never mix plugin commands with gbrain scripts.
+- **URLs in chat output (PB-95).** `pbrain_emit_prefs` ships a baseline CHAT OUTPUT HYGIENE rule on every command run telling the agent to wrap chat URLs as `[label](url)` or in backticks and never paste a bare URL with punctuation jammed against it (the renderer swallows a trailing `.,;:)]}>` into the link target and breaks it). Author instruction text and `echo`s the same way: prefer backtick-wrapped or markdown-link URLs over bare `(https://…)` / `https://…​.` in any `.md`/`.sh`/`.txt` the agent reads or relays.
 - **Never hardcode the vault path in a command.** Source the shared resolver and use the resulting `$VAULT_DIR`:
   ```bash
   _SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
