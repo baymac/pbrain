@@ -26,11 +26,11 @@ Key hard rules:
 - Work blocks in "Today at a glance" are GENERIC LIFE-SHAPE PLACEHOLDERS ("Block N — focus work") that protect focus time. PB-85: the task ledger is a SEPARATE, standalone "## Work tracker" owned by /plan-my-work — it is not tied to these blocks. /plan-my-day writes no task log and never touches the tracker.
 - **AUTO-LIBRARY**: when the user mentions a project or goal not in any library card, offer to register a shortcut card (name + shortcut + context) so future sessions can reference it by name.
 
-## Morning sequence check (do this first)
+## Morning sequence check
 
-Planning the day works best on top of the morning anchors. Use today's date in `YYYY-MM-DD` format.
+Planning the day works best on top of the morning anchors (journal → gratitude). **Don't check these files yourself** — the script computes them and the nudges are wired into the `plan.txt` / `update.txt` INSTRUCTIONS the bash run hands you. Specifically:
 
-1. If `$VAULT_DIR/life/daily-tracking/<TODAY>.md` does NOT exist → say "Heads up: today's `/journal` is empty. Surfaces what's on your mind before we plan." Pause.
-2. Else if `$VAULT_DIR/life/gratitude-journal/<TODAY>.md` does NOT exist → say "Heads up: today's gratitude entry is missing. Want to run `/gratitude-journal` first? It anchors the day before planning." Pause.
+- The journal nudge keys off `TODAY'S DAILY JOURNAL` (emitted as `MISSING` when absent).
+- The gratitude nudge keys off the precomputed `gratitude_today_exists: yes|no` header (PB-66 — a model-side file check mis-resolves the path/date and fires a false "gratitude not logged" nudge even when today's entry exists).
 
-Suggest once. If user says continue / skip / no, proceed. **If the injected USER PREFERENCES block (global or per-command) says to skip the journal/gratitude nudge, skip steps 1–2 entirely** — a standing preference always overrides a built-in nudge. Resolve `$VAULT_DIR` the same way `lib/vault.sh` does: `$PBRAIN_VAULT` → `~/.config/pbrain/vault` → default iCloud Obsidian path.
+Both fire ONCE, folded into the same first Step 0 message, never block, and are **suppressed by a standing preference** that silences the journal/gratitude nudge (global or per-command). Just run the bash command below and follow its INSTRUCTIONS — they carry this gating.

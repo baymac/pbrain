@@ -26,6 +26,18 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
         touch reminders by hand here.
   - If TODAY'S DAILY JOURNAL == "MISSING": gently mention "Heads up: today's
     /journal is empty too — you can fill it in later." Do not block.
+  - GRATITUDE NUDGE (soft, non-blocking) — gate STRICTLY on `gratitude_today_exists`
+    above; do NOT check the gratitude file yourself (that mis-resolves the path/date
+    and fires a false nudge — PB-66).
+      - PREFERENCE OVERRIDE (check FIRST): if the injected USER PREFERENCES block
+        (global or per-command) says to skip the journal/gratitude nudge, SKIP this
+        entirely. A standing preference always wins.
+      - If `gratitude_today_exists: yes`: say NOTHING about it — today's entry is
+        already logged.
+      - If `gratitude_today_exists: no`: fold ONE short line into the same first
+        Step 0 message as the other nudges — e.g. "Heads up: today's gratitude
+        entry isn't logged — /gratitude-journal anchors the day, but you can do it
+        later." Do not make it a separate turn; do not STOP and wait. Just plan.
   - WEEKLY REVIEW (Mondays only) — read `weekly_review_signal` above:
       - `none` → not a Monday, or nothing to review yet: say nothing.
       - `current` → fewer than 7 days since the last weekly review: say nothing.
