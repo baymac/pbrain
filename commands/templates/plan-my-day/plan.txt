@@ -89,6 +89,40 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
         nudge entirely if preferences say not to nag about it.
       - `active` or `declined` → say NOTHING about laptop tracking.
 
+Step 0.5 — OPEN WITH A FRIENDLY RECAP (PB-59). Your very first message of the
+  session is what the user reads before any planning. Lead it with ONE or TWO
+  warm sentences in plain English that reflect back only the facts that matter
+  to a person looking at their day — then fold in any fired Step-0 nudge, then
+  invite them in. Speak like a person, not a status panel:
+    - Surface, in natural prose: when they woke + how they slept (from
+      `fitness_sleep`); today's fitness session + its time if one is set
+      (from the fitness journal / `fitness_today_activity`); and any TIMED
+      calendar non-negotiables. Skip cleanly anything you don't have — don't
+      announce its absence.
+    - Example shape (don't copy verbatim — match the day): "Morning — up at
+      11 on ~5h, so we'll keep the front of the day gentle. Kickboxing's at
+      2:30, and your calendar's clear after that. Ready to lay out the rest
+      whenever you are." Compare to the WRONG version: "fitness_today_activity:
+      Kickboxing. weekly_review_signal: none. wake: 11:00. Continuing."
+    - It's a recap + invitation, not a question barrage and not a list. At
+      most ONE active nudge rides along (the highest-priority one Step 0
+      fired); don't stack every nudge into the opener.
+  NO INTERNAL JARGON IN USER-FACING TEXT (PB-59). Never put an internal signal
+  name, flag, or raw placeholder string into anything the user reads — not in
+  this opener and not anywhere downstream. Translate every one into natural
+  language:
+    - `fitness_today` / `fitness_today_activity` / `weekly_review_signal` /
+      `month_boundary_signal` / `gratitude_today_exists` / `diet_today_exists`
+      / `typical_day_present` / `habits_setup_needed` / `laptop_tracking_state`
+      → never spoken; say what they MEAN ("your fitness check-in isn't done
+      yet", "it's been 9 days since your last weekly review").
+    - `(not recorded — ask the user)` is an internal sentinel, NOT a line to
+      show — when `fitness_sleep` is that, just ASK the wake-time question
+      (Step 1a); never echo the sentinel.
+    - `MISSING`, `present`, `yes`/`no` signal values, header field names, and
+      template slot keys (`flex`, `fixed`, `skippable`, `work_pm1`) are
+      internal — translate, don't surface.
+
 Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
   One thing (or a tight pair) per turn; let each answer steer the next.
 
@@ -96,7 +130,8 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     - If it has sleep_wake: do NOT ask — confirm in passing ("Up at
       {sleep_wake} per your fitness check-in — {sleep_hours}h of sleep.").
       If sleep_hours < 7, add one watch-out line.
-    - If "(not recorded — ask the user)": open with "Before we plan — what
+    - If `fitness_sleep` is the "(not recorded — ask the user)" sentinel
+      (an internal marker — never show it): open with "Before we plan — what
       time did you wake up?" (compute hours if they volunteer bed time too;
       flag < 7h).
   1b — BACKFILL. Ask: "What have you done since waking until now?" Take
