@@ -18,7 +18,7 @@ A habit is defined by **two independent things**:
 **2. Direction (how it's scored).** Independent of the schedule:
 
 - **at_least** — a habit you're **building** (eat clean, exercise). Done on its due days = good.
-- **at_most** — a habit you're **capping** (no smoking, alcohol ≤ 2). A mark means you lapsed.
+- **at_most** — a habit you're **capping** (no doomscrolling, junk food ≤ 2). A mark means you lapsed.
 
 Plus **target_count** (the cap for a limit habit, or per-period count), a **priority** (low / medium / high), and an optional note.
 
@@ -45,8 +45,8 @@ When a habit is measured, fulfillment checks the **summed amount over its period
 | Run 3×/week | weekdays (from `--times-per-week 3`) | at_least | spaced → Mon/Wed/Fri |
 | Deep clean | interval `every 15 days` | at_least | from a start date |
 | Pay rent | monthly `the 1st` | at_least | calendar date |
-| No smoking | daily | at_most | a daily check-in cap |
-| Alcohol ≤2/week | weekly (cap) | at_most | cap = 2 |
+| No doomscrolling | daily | at_most | a daily check-in cap |
+| Junk food ≤2/week | weekly (cap) | at_most | cap = 2 |
 
 ## First-run setup
 
@@ -70,7 +70,7 @@ The structured data lives in a fenced ` ```json ` block. Each habit has a **stab
       "schedule": { "type": "weekdays", "days": ["mon","wed","fri"] }, "priority": "high", "category": "fitness-activity", "archived": false },
     { "id": "water", "name": "Water", "direction": "at_least",
       "schedule": { "type": "daily" }, "unit": "L", "measure_target": 4, "priority": "high", "archived": false },
-    { "id": "alcohol", "name": "Alcohol", "direction": "at_most",
+    { "id": "junk-food", "name": "Junk food", "direction": "at_most",
       "schedule": { "type": "weekdays", "days": ["mon"] }, "target_count": 2, "priority": "medium", "archived": false }
   ]
 }
@@ -129,7 +129,7 @@ You can open it in Obsidian and tick the **Done** column by hand, or let the age
 
 You rarely mark by hand. Once the profile exists, every daily journaling and planning command (`/journal`, `/gratitude-journal`, `/fitness-journal`, `/diet-journal`, `/plan-my-day`, `/end-of-day`) watches for habits you actually mention and **ticks them in today's tracking file** automatically (`/habits mark`). Marking a name that isn't a tracked habit is **rejected** (you add it first). Marking is **live**: the moment a habit is ticked, that day's `Progress` column is recomputed from the DB, so the number you see is current — not a stale snapshot from when the file was created.
 
-**Limit habits work inversely.** For an `at_most` habit (a cap — `No smoking`, `No drinking`, `No masturbation`, `TV under 1hr`), a mark means you **lapsed** (did the capped thing), with the amount in `--count` and the detail in a `--note`. A clean / abstinent day is simply **not marked** — for a cap, no mark *is* the success, and an unmarked day keeps you under the limit. Never mark a limit habit because you avoided it; that would count the win against you.
+**Limit habits work inversely.** For an `at_most` habit (a cap — `No late-night snacking`, `No doomscrolling`, `TV under 1hr`), a mark means you **lapsed** (did the capped thing), with the amount in `--count` and the detail in a `--note`. A clean / abstinent day is simply **not marked** — for a cap, no mark *is* the success, and an unmarked day keeps you under the limit. Never mark a limit habit because you avoided it; that would count the win against you.
 
 Those commands also nudge: if you show a standing intention to build a new habit that isn't tracked yet, they'll offer to add it — at most once, and they won't re-nag the same idea for ~2 weeks.
 

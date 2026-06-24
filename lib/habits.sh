@@ -169,7 +169,7 @@ PYEOF
 #   │ daily    │ at_least  │ do it every day — today ✅/⏳ + streak + N/7 week │
 #   │ weekly   │ at_least  │ ≥ N times this week     (e.g. nail cut 2/week)    │
 #   │ monthly  │ at_least  │ ≥ N times this month    (e.g. long run 5/month)   │
-#   │ weekly   │ at_most   │ ≤ N this week — OVER ⚠️  (e.g. alcohol 2/week)    │
+#   │ weekly   │ at_most   │ ≤ N this week — OVER ⚠️  (e.g. junk food 2/week)  │
 #   └──────────┴───────────┴─────────────────────────────────────────────────┘
 #
 # Legacy profiles (kind/cap_period/cap_count) are read transparently:
@@ -1891,10 +1891,10 @@ print("\n".join(out))
   fi
   printf '%s\n' ""
   printf '%s\n' "[limit] habits work INVERSELY — they are caps on something to avoid (e.g. No"
-  printf '%s\n' "smoking, No drinking, No masturbation, TV under 1hr). MARK a [limit] habit"
+  printf '%s\n' "late-night snacking, No doomscrolling, TV under 1hr). MARK a [limit] habit"
   printf '%s\n' "ONLY when the user LAPSED — actually did the capped thing — putting the"
-  printf '%s\n' "amount in --count and the detail in --note (e.g. mark \"No smoking\" --count 3"
-  printf '%s\n' "--note \"3 cigarettes\"). A clean / abstinent day is NOT a mark: leave it"
+  printf '%s\n' "amount in --count and the detail in --note (e.g. mark \"TV under 1hr\" --count 3"
+  printf '%s\n' "--note \"3 hours\"). A clean / abstinent day is NOT a mark: leave it"
   printf '%s\n' "blank — for a limit, no mark IS the success. NEVER mark a [limit] habit"
   printf '%s\n' "because the user avoided it; that would count the success against them."
   printf '%s\n' "This ticks the habit in today's habit-tracking/<date>.md (the human-facing"

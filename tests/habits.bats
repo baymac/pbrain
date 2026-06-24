@@ -53,7 +53,7 @@ tags: []
     { "id": "brush-at-night", "name": "Brush at night", "schedule_type": "daily",   "direction": "at_least", "target_count": 1, "priority": "high",   "archived": false },
     { "id": "nail-cut",       "name": "Nail cut",       "schedule_type": "weekly",  "direction": "at_least", "target_count": 2, "priority": "low",    "archived": false },
     { "id": "long-run",       "name": "Long run",       "schedule_type": "monthly", "direction": "at_least", "target_count": 5, "priority": "medium", "archived": false },
-    { "id": "alcohol",        "name": "Alcohol",        "schedule_type": "weekly",  "direction": "at_most",  "target_count": 2, "priority": "medium", "archived": false }
+    { "id": "junk-food",        "name": "Junk food",        "schedule_type": "weekly",  "direction": "at_most",  "target_count": 2, "priority": "medium", "archived": false }
   ]
 }
 ```
@@ -73,7 +73,7 @@ type: habits-profile
 {
   "habits": [
     { "name": "Meditate", "kind": "build", "priority": "high",   "cap_period": "week",  "cap_count": 7 },
-    { "name": "Alcohol",  "kind": "limit", "priority": "medium", "cap_period": "week",  "cap_count": 2 }
+    { "name": "Junk food",  "kind": "limit", "priority": "medium", "cap_period": "week",  "cap_count": 2 }
   ]
 }
 ```
@@ -199,19 +199,19 @@ assert brush["streak"] == 1
 
 @test "rollup flags a limit habit over its cap" {
   _write_profile
-  _log_event Alcohol 2026-06-01
-  _log_event Alcohol 2026-06-02
-  _log_event Alcohol 2026-06-03
+  _log_event "Junk food" 2026-06-01
+  _log_event "Junk food" 2026-06-02
+  _log_event "Junk food" 2026-06-03
   run pbrain_habits_rollup 2026-06-03
-  [[ "$output" == *"Alcohol"* ]]
+  [[ "$output" == *"Junk food"* ]]
   [[ "$output" == *"3/2 this week"* ]]
   [[ "$output" == *"OVER"* ]]
 }
 
 @test "rollup flags a limit habit exactly at cap" {
   _write_profile
-  _log_event Alcohol 2026-06-01
-  _log_event Alcohol 2026-06-02
+  _log_event "Junk food" 2026-06-01
+  _log_event "Junk food" 2026-06-02
   run pbrain_habits_rollup 2026-06-03
   [[ "$output" == *"at cap"* ]]
   [[ "$output" != *"OVER"* ]]
@@ -263,11 +263,11 @@ assert brush["streak"] == 1
 
 @test "rollup reads a legacy (kind/cap_period/cap_count) profile" {
   _write_legacy_profile
-  _log_event Alcohol 2026-06-01
-  _log_event Alcohol 2026-06-02
-  _log_event Alcohol 2026-06-03
+  _log_event "Junk food" 2026-06-01
+  _log_event "Junk food" 2026-06-02
+  _log_event "Junk food" 2026-06-03
   run pbrain_habits_rollup 2026-06-03
-  [[ "$output" == *"Alcohol"* ]]
+  [[ "$output" == *"Junk food"* ]]
   [[ "$output" == *"OVER"* ]]
 }
 
@@ -403,7 +403,7 @@ assert isinstance(h["category_order"], int) and h["category_order"] < 1000, h
   _write_profile
   HABITS edit --id brush-at-night --category cleanliness
   HABITS edit --id long-run --category fitness-activity
-  # nail-cut + alcohol stay uncategorized
+  # nail-cut + junk-food stay uncategorized
   run pbrain_habits_rollup 2026-06-03
   echo "$output" | python3 -c '
 import sys
@@ -433,7 +433,7 @@ assert t.index("**Fitness activity**") < t.index("**Cleanliness**") < t.index("*
   HABITS edit --id brush-at-night --category cleanliness
   HABITS edit --id nail-cut --category looks
   HABITS edit --id long-run --category fitness-activity
-  HABITS edit --id alcohol --category bad-habits
+  HABITS edit --id junk-food --category bad-habits
   source "$REPO_ROOT/lib/migrations/0008_habits_categorize.sh"
   run migration_applicable
   [ "$status" -ne 0 ]
@@ -510,8 +510,8 @@ EOF
 
 @test "log refuses an archived habit (treated as untracked)" {
   _write_profile
-  HABITS archive --id alcohol
-  run HABITS log --name "Alcohol" --date 2026-06-03
+  HABITS archive --id junk-food
+  run HABITS log --name "Junk food" --date 2026-06-03
   [[ "$output" == *"not a tracked habit"* ]]
 }
 
@@ -671,34 +671,34 @@ PY
 @test "mark ticks the Done cell and rejects untracked names" {
   _write_profile
   HABITS mark --name "Brush at night" --date 2026-06-03
-  HABITS mark --name "Alcohol" --date 2026-06-03 --note "one beer"
+  HABITS mark --name "Junk food" --date 2026-06-03 --note "one slice of cake"
   run HABITS mark --name "Skydiving" --date 2026-06-03
   [[ "$output" == *"not a tracked habit"* ]]
   body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
   [[ "$body" == *"| Brush at night | daily | "*" | x |"* ]]
-  [[ "$body" == *"one beer"* ]]
+  [[ "$body" == *"one slice of cake"* ]]
   [[ "$body" != *"Skydiving"* ]]
 }
 
 @test "sync mirrors the md done-rows into the DB" {
   _write_profile
   HABITS mark --name "Brush at night" --date 2026-06-03
-  HABITS mark --name "Alcohol" --date 2026-06-03
+  HABITS mark --name "Junk food" --date 2026-06-03
   HABITS sync --days 0 --date 2026-06-03
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sorted(r[0] for r in c.execute(\"select habit_id from habit_events where occurred_on='2026-06-03'\")))" "$PBRAIN_DB_FILE"
-  [ "$output" = "['alcohol', 'brush-at-night']" ]
+  [ "$output" = "['brush-at-night', 'junk-food']" ]
 }
 
 @test "sync mirror removes an event when the md is unchecked" {
   _write_profile
-  HABITS mark --name "Alcohol" --date 2026-06-03
+  HABITS mark --name "Junk food" --date 2026-06-03
   HABITS sync --days 0 --date 2026-06-03
-  # uncheck Alcohol in the md by rewriting its Done cell to empty
+  # uncheck Junk food in the md by rewriting its Done cell to empty
   python3 - "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" <<'PY'
 import sys, re
 p = sys.argv[1]
 t = open(p).read()
-t = re.sub(r"(\| Alcohol \|[^\n]*?\|) x (\|)", r"\1   \2", t)
+t = re.sub(r"(\| Junk food \|[^\n]*?\|) x (\|)", r"\1   \2", t)
 open(p, "w").write(t)
 PY
   HABITS sync --days 0 --date 2026-06-03
@@ -744,7 +744,7 @@ PY
   body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
   [[ "$body" == *"Brush at night"* ]]
   [[ "$body" != *"Nail cut"* ]]
-  [[ "$body" != *"Alcohol"* ]]
+  [[ "$body" != *"Junk food"* ]]
 }
 
 @test "dashboard reflects today's marks (read path syncs md first)" {
@@ -859,10 +859,10 @@ assert h["period_used"] == 20 and h["fulfilled"] is True, h
 @test "sync --days N --date covers the full N-day window" {
   _write_profile
   HABITS mark --name "Brush at night" --date 2026-06-01
-  HABITS mark --name "Alcohol" --date 2026-06-03
+  HABITS mark --name "Junk food" --date 2026-06-03
   HABITS sync --days 2 --date 2026-06-03
   run python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sorted(r[0] for r in c.execute(\"select habit_id from habit_events where occurred_on>='2026-06-01'\")))" "$PBRAIN_DB_FILE"
-  [ "$output" = "['alcohol', 'brush-at-night']" ]
+  [ "$output" = "['brush-at-night', 'junk-food']" ]
 }
 
 @test "log records an amount on a measured habit" {
@@ -965,7 +965,7 @@ EOF
   _write_profile
   run pbrain_emit_habits_extract journal
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Alcohol [limit]"* ]]
+  [[ "$output" == *"Junk food [limit]"* ]]
   [[ "$output" == *"Brush at night [build]"* ]]
   [[ "$output" == *"work INVERSELY"* ]]
   [[ "$output" == *"LAPSED"* ]]
@@ -1065,15 +1065,15 @@ EOF
   [[ "$output" == *"brush-at-night"* ]]   # daily build
   [[ "$output" == *"nail-cut"* ]]         # weekly build — now eligible
   [[ "$output" == *"long-run"* ]]         # monthly build — now eligible
-  [[ "$output" == *"alcohol"* ]]          # limit habit — can opt in too (D1)
+  [[ "$output" == *"junk-food"* ]]          # limit habit — can opt in too (D1)
 }
 
 @test "reminders-pending drops a habit once it's decided (linked or declined)" {
   _write_profile
-  HABITS reminder --id alcohol --decline
+  HABITS reminder --id junk-food --decline
   HABITS reminder --id nail-cut --link --time 20:00
   run HABITS reminders-pending
-  [[ "$output" != *"alcohol"* ]]          # declined → decided
+  [[ "$output" != *"junk-food"* ]]          # declined → decided
   [[ "$output" != *"nail-cut"* ]]         # linked → decided
   [[ "$output" == *"brush-at-night"* ]]   # still undecided
 }
@@ -1220,9 +1220,9 @@ PYEOF
 # ── reminders are opt-in for ANY habit; the SCHEDULE (not the link) gates days ──
 @test "reminder --link works for a limit habit (any habit can opt in)" {
   _write_profile
-  run HABITS reminder --id alcohol --link --time 20:00
+  run HABITS reminder --id junk-food --link --time 20:00
   [ "$status" -eq 0 ]
-  [[ "$output" == *"linked 'Alcohol'"* ]]
+  [[ "$output" == *"linked 'Junk food'"* ]]
   body="$(cat "$PBRAIN_HABITS_PROFILE_FILE")"
   [[ "$body" == *'"state": "linked"'* ]]
 }
@@ -2789,7 +2789,7 @@ PEOF
 
 # A weekdays-scheduled fitness profile used by status / reconcile / autostatus.
 # Gym Mon/Wed (linked 12:30); Apple Fitness Tue/Fri (linked 12:30); Meditation
-# floating (no explicit schedule, daily build); No smoking daily limit.
+# floating (no explicit schedule, daily build); No doomscrolling daily limit.
 _write_fitness_habits() {
   cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'EOF'
 ---
@@ -2800,7 +2800,7 @@ type: habits-profile
  {"id":"gym","name":"Gym","direction":"at_least","schedule":{"type":"weekdays","days":["mon","wed"]},"schedule_type":"weekly","priority":"high","reminder":{"state":"linked","time":"12:30"}},
  {"id":"apple-fitness","name":"Apple Fitness","direction":"at_least","schedule":{"type":"weekdays","days":["tue","fri"]},"schedule_type":"weekly","priority":"high","reminder":{"state":"linked","time":"12:30"}},
  {"id":"meditation","name":"Meditation","direction":"at_least","priority":"medium"},
- {"id":"no-smoking","name":"No smoking","direction":"at_most","schedule":{"type":"daily"},"schedule_type":"daily","target_count":0,"priority":"high"}
+ {"id":"no-doomscroll","name":"No doomscrolling","direction":"at_most","schedule":{"type":"daily"},"schedule_type":"daily","target_count":0,"priority":"high"}
 ]}
 ```
 EOF
@@ -2890,7 +2890,7 @@ print('NONE' if not r else '%d|%s'%(r[0],r[1]))" "$PBRAIN_DB_FILE" "$1" "$2"
   grep -qE '^\| Brush at night .*\| x \|' "$f"
   grep -qE '^\| Nail cut .*\| skip \|' "$f"
   grep -qE '^\| Long run .*\| miss \|' "$f"
-  run grep -qE '^\| Alcohol ' "$f"   # untouched limit row pruned
+  run grep -qE '^\| Junk food ' "$f"   # untouched limit row pruned
   [ "$status" -ne 0 ]
 }
 
@@ -2973,14 +2973,14 @@ print('NONE' if not r else '%d|%s'%(r[0],r[1]))" "$PBRAIN_DB_FILE" "$1" "$2"
 
 @test "autostatus: due build habit with no mark → missed; done/skipped/limit left" {
   _write_fitness_habits
-  HABITS track --date 2026-06-15 >/dev/null      # Monday: Gym due, Meditation daily, No smoking daily, Apple Fitness not due
+  HABITS track --date 2026-06-15 >/dev/null      # Monday: Gym due, Meditation daily, No doomscrolling daily, Apple Fitness not due
   HABITS mark --id meditation --date 2026-06-15 >/dev/null   # Meditation done
   run HABITS autostatus --date 2026-06-15
   [ "$status" -eq 0 ]
   [[ "$output" == AUTOSTATUS\ missed=* ]]
   [ "$(_ev gym 2026-06-15)" = "0|missed" ]        # due build, unmarked → missed
   [ "$(_ev meditation 2026-06-15)" = "1|done" ]   # done → left
-  [ "$(_ev no-smoking 2026-06-15)" = "NONE" ]     # limit habit → never auto-missed
+  [ "$(_ev no-doomscroll 2026-06-15)" = "NONE" ]     # limit habit → never auto-missed
   [ "$(_ev apple-fitness 2026-06-15)" = "NONE" ]  # not due Monday → left
 }
 
