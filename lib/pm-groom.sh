@@ -51,6 +51,54 @@ pmg_data_file() { printf '%s\n' "$(pmg_data_dir)/${1:?date}.md"; }
 # The interactive path writes the vault file directly AND staging (harmless mirror).
 pmg_staging_file() { printf '%s\n' "$(pmg_report_dir)/${1:?date}.data.md"; }
 
+# pmg_default_projects — the csv of project ids groom should focus on when the
+# caller passes NO explicit --projects: THIS WEEK'S WEEKLY-GOAL projects, exactly
+# like /end-of-day's WEEKLY_PIDS. So groom respects the user's weekly goals instead
+# of grooming the whole registry. Empty string when there are no weekly goals (or
+# the profile chain isn't sourced) — the caller then falls through to all-registry,
+# so a missing-goals week still yields a queue. Best-effort, never errors.
+# PBRAIN_PMG_DATE (tests) drives the ISO week so a fixture week can be targeted.
+pmg_default_projects() {
+  declare -F pbrain_profile_latest_for_period >/dev/null 2>&1 || { printf '\n'; return 0; }
+  declare -F pbrain_profile_json >/dev/null 2>&1 || { printf '\n'; return 0; }
+  local plan_dir store iso wgf
+  plan_dir="${PBRAIN_PLAN_DIR:-${VAULT_DIR:-$HOME/pbrain-vault}/life/daily-planning}"
+  store="$(pbrain_profile_store "$plan_dir" 2>/dev/null || true)"
+  [[ -n "$store" ]] || { printf '\n'; return 0; }
+  iso="$(python3 -c "import datetime; d=datetime.date.fromisoformat('$(pmg_today)'); y,w,_=d.isocalendar(); print(f'{y}-W{w:02d}')" 2>/dev/null || true)"
+  [[ -n "$iso" ]] || { printf '\n'; return 0; }
+  wgf="$(pbrain_profile_latest_for_period "$store" weekly-goals "$iso" 2>/dev/null || true)"
+  [[ -n "$wgf" ]] || { printf '\n'; return 0; }
+  pbrain_profile_json "$wgf" 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || printf '\n'
+}
+
+# pmg_web_base — the clickable Plane base for issue links in the grooming-data
+# (e.g. http://plane.localhost:1800/pb). Mirrors plan-my-work.sh: PBRAIN_PLANE_WEB_BASE
+# wins, else derive <base_url>/<workspace> from plane.json. Empty on any failure
+# (the renderer then falls back to a bare id). PBRAIN_PMG_NO_WEB=1 forces empty (tests).
+pmg_web_base() {
+  [[ "${PBRAIN_PMG_NO_WEB:-0}" == 1 ]] && { printf '\n'; return 0; }
+  if [[ -n "${PBRAIN_PLANE_WEB_BASE:-}" ]]; then printf '%s\n' "$PBRAIN_PLANE_WEB_BASE"; return 0; fi
+  local py; py="$(pmg_plane_py 2>/dev/null || true)"
+  [[ -n "$py" && -f "$py" ]] || { printf '\n'; return 0; }
+  python3 - "$py" <<'PYEOF' 2>/dev/null || printf '\n'
+import sys, os
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+try:
+    import plane as m
+    cfg = m.load_config()
+    base = (cfg.get("base_url") or "").rstrip("/")
+    ws = cfg.get("workspace") or ""
+    print("%s/%s" % (base, ws) if base and ws else "")
+except Exception:
+    print("")
+PYEOF
+}
+
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
 # reliable). Resolving it lazily inside a function is unsafe: by call time
 # BASH_SOURCE may be empty/relative, pointing pmg_plane_py at the wrong path.
@@ -99,6 +147,14 @@ pmg_run() {
       *) shift ;;
     esac
   done
+  # No explicit --projects → default to THIS WEEK'S WEEKLY-GOAL projects (groom
+  # respects the user's weekly goals, not the whole registry). If there are no
+  # weekly goals this resolves to empty, and we leave it empty so groom/ready fall
+  # through to all registry projects (the missing-goals fallback). An explicit
+  # --projects always wins.
+  if [[ -z "$projects" ]]; then
+    projects="$(pmg_default_projects)"
+  fi
   local py date out
   py="$(pmg_plane_py)"
   date="$(pmg_today)"
@@ -197,7 +253,8 @@ PYEOF
   data_out="$(pmg_data_file "$date")"
   staging_out="$(pmg_staging_file "$date")"
   mkdir -p "$(pmg_data_dir)" "$(pmg_report_dir)" 2>/dev/null || true
-  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" \
+  local web_base; web_base="$(pmg_web_base)"
+  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" PMG_WEB_BASE="$web_base" \
     PMG_DATA_OUT="$data_out" PMG_STAGING_OUT="$staging_out" python3 - <<'PYEOF' 2>>"$logf" || true
 import json, os
 data = json.loads(os.environ["PMG_JSON"])
@@ -208,6 +265,17 @@ except Exception:
 date = os.environ["PMG_DATE"]
 out = os.environ["PMG_DATA_OUT"]
 staging = os.environ.get("PMG_STAGING_OUT") or ""
+web_base = (os.environ.get("PMG_WEB_BASE") or "").rstrip("/")
+
+def issue_link(row):
+    """Clickable Plane issue ref: [PB-89](<web_base>/browse/PB-89). Falls back to a
+    bare id when the web base or project shortcut is missing (unconfigured / tests)."""
+    iid = row.get("id")
+    short = (row.get("project") or "").upper()
+    if web_base and short and iid is not None:
+        ref = "%s-%s" % (short, iid)
+        return "[%s](%s/browse/%s)" % (ref, web_base, ref)
+    return "%s-%s" % (short, iid) if short and iid is not None else str(iid)
 # Preserve an existing "## Auto-work" section (the execute loop / pmw writes into it
 # as it drives + parks issues), so a re-run of the scan doesn't clobber the day's
 # recorded outcomes. Prefer the vault file (canonical), fall back to staging.
@@ -245,7 +313,7 @@ if queue:
     L.append("|---|---|---|---|")
     for i, r in enumerate(queue, 1):
         L.append("| %d | %s | %s | %s |" % (
-            i, r.get("id"), r.get("priority", ""), r.get("title", "")))
+            i, issue_link(r), r.get("priority", ""), r.get("title", "")))
 else:
     L.append("_None — no todo issues ready to run. (Move a backlog issue to todo to "
              "queue it.)_")
@@ -257,7 +325,7 @@ L.append("")
 if nr:
     for r in nr:
         L.append("- **%s** %s — %s" % (
-            r.get("id"), r.get("title", ""), ", ".join(r.get("flags", []))))
+            issue_link(r), r.get("title", ""), ", ".join(r.get("flags", []))))
 else:
     L.append("_None — every todo issue is well-formed._")
 L.append("")
@@ -508,6 +576,10 @@ pmg_schedule_install() {
   pmg_groom_app_build || true
   local bin; bin="$(pmg_groom_bin)"
   local args
+  # --projects is BAKED IN ONLY when the user explicitly pinned it at `groom enable`.
+  # With no pin we OMIT it, so the nightly `groom run` calls pmg_default_projects()
+  # at run time and follows THIS WEEK'S weekly goals automatically (they change week
+  # to week without re-enabling). Don't hardcode the registry here.
   if [[ -x "$bin" ]]; then
     args=("$bin" --script "$sh")
     [[ -n "$projects" ]] && args+=(--projects "$projects")

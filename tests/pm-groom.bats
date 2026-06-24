@@ -243,6 +243,136 @@ SHIM
   [[ "$output" != "$PBRAIN_VAULT"* ]]
 }
 
+# Seed a committed weekly-goals profile for the test ISO week (PBRAIN_PMG_DATE
+# 2026-06-22 -> ISO 2026-W26) listing the given comma-separated plane_project ids.
+_seed_weekly_goals() {
+  local store="$PBRAIN_VAULT/life/daily-planning/.profile"
+  mkdir -p "$store"
+  local goals=""
+  local IFS=,; local first=1
+  for pid in $1; do
+    [[ $first -eq 1 ]] || goals+=","
+    goals+="{\"plane_project\":\"$pid\",\"project_name\":\"p\",\"allocation_percent\":100}"
+    first=0
+  done
+  cat > "$store/weekly-goals.v1.md" <<EOF
+---
+version: 1
+committed: true
+---
+\`\`\`json
+{"period":"2026-W26","goals":[$goals]}
+\`\`\`
+EOF
+}
+
+@test "pmg_default_projects returns this week's weekly-goal plane_project ids" {
+  source "$REPO_ROOT/lib/vault.sh"
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  _seed_weekly_goals "PID-ONE,PID-TWO"
+  run pmg_default_projects
+  [ "$status" -eq 0 ]
+  [[ "$output" == "PID-ONE,PID-TWO" ]]
+}
+
+@test "pmg_default_projects is empty when there are no weekly goals (-> all-registry fallback)" {
+  source "$REPO_ROOT/lib/vault.sh"
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  # no weekly-goals file seeded
+  run pmg_default_projects
+  [ "$status" -eq 0 ]
+  [[ -z "$output" ]]
+}
+
+@test "pmg_run with NO --projects scans only the weekly-goal projects" {
+  _seed_weekly_goals "WG-PID"
+  local realpy; realpy="$(command -v python3)"
+  # Shim records which --projects the groom/ready scan was invoked with.
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+seen=""
+for ((k=1;k<=\$#;k++)); do
+  if [[ "\${!k}" == "--projects" ]]; then n=\$((k+1)); seen="\${!n}"; fi
+done
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then echo "PROJECTS_SEEN=\$seen" >> "$TMP/seen.log"
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --apply"
+  [ "$status" -eq 0 ]
+  grep -q "PROJECTS_SEEN=WG-PID" "$TMP/seen.log"
+}
+
+@test "pmg_run with explicit --projects overrides the weekly-goal default" {
+  _seed_weekly_goals "WG-PID"
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+seen=""
+for ((k=1;k<=\$#;k++)); do
+  if [[ "\${!k}" == "--projects" ]]; then n=\$((k+1)); seen="\${!n}"; fi
+done
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then echo "PROJECTS_SEEN=\$seen" >> "$TMP/seen.log"
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects EXPLICIT-PID --apply"
+  [ "$status" -eq 0 ]
+  grep -q "PROJECTS_SEEN=EXPLICIT-PID" "$TMP/seen.log"
+}
+
+@test "queue renders the Issue id as a clickable Plane browse link" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":89,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":89,"title":"x","priority":"urgent","project":"pb"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  grep -q '\[PB-89\](http://plane.localhost:1800/pb/browse/PB-89)' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+}
+
+@test "queue Issue cell falls back to a bare ref when no web base is configured" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":89,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":89,"title":"x","priority":"urgent","project":"pb"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  # bare ref present, no markdown link
+  grep -q 'PB-89' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  ! grep -q '](http' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+}
+
 @test "pmg_run writes the STAGING grooming-data even when the vault dir is unwritable" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM
