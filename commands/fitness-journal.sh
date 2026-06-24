@@ -1188,6 +1188,12 @@ Step 7C — Reconcile fitness-habit reminders to today's chosen activity (silent
   after writing the file run, with the activity name you put in the file's
   \`focus:\` field:
     bash "$_SCRIPT_DIR/habits.sh" fitness-reconcile --activity "<focus value>" --date $TODAY
+  If the user stated or logged a SESSION TIME for the workout (e.g. "Apple
+  Fitness at 2:45 PM"), pass it through as a 24h HH:MM with --time so the chosen
+  habit's reminder is retimed to that slot instead of the activity default:
+    bash "$_SCRIPT_DIR/habits.sh" fitness-reconcile --activity "<focus value>" --time 14:45 --date $TODAY
+  Convert the user's time to 24h yourself (2:45 PM → 14:45); omit --time when no
+  session time was given (it then falls back to the activity's typical_time).
   It sets the CHOSEN activity's habit reminder (even off its usual schedule) and
   cancels + auto-skips any scheduled-but-not-chosen fitness habit — e.g. logging
   Apple Fitness on a Gym day drops the stale Gym 12:30 reminder and marks Gym
