@@ -90,7 +90,7 @@ gbrain jobs list
 
 - `gbrain query` — hybrid retrieval (vector + BM25)
 - `gbrain think <q>` — multi-hop synthesis with citations to own files
-- `gbrain think "what does my journaling say about smoking triggers?"` reasons across all dated entries
+- `gbrain think "what does my journaling say about procrastination triggers?"` reasons across all dated entries
 
 ---
 

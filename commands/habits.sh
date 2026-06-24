@@ -10,7 +10,7 @@ set -euo pipefail
 #   target_count  : integer N (or null)
 #   priority      : low | medium | high
 # (e.g. "brush at night" = daily/at_least/1; "nail cut" = weekly/at_least/2;
-#  "long run" = monthly/at_least/5; "alcohol" = weekly/at_most/2.)
+#  "long run" = monthly/at_least/5; "junk food" = weekly/at_most/2.)
 #
 # The profile is a vault markdown note carrying its data in a fenced ```json
 # block — same discipline as the plans profile, browsable in Obsidian. Each
@@ -2522,7 +2522,7 @@ STEP 3 — For EACH habit, gather its OWN criteria, one short question at a time
     Every habit gets a concrete schedule — there is no vague "sometimes". If the
     user truly can't name days/frequency, default to daily and note it.
   - direction (the SCORING axis — axis 2): are you trying to DO it (at_least,
-    e.g. eat clean) or KEEP IT UNDER a limit (at_most, e.g. no smoking, alcohol)?
+    e.g. eat clean) or KEEP IT UNDER a limit (at_most, e.g. no doomscrolling, junk food)?
     This is independent of the schedule.
   - cap/count (--target): for a LIMIT habit, the cap (e.g. ≤2). Ask only if it
     isn't obviously 1.
