@@ -1813,24 +1813,31 @@ def groom_run(cfg, client, project_ids, apply=False):
                 # Skip entirely when the project maps couldn't be built (gate_map empty
                 # = no auto labels resolvable / minimal client) — best-effort.
                 if not auto_off and gate_map:
+                    # CHEAP signals first (no network — all from the already-fetched
+                    # issue + project maps).
                     cur_ids = issue_labels(issue)
                     names = {labels_by_id.get(lid, "") for lid in cur_ids}
                     approved = bool(set(cur_ids) & approved_ids)
                     ep = issue.get("estimate_point")
                     est_h = hours_by_ep.get(ep) if ep else None
                     is_dc = bool(names & {"docs", "chore"})
-                    # has_open_children: best-effort sub-issue check.
-                    try:
-                        kids = client.list_sub_issues(pid, iid)
-                        has_kids = bool(kids)
-                    except PlaneError:
-                        has_kids = False
-                    # has_open_blockers: best-effort.
-                    try:
-                        blockers = blocked_by_ids(cfg, client, "%s:%s" % (pid, iid))
-                        has_block = bool(blockers)
-                    except Exception:
-                        has_block = False
+                    small = (est_h is not None and est_h <= _AUTO_EASY_MAX_HOURS)
+                    # The EXPENSIVE per-issue checks (sub-issues + blockers, 2 API calls
+                    # each) only change the outcome when implement is otherwise eligible
+                    # (approved AND small). Otherwise the issue gets auto:plan only and
+                    # the checks are wasted — so SKIP them. This keeps the nightly scan
+                    # to ~O(projects) network calls, not O(issues), which is what was
+                    # exhausting Plane's rate limit and emptying the queue.
+                    has_kids = has_block = False
+                    if approved and small:
+                        try:
+                            has_kids = bool(client.list_sub_issues(pid, iid))
+                        except PlaneError:
+                            has_kids = False
+                        try:
+                            has_block = bool(blocked_by_ids(cfg, client, "%s:%s" % (pid, iid)))
+                        except Exception:
+                            has_block = False
                     suggested = suggest_auto_stages(
                         issue, approved=approved, has_open_blockers=has_block,
                         has_open_children=has_kids, est_hours=est_h, is_docs_or_chore=is_dc)

@@ -164,10 +164,29 @@ pmg_run() {
   rc=$?
 
   # PB-94: the ORDERED hand-off queue groom feeds to /plan-my-work (blockers ahead
-  # of the issues they block). Best-effort — an empty array if it can't be built.
+  # of the issues they block). If the fetch FAILS (e.g. rate-limited mid-run), we
+  # must NOT render a false "Queue (0)" that hides real work and overwrites a good
+  # file — distinguish "genuinely empty" from "fetch failed". On failure, reuse the
+  # queue from today's existing grooming-data file if present; only fall to [] when
+  # there's nothing to preserve.
   local queue_args=(ready --ordered)
   [[ -n "$projects" ]] && queue_args+=(--projects "$projects")
-  local queue_json; queue_json="$(python3 "$py" "${queue_args[@]}" 2>>"$logf" || echo '[]')"
+  local queue_json queue_rc
+  queue_json="$(python3 "$py" "${queue_args[@]}" 2>>"$logf")"; queue_rc=$?
+  local queue_cache; queue_cache="$(pmg_report_dir)/${date}.queue.json"
+  if [[ $queue_rc -eq 0 && -n "$queue_json" && "$queue_json" != "[]" ]]; then
+    # Stash the good queue so a later rate-limited run can fall back to it.
+    printf '%s\n' "$queue_json" > "$queue_cache" 2>/dev/null || true
+  elif [[ $queue_rc -ne 0 || -z "$queue_json" ]]; then
+    # Fetch failed (e.g. 429 mid-run) — reuse the last good queue instead of
+    # rendering a false "Queue (0)" that hides real work.
+    if [[ -s "$queue_cache" ]]; then
+      queue_json="$(cat "$queue_cache" 2>/dev/null || echo '[]')"
+      printf 'pmg_run: ready --ordered failed (rc=%s); reused cached queue\n' "$queue_rc" >>"$logf" 2>/dev/null || true
+    else
+      queue_json='[]'
+    fi
+  fi
   [[ -n "$queue_json" ]] || queue_json='[]'
   if [[ $rc -ne 0 || -z "$json" ]]; then
     return $rc
