@@ -1,0 +1,25 @@
+{
+  "_doc": "Dependency-aware multi-loop: primary PB-812 is blocked_by [PB-811]. The loop must drive the BLOCKER (PB-811) fully to done FIRST, then the primary. Both are full-auto + CI green + gh present, so with the fast persona both land. Asserts the blocker's move→doing precedes the primary's. Terminal: done (both).",
+  "primary_id": "PB-812",
+  "base_branch": "main",
+  "web_base": "http://plane.localhost:1800/pb",
+  "gh_present": "yes",
+  "test_result": "green",
+  "ci_result": "green",
+  "expect": "done",
+  "display": "blocked-by-chain (blocker PB-811 → primary PB-812)",
+  "issues": [
+    {
+      "tie": "proj-uuid:issue-uuid-811", "id": "PB-811", "id_slug": "pb811-blocker",
+      "title": "The blocker", "approved": true, "has_plan": true,
+      "auto_gates": ["plan", "implement", "test", "ship", "land"],
+      "blocked_by": [], "subtree": [], "state": "Todo", "project": "pb"
+    },
+    {
+      "tie": "proj-uuid:issue-uuid-812", "id": "PB-812", "id_slug": "pb812-primary",
+      "title": "The blocked primary", "approved": true, "has_plan": true,
+      "auto_gates": ["plan", "implement", "test", "ship", "land"],
+      "blocked_by": ["PB-811"], "subtree": [], "state": "Todo", "project": "pb"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "_doc": "/journal RESUME path: today's file already exists with a curated ## Focus line and an earlier ### 09:00 log entry. A second dump appends a NEW ### entry under ## Log WITHOUT clobbering the existing Focus or the 09:00 entry (journal.sh's RESUME contract). tracking_kind=vault-file.",
+  "command": "journal",
+  "dump": "afternoon update: finished the migration and pushed it",
+  "reflective": false,
+  "followup": "",
+  "expect": "logged",
+  "display": "journal — resume (append under ## Log, preserve curated sections)",
+  "preexisting": "---\ntype: daily\ndate: today\ntags: []\n---\n\n## Focus\n\nPRESERVE-ME-FOCUS: ship the migration\n\n## Notes\n\nmorning standup notes\n\n## Decisions\n\n—\n\n## Open questions\n\n—\n\n## Log\n\n### 09:00\n\nstarted the day on the migration\n"
+}

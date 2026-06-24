@@ -1,0 +1,31 @@
+{
+  "_doc": "PB-81 parent/sub-issue multi-loop: parent PB-820 has open sub-issues [PB-821, PB-822]. The loop drives EACH child as its own branch/PR/merge (full-auto + green here), then closes the PARENT LAST. Asserts each child got a distinct branch and the parent's move→done is the last done in the journal. Terminal: done (all).",
+  "primary_id": "PB-820",
+  "base_branch": "main",
+  "web_base": "http://plane.localhost:1800/pb",
+  "gh_present": "yes",
+  "test_result": "green",
+  "ci_result": "green",
+  "expect": "done",
+  "display": "parent-subissues (PB-820 → children PB-821, PB-822, parent closed last)",
+  "issues": [
+    {
+      "tie": "proj-uuid:issue-uuid-820", "id": "PB-820", "id_slug": "pb820-parent",
+      "title": "Parent with sub-issues", "approved": true, "has_plan": true,
+      "auto_gates": ["plan", "implement", "test", "ship", "land"],
+      "blocked_by": [], "subtree": ["PB-821", "PB-822"], "state": "Todo", "project": "pb"
+    },
+    {
+      "tie": "proj-uuid:issue-uuid-821", "id": "PB-821", "id_slug": "pb821-child",
+      "title": "Child one", "approved": true, "has_plan": true,
+      "auto_gates": ["plan", "implement", "test", "ship", "land"],
+      "blocked_by": [], "subtree": [], "state": "Todo", "project": "pb"
+    },
+    {
+      "tie": "proj-uuid:issue-uuid-822", "id": "PB-822", "id_slug": "pb822-child",
+      "title": "Child two", "approved": true, "has_plan": true,
+      "auto_gates": ["plan", "implement", "test", "ship", "land"],
+      "blocked_by": [], "subtree": [], "state": "Todo", "project": "pb"
+    }
+  ]
+}
