@@ -243,6 +243,19 @@ SHIM
   [[ "$output" != "$PBRAIN_VAULT"* ]]
 }
 
+@test "pmg_web_base resolves the BROWSER host (plane.localhost), not the 127.0.0.1 loopback" {
+  # A real plane.json whose base_url is the loopback the API client uses.
+  mkdir -p "$XDG_CONFIG_HOME/pbrain"
+  cat > "$XDG_CONFIG_HOME/pbrain/plane.json" <<'JSON'
+{"base_url":"http://127.0.0.1:1800","api_key":"k","workspace":"pb"}
+JSON
+  run env -u PBRAIN_PLANE_WEB_BASE PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_web_base"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "http://plane.localhost:1800/pb" ]]
+  [[ "$output" != *127.0.0.1* ]]
+}
+
 # Seed a committed weekly-goals profile for the test ISO week (PBRAIN_PMG_DATE
 # 2026-06-22 -> ISO 2026-W26) listing the given comma-separated plane_project ids.
 _seed_weekly_goals() {

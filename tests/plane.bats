@@ -40,6 +40,31 @@ PYEOF
   [[ "$output" == *ok* ]]
 }
 
+@test "web_base swaps the loopback for the vanity host, keeps real hostnames, appends workspace" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util, os
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+os.environ.pop("PBRAIN_PLANE_WEB_BASE", None)
+# loopback base -> browser vanity host plane.localhost, same port, + workspace
+assert m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"}) == "http://plane.localhost:1800/pb", m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"})
+assert m.web_base({"base_url":"http://localhost:1800","workspace":"pb"}) == "http://plane.localhost:1800/pb"
+# real hostname (VPS/domain) is kept as-is
+assert m.web_base({"base_url":"https://plane.example.com","workspace":"acme"}) == "https://plane.example.com/acme"
+# no workspace -> no trailing segment
+assert m.web_base({"base_url":"http://127.0.0.1:1800"}) == "http://plane.localhost:1800"
+# empty cfg -> empty string (callers fall back)
+assert m.web_base({}) == ""
+# explicit override wins outright
+os.environ["PBRAIN_PLANE_WEB_BASE"] = "http://custom:9/x"
+assert m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"}) == "http://custom:9/x"
+del os.environ["PBRAIN_PLANE_WEB_BASE"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
 @test "pick_state_id prefers name match, then default, then lowest sequence" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

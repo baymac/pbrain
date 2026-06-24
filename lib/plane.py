@@ -442,6 +442,48 @@ def _vhost_from_base(base_url):
     return hosts
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def web_base(cfg):
+    """The BROWSER-FACING Plane base for clickable issue links — distinct from the
+    API `base_url`, which is the 127.0.0.1 loopback the client talks to. The single
+    source of truth so groom + /plan-my-work never drift.
+
+    Rules:
+      * PBRAIN_PLANE_WEB_BASE wins outright (explicit escape hatch).
+      * Else parse base_url. If its host is a loopback (the local self-host flow,
+        where the browser is served at the vhost while pbrain hits the loopback),
+        swap to the preferred NON-loopback vanity host from _vhost_from_base
+        (i.e. plane.localhost), keeping the same scheme + port. A real hostname
+        (VPS/domain, e.g. plane.example.com) is kept as-is.
+      * Append /<workspace> when known.
+    Returns "" when nothing is resolvable (callers fall back). Pure (reads env)."""
+    override = os.environ.get("PBRAIN_PLANE_WEB_BASE")
+    if override:
+        return override.rstrip("/")
+    base = (cfg or {}).get("base_url") or ""
+    if not base:
+        return ""
+    try:
+        u = urllib.parse.urlparse(base)
+    except Exception:
+        return ""
+    scheme = u.scheme or "http"
+    host = u.hostname or ""
+    port = u.port
+    if host in _LOOPBACK_HOSTS:
+        # Prefer the first non-loopback candidate (plane.localhost) as the browser host.
+        host = next((h for h in _vhost_from_base(base) if h not in _LOOPBACK_HOSTS),
+                    host)
+    netloc = "%s:%s" % (host, port) if port else host
+    out = "%s://%s" % (scheme, netloc)
+    ws = (cfg or {}).get("workspace")
+    if ws:
+        out += "/%s" % ws
+    return out.rstrip("/")
+
+
 # Chromium browsers we know how to read on macOS: dir + Keychain "Safe Storage" key.
 _CHROMIUM_BROWSERS = {
     "brave": ("BraveSoftware/Brave-Browser", "Brave Safe Storage"),
@@ -2623,6 +2665,19 @@ def cmd_use(args):
     return 0
 
 
+def cmd_webbase(args):
+    """Print the browser-facing Plane base for clickable links (the single source of
+    truth shared by groom + /plan-my-work). Empty line + rc 0 when unconfigured, so
+    shell callers can `$(... web-base)` without error handling."""
+    try:
+        cfg = load_config()
+    except Exception:
+        print("")
+        return 0
+    print(web_base(cfg))
+    return 0
+
+
 def cmd_ping(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -3141,6 +3196,7 @@ def build_parser():
 
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)
     sp = sub.add_parser("ping"); sp.add_argument("--project"); sp.set_defaults(func=cmd_ping)
+    sp = sub.add_parser("web-base"); sp.set_defaults(func=cmd_webbase)
     sp = sub.add_parser("states"); sp.add_argument("--project"); sp.set_defaults(func=cmd_states)
 
     sp = sub.add_parser("ready")

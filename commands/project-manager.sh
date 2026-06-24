@@ -207,7 +207,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping states projects ready progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping web-base states projects ready progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -451,6 +451,14 @@ PYEOF
   states)
     _parse_args "$@"
     python3 "$PLANE" states ${F_project:+--project "$F_project"}
+    ;;
+
+  web-base)
+    # Browser-facing Plane base for clickable links — the single source of truth
+    # (loopback→vanity host swap) shared by groom + /plan-my-work. Bare URL on
+    # stdout (no PM_* prefix) so callers can $(...) it; empty + rc 0 when
+    # unconfigured, so it never needs the PM_NOT_CONFIGURED gate above.
+    python3 "$PLANE" web-base || true
     ;;
 
   projects)

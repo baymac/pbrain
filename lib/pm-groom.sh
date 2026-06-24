@@ -76,27 +76,17 @@ except Exception: d={}
 print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || printf '\n'
 }
 
-# pmg_web_base — the clickable Plane base for issue links in the grooming-data
-# (e.g. http://plane.localhost:1800/pb). Mirrors plan-my-work.sh: PBRAIN_PLANE_WEB_BASE
-# wins, else derive <base_url>/<workspace> from plane.json. Empty on any failure
-# (the renderer then falls back to a bare id). PBRAIN_PMG_NO_WEB=1 forces empty (tests).
+# pmg_web_base — the BROWSER-FACING Plane base for clickable issue links in the
+# grooming-data (e.g. http://plane.localhost:1800/pb). Delegates to plane.py's
+# `web-base`, the single source of truth (it swaps the 127.0.0.1 loopback for the
+# vanity host and honours PBRAIN_PLANE_WEB_BASE), so groom + /plan-my-work never
+# drift. Empty on any failure (the renderer falls back to a bare id).
+# PBRAIN_PMG_NO_WEB=1 forces empty (tests).
 pmg_web_base() {
   [[ "${PBRAIN_PMG_NO_WEB:-0}" == 1 ]] && { printf '\n'; return 0; }
-  if [[ -n "${PBRAIN_PLANE_WEB_BASE:-}" ]]; then printf '%s\n' "$PBRAIN_PLANE_WEB_BASE"; return 0; fi
   local py; py="$(pmg_plane_py 2>/dev/null || true)"
   [[ -n "$py" && -f "$py" ]] || { printf '\n'; return 0; }
-  python3 - "$py" <<'PYEOF' 2>/dev/null || printf '\n'
-import sys, os
-sys.path.insert(0, os.path.dirname(sys.argv[1]))
-try:
-    import plane as m
-    cfg = m.load_config()
-    base = (cfg.get("base_url") or "").rstrip("/")
-    ws = cfg.get("workspace") or ""
-    print("%s/%s" % (base, ws) if base and ws else "")
-except Exception:
-    print("")
-PYEOF
+  python3 "$py" web-base 2>/dev/null || printf '\n'
 }
 
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
