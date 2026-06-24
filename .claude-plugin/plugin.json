@@ -1,6 +1,6 @@
 {
   "name": "pbrain",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Daily-ritual scaffolding for Obsidian — journal, gratitude, fitness, diet, plan-my-day, brainstorm, habits, reminders, monthly-review, weekly-review, organize clippings, and Codex CLI interop. All commands read/write into an Obsidian-synced vault.",
   "author": {
     "name": "baymac",
