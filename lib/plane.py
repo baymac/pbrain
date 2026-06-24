@@ -378,6 +378,25 @@ def project_label(cfg, pid):
     return pid
 
 
+def project_short(cfg, pid):
+    """The project's UPPERCASED shortcut/identifier (e.g. 'PB', 'YT', 'KA') — the slug
+    Plane uses in browse URLs (.../browse/PB-89). Falls back to a spaceless squash of
+    the name, then the id. Pure. Use this (NOT project_label, the display name) anywhere
+    a URL slug or issue ref like '<SHORT>-<seq>' is built — a name with spaces produces
+    a broken link (e.g. 'YOUTUBE SUMMARY EXTENSION-2')."""
+    for p in normalize_registry(cfg):
+        if p["id"] == pid:
+            sc = (p.get("shortcut") or p.get("identifier") or "").strip()
+            if sc:
+                return sc.upper()
+            name = (p.get("name") or "").strip()
+            if name:
+                # last resort: squash the name to a spaceless token so the URL is valid
+                return "".join(name.split()).upper()
+            return pid
+    return pid
+
+
 # --- estimates (story points) ----------------------------------------------
 # Plane's PUBLIC v1 API can neither list nor create estimate points — only the
 # cookie-auth INTERNAL API (/api/workspaces/.../estimates/) exposes them. But
@@ -1643,9 +1662,11 @@ def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=Fals
         except PlaneError:
             continue
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         for r in rs:
             r["project_id"] = pid
             r["project"] = label
+            r["project_short"] = short
             rows.append(r)
     _ready_sort(rows)
     if ordered:
@@ -1690,6 +1711,7 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
         except PlaneError:
             continue
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         has_scale = bool(ensure_estimate_scale(cfg, client, pid))
         for r in rs:
             iid = r["issue_id"]
@@ -1702,7 +1724,8 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
             flags = thinness_flags(issue, has_estimate_scale=has_scale)
             if flags:
                 out.append({"tie": r["tie"], "project_id": pid, "project": label,
-                            "id": r.get("id"), "title": r["title"], "flags": flags})
+                            "project_short": short, "id": r.get("id"),
+                            "title": r["title"], "flags": flags})
     return out
 
 
@@ -1776,6 +1799,7 @@ def groom_run(cfg, client, project_ids, apply=False):
               "projects": [], "todo": [], "needs_review": [], "errors": []}
     for pid in project_ids:
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         try:
             states = client.list_states(pid)
             states_by_id = {s["id"]: s for s in states}
@@ -1814,7 +1838,7 @@ def groom_run(cfg, client, project_ids, apply=False):
             title = issue.get("name", "")
             flags = thinness_flags(issue, has_estimate_scale=has_scale)
             row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                   "id": seq, "title": title, "group": grp}
+                   "project_short": short, "id": seq, "title": title, "group": grp}
             if flags:
                 row["flags"] = flags
                 report["needs_review"].append(row)

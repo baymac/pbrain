@@ -58,6 +58,13 @@ should auto-run, then set the labels. For each id in `## Queue — ordered`:
      vetted it — don't re-touch good work). Once it clears (or you enriched it to clear),
      `${PM_CMD} tag "<tie>" --add auto:groomed`. (auto:groomed is a marker, not a pipeline
      stage — it never affects auto-advance.)
+     RECORD each issue you ENRICHED (not the ones already fine): append ONE line under the
+     `## Enriched this run` heading in the grooming-data file ($GROOM_DATA_FILE), in the form
+     `- [<REF>](<url>) — <what you set>` (e.g. `- [PB-108](…/browse/PB-108) — wrote
+     description; priority→high; est 3`). Use the SAME clickable link format as the queue
+     (project SHORTCUT, e.g. PB/YT/KA — never the project name). This is what the morning
+     review reads to see what the AI auto-enriched; leave the heading's placeholder line
+     untouched if you enriched nothing.
   2. JUDGE which stages are safe to auto-advance (you may grant MORE than the nightly
      floor, or REMOVE one it set that you judge unwarranted):
        • auto:plan      — if the issue is well-formed enough to plan. Low-risk; default yes.

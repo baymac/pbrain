@@ -386,6 +386,83 @@ SHIM
   grep -q 'plan,implement' "$F"
 }
 
+@test "queue link uses the project SHORTCUT, not the name (multi-word project → no spaces)" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":2,"title":"x","priority":"high","project":"YouTube Summary Extension","project_short":"YT"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  # the link is built from YT (the shortcut), with NO spaces — clickable
+  grep -q '\[YT-2\](http://plane.localhost:1800/pb/browse/YT-2)' "$F"
+  # and the broken name-based form must NOT appear
+  ! grep -q 'YOUTUBE SUMMARY EXTENSION-2' "$F"
+}
+
+@test "queue abridges a long title so the row stays one line" {
+  local realpy; realpy="$(command -v python3)"
+  local longtitle="project-manager enforce file sole intake new work plus audit demote distracting low-level primitives everywhere"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":5,"title":"$longtitle","priority":"high","project":"pb","project_short":"PB"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  # the full untruncated title must NOT appear; the ellipsis must
+  ! grep -q "low-level primitives everywhere" "$F"
+  grep -q '…' "$F"
+}
+
+@test "grooming file has an Enriched-this-run section, preserved across re-renders" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  grep -q '## Enriched this run' "$F"
+  # simulate the agent appending an entry, then re-render and confirm it survives
+  printf '\n- [PB-9](x) — wrote description; priority→high\n' >> "$F"
+  # also append to the staging copy the re-render reads from
+  S="$PBRAIN_PMG_DIR/2026-06-22.md"
+  [ -f "$S" ] && printf '\n## Enriched this run\n\n- [PB-9](x) — wrote description; priority→high\n' >> "$S" || true
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  grep -q 'PB-9.*wrote description' "$F"
+}
+
 @test "queue Issue cell falls back to a bare ref when no web base is configured" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM

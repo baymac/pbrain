@@ -277,14 +277,27 @@ staging = os.environ.get("PMG_STAGING_OUT") or ""
 web_base = (os.environ.get("PMG_WEB_BASE") or "").rstrip("/")
 
 def issue_link(row):
-    """Clickable Plane issue ref: [PB-89](<web_base>/browse/PB-89). Falls back to a
-    bare id when the web base or project shortcut is missing (unconfigured / tests)."""
+    """Clickable Plane issue ref: [PB-89](<web_base>/browse/PB-89). Uses the project
+    SHORTCUT (PB/YT/KA) for both the ref and the URL slug — NOT the display name, which
+    can contain spaces and break the link (e.g. 'YOUTUBE SUMMARY EXTENSION-2'). Falls
+    back to a bare id when the web base or shortcut is missing (unconfigured / tests)."""
     iid = row.get("id")
-    short = (row.get("project") or "").upper()
+    # project_short is the uppercased shortcut (PB/YT/KA); fall back to a spaceless
+    # squash of the legacy 'project' (name) field so an old row still yields a valid URL.
+    short = (row.get("project_short") or "").strip().upper()
+    if not short:
+        short = "".join((row.get("project") or "").split()).upper()
     if web_base and short and iid is not None:
         ref = "%s-%s" % (short, iid)
         return "[%s](%s/browse/%s)" % (ref, web_base, ref)
     return "%s-%s" % (short, iid) if short and iid is not None else str(iid)
+
+def abridge(s, n=60):
+    """Half-line title for the queue table: collapse internal whitespace/newlines and
+    truncate to ~n chars with an ellipsis, so a long title can't blow up row height.
+    The full title is one click away via the issue link."""
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 # Preserve an existing "## Auto-work" section (the execute loop / pmw writes into it
 # as it drives + parks issues), so a re-run of the scan doesn't clobber the day's
 # recorded outcomes. Prefer the vault file (canonical), fall back to staging.
@@ -299,6 +312,25 @@ for src in (out, staging):
     idx = prev.find("\n## Auto-work")
     if idx != -1:
         existing_autowork = prev[idx:].rstrip() + "\n"
+        break
+
+# Preserve the "## Enriched this run" section across re-renders. The mechanical scan
+# can't know what the judgment agent enriched — the agent appends one line per enriched
+# issue under this heading (see groom-drive.txt). A re-render of the scan must keep
+# those lines (between this heading and the next "## "), not clobber them.
+existing_enriched = ""
+for src in (out, staging):
+    if not src:
+        continue
+    try:
+        prev = open(src).read()
+    except Exception:
+        continue
+    idx = prev.find("\n## Enriched this run")
+    if idx != -1:
+        body = prev[idx + 1:]
+        nxt = body.find("\n## ", 1)
+        existing_enriched = (body[:nxt] if nxt != -1 else body).rstrip() + "\n"
         break
 L = []
 L.append("---")
@@ -329,19 +361,36 @@ if queue:
     L.append("|---|---|---|---|---|")
     for i, r in enumerate(queue, 1):
         L.append("| %d | %s | %s | %s | %s |" % (
-            i, issue_link(r), r.get("priority", ""), auto_cell(r), r.get("title", "")))
+            i, issue_link(r), r.get("priority", ""), auto_cell(r), abridge(r.get("title", ""))))
 else:
     L.append("_None — no todo issues ready to run. (Move a backlog issue to todo to "
              "queue it.)_")
 L.append("")
-# Thin todo issues to enrich before running.
+# Issues the judgment pass auto-enriched THIS run (agent-recorded under this heading;
+# see groom-drive.txt). Preserved across scan re-renders so the morning review can see
+# what the AI fixed. Empty heading on a fresh/mechanical-only run.
+L.append("## Enriched this run")
+L.append("")
+if existing_enriched:
+    # strip the heading line the agent may have included; keep the entries
+    body = existing_enriched
+    for h in ("## Enriched this run\n", "## Enriched this run"):
+        if body.lstrip().startswith(h):
+            body = body.lstrip()[len(h):]
+            break
+    body = body.strip()
+    L.append(body if body else "_None enriched this run._")
+else:
+    L.append("_None enriched this run._")
+L.append("")
+# Thin todo issues to enrich before running (still thin AFTER the judgment pass).
 nr = data.get("needs_review", [])
 L.append("## Needs review (thin todo — enrich before running)")
 L.append("")
 if nr:
     for r in nr:
         L.append("- **%s** %s — %s" % (
-            issue_link(r), r.get("title", ""), ", ".join(r.get("flags", []))))
+            issue_link(r), abridge(r.get("title", "")), ", ".join(r.get("flags", []))))
 else:
     L.append("_None — every todo issue is well-formed._")
 L.append("")
