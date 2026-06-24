@@ -1,0 +1,12 @@
+{
+  "_doc": "/journal factual log: a plain 'what I did' dump. No open threads → NO follow-up question (quiet day). Fresh file written with Focus/Notes/Decisions/Open questions + a ## Log entry. tracking_kind=vault-file → the report shows the real dated markdown.",
+  "command": "journal",
+  "dump": "shipped the e2e harness, ran the suite green, then symlinked the commands dir",
+  "reflective": false,
+  "followup": "",
+  "focus": "Shipped the e2e harness and got the suite green.",
+  "decisions": "- Keep the harness table-driven",
+  "openq": "—",
+  "expect": "logged",
+  "display": "journal — factual log (no follow-up, fresh file)"
+}

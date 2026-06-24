@@ -1,0 +1,13 @@
+{
+  "_doc": "/journal reflective entry: an emotionally-loaded dump with an unresolved thread → exactly ONE follow-up question (pulled from their words), then the answer is folded into the entry. Fresh file. tracking_kind=vault-file.",
+  "command": "journal",
+  "dump": "tanked the demo today, felt off the whole afternoon and im not sure why",
+  "reflective": true,
+  "question": "what was the moment it started to feel off?",
+  "followup": "i think it was when the build broke on stage and i froze",
+  "focus": "Rough demo day — trying to understand what threw me off.",
+  "decisions": "—",
+  "openq": "- What was the moment it started to feel off?\n  When the build broke on stage and I froze.",
+  "expect": "logged",
+  "display": "journal — reflective (exactly one follow-up, fresh file)"
+}
