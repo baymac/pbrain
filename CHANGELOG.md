@@ -4,6 +4,11 @@ All notable changes to pbrain are documented here. Format follows [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- **Reproducible release pipeline (`scripts/release.sh`, PB-128).** A single command now owns cutting a release: `release.sh cut <major|minor|patch>` bumps both version files in lockstep (`VERSION` `x.y.z.0` + `.claude-plugin/plugin.json` `x.y.z` — the script is their **sole writer**, so they can't drift), rolls `## [Unreleased]` into `## [x.y.z] — <date>` with a fresh empty `[Unreleased]` on top, and generates the version's what's-new page. It's **dry-run by default** (writes nothing without `--apply`) and **idempotent** (re-running on an already-cut version is a no-op), with `tag`/`publish` split out so you tag the merge commit and `gh release create` pulls its notes from the changelog section. New `scripts/release.sh`; docs in `docs/release.md`; covered by `tests/release.bats`.
+- **"What's new" doc that auto-opens on update (PB-129).** Each release generates a self-contained, styled `docs/whats-new/<version>.html` rendered from its changelog section (`lib/whats-new.sh` + `lib/whats-new-render.py`). `lib/whats-new.sh check`, sourced from `lib/vault.sh`, tracks the last local plugin version and — when it **advances** (a `/plugin update` landed) and a matching doc exists — prints a one-line `✨ What's new …` pointer and opens the page on macOS, **once** per upgrade, then stays quiet (a fresh install just baselines; the path is best-effort, never fatal, and skipped on dev installs). Covered by `tests/release.bats`.
+
 ## [0.24.0] — 2026-06-25
 
 ### Added

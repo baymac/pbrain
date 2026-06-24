@@ -134,6 +134,8 @@ pbrain/
 ├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking); plays the lifecycle chime at notif-start / blocking-start / blocking-end (--chime / --no-chime)
 ├── lib/assets/chime.mp3         ← bundled lifecycle chime; copied into pbrain-overlay.app/Contents/Resources on build (gate: PBRAIN_OVERLAY_CHIME, override: PBRAIN_CHIME_FILE)
 ├── lib/pbrain-tracker.swift     ← /laptop-tracking daemon source (resident LaunchAgent)
+├── lib/whats-new.sh             ← per-release "what's new" doc (PB-129): `render` (changelog section → HTML via lib/whats-new-render.py) + `check`/`surface` (surface-once-on-update, sourced from vault.sh; state in $XDG_STATE_HOME/pbrain/whats-new.seen; skipped on dev installs)
+├── scripts/release.sh           ← reproducible release pipeline (PB-128): SOLE writer of VERSION + .claude-plugin/plugin.json (lockstep), cuts CHANGELOG [Unreleased]→[x.y.z], generates docs/whats-new/<v>.html, tag + gh publish; dry-run by default, idempotent. See docs/release.md
 ├── tests/                       ← bats tests for the shared lib/ helpers
 ├── docs/                        ← one short user-facing doc per command
 ├── gbrain/                      ← gbrain operations (separate from the plugin): scripts/, launchd/, docs/, .logs/ (gitignored)
