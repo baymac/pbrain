@@ -97,10 +97,21 @@ PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the des
 GATE_NAMES = ["plan", "implement", "test", "ship", "land"]
 GATE_LABELS = [{"name": "auto:%s" % g, "color": "#7c3aed"} for g in GATE_NAMES]  # violet
 
+# The groom QUALITY-VET marker (not a pipeline gate). The judgment pass (autonomous
+# nightly Claude or interactive groom) sets this once it has vetted an issue's
+# description/priority/estimate quality — so later nights SKIP re-vetting it (zero
+# churn). Strip it in Plane to request a re-vet. Deliberately NOT in GATE_NAMES, so
+# the gate machinery (gate_label_map / suggest_auto_stages / issue_gate_clearances)
+# ignores it — it only ever iterates GATE_NAMES. Seeded so `tag --add auto:groomed`
+# resolves to a real label instead of creating one ad-hoc.
+GROOMED_LABEL = {"name": "auto:groomed", "color": "#8b5cf6"}  # violet (marker, not gate)
+
 # All labels pbrain seeds into a project: work-type conventions (PB-70), the
-# plan-approval seam (PB-45), and the per-gate auto clearances (PB-94).
+# plan-approval seam (PB-45), the per-gate auto clearances (PB-94), and the groom
+# quality-vet marker.
 def _seed_label_specs():
-    return CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}] + GATE_LABELS
+    return (CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}]
+            + GATE_LABELS + [GROOMED_LABEL])
 
 # Canonical "convention" labels (PB-70). Every project gets these work-item TYPE
 # labels so triage is consistent across the workspace: a `bug` filed via

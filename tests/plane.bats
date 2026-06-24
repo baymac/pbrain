@@ -678,10 +678,15 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 names = {l["name"] for l in m.CONVENTION_LABELS}
 assert names == {"bug","feature","chore","docs"}, names   # canon = type set
-# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94).
+# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94)
+# + the auto:groomed quality-vet marker (which is NOT a pipeline gate).
 seed_names = {s["name"] for s in m._seed_label_specs()}
 assert {"bug","feature","chore","docs", m.APPROVED_LABEL} <= seed_names, seed_names
 assert {"auto:%s" % g for g in m.GATE_NAMES} <= seed_names, seed_names
+assert "auto:groomed" in seed_names, seed_names
+assert "groomed" not in m.GATE_NAMES, "auto:groomed must NOT be a pipeline gate"
+# the marker never appears in auto-stage suggestions (gate machinery ignores it)
+assert "groomed" not in m.suggest_auto_stages({}, approved=True, est_hours=1.0)
 
 class FC:
     def __init__(self, existing): self.labels=list(existing); self.created=[]; self.recolored=[]
