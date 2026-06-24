@@ -127,24 +127,61 @@ if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
     }
     let maxTurns = envOr("PBRAIN_GROOM_MAX_TURNS", "30")
     let timeoutS = envOr("PBRAIN_GROOM_CLAUDE_TIMEOUT", "600")
-    // Triage-only allowlist: Plane reads/writes via python3 + the project-manager
-    // wrapper, plus read tools. NO Bash(git*), NO gh, NO Edit, NO /plan-my-work.
-    let allowed = "Bash(python3 *),Bash(bash *project-manager.sh *),Read,Glob,Skill"
+    // SAFETY MODEL — triage-only enforced by a PreToolUse HOOK, not globs. Claude
+    // Code's Bash allow/deny patterns don't reliably match the skill's variable-laden
+    // commands (they either denied everything or let git through), so instead we run
+    // in `auto` permission mode (autonomous, no turn-1 denial) and wire a PreToolUse
+    // gatekeeper (lib/hooks/groom-triage-guard.sh) that HARD-BLOCKS any git/gh/push/
+    // merge/worktree/Edit/plan-my-work command. The hook is real code matching the
+    // actual command string — the reliable boundary. PBRAIN_GROOM_TRIAGE_GUARD=1 arms
+    // it (set in env below); it denies-only, never widens permissions.
+    let repoRoot = URL(fileURLWithPath: (script as NSString).deletingLastPathComponent)
+        .deletingLastPathComponent().path  // commands/ -> repo root
+    let hookPath = repoRoot + "/lib/hooks/groom-triage-guard.sh"
+    // Inline settings JSON wiring the PreToolUse hook for Bash + edit tools.
+    let settingsJSON = """
+    {"hooks":{"PreToolUse":[{"matcher":"Bash|Edit|Write|NotebookEdit|MultiEdit","hooks":[{"type":"command","command":"bash \\"\(hookPath)\\""}]}]}}
+    """
     // Run claude under `timeout` so a hung session can't run forever. The session
-    // executes the same /project-manager groom skill; in headless dontAsk mode it
-    // can't reach /plan-my-work, so it stops after enrich + ASSESS & LABEL.
+    // executes the /project-manager groom skill; the hook keeps it triage-only, so it
+    // enriches + labels and stops (any attempt to git/PR/execute is blocked).
     // No USD budget cap (per user) — the run is bounded by --max-turns + timeout.
+    // The prompt is DIRECT and tight — point the agent straight at the work so it
+    // doesn't explore/rabbit-hole. The mechanical pass already wrote the grooming-data
+    // file (queue + the "## Needs review" thin list); the agent just enriches those
+    // issues and labels the queue via /project-manager. "No human, don't ask, don't
+    // investigate tooling" keeps a headless run on-task; the hook blocks execution.
+    let stagingFile = staging ?? ""
+    let prompt = "AUTONOMOUS NIGHTLY GROOM — triage only, no human is present.\n\n"
+        + "The grooming-data file at \(stagingFile) was just written by the mechanical "
+        + "scan. It lists the ordered queue (with an Auto column) and a '## Needs review' "
+        + "section of thin issues.\n\n"
+        + "Your job, using /project-manager (the SOLE Plane writer):\n"
+        + "1. ENRICH every '## Needs review' issue — write a concrete description "
+        + "(what/why/done) and set a sensible priority + estimate. Use your judgment; "
+        + "do not ask.\n"
+        + "2. ASSESS & LABEL the queue — for each issue, grant auto:plan/implement/test/"
+        + "ship by judgment of how easy/safe it is (read its description). NEVER grant "
+        + "auto:land. You may add labels the mechanical floor was too conservative to set, "
+        + "or strip one it over-granted.\n"
+        + "3. STOP. Do not execute issues, run /plan-my-work, or touch git/PRs.\n\n"
+        + "Do NOT investigate the tooling, hooks, or shell — just do the triage above via "
+        + "`/project-manager` commands. End with a one-line summary of what you enriched + "
+        + "labeled."
     let claude = Process()
     claude.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     claude.arguments = [
-        "timeout", timeoutS, "claude", "-p", "/project-manager groom",
-        "--permission-mode", "dontAsk",
-        "--allowedTools", allowed,
+        "timeout", timeoutS, "claude", "-p", prompt,
+        "--permission-mode", "auto",
+        "--settings", settingsJSON,
         "--max-turns", maxTurns,
     ]
-    // Run in the pbrain repo so the skill + plane.py resolve. Inherit our env (which
-    // launchd populated with HOME/USER/PATH) so the subscription keychain login is
-    // found; keep PBRAIN_PMG_HEADLESS so any nested groom stays non-interactive.
+    // Run in the pbrain repo so the skill + plane.py resolve. Inherit launchd's env
+    // (HOME/USER/PATH for the keychain login) and arm the triage guard hook — BUT
+    // REMOVE PBRAIN_PMG_HEADLESS so `groom run` emits the agent-facing groom-drive
+    // block (that block is suppressed when headless; here a real agent IS present).
+    env["PBRAIN_GROOM_TRIAGE_GUARD"] = "1"
+    env.removeValue(forKey: "PBRAIN_PMG_HEADLESS")
     claude.environment = env
     claude.currentDirectoryURL = URL(fileURLWithPath: (script as NSString).deletingLastPathComponent)
         .deletingLastPathComponent()  // commands/ -> repo root
