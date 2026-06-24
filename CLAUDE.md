@@ -80,6 +80,27 @@ Rules:
 
 ---
 
+## Nightly-groom flow doc — keep it in sync
+
+`docs/nightly-groom-flow.html` is the source-of-truth **flow diagram** for the nightly
+groom (all branches + leaves: launchd entry → mechanical scan → autonomous judgment
+pass → vault write). **Whenever you change the groom flow, update this doc in the same
+change.** "The flow" means any of:
+
+- `lib/pbrain-groom.swift` (the orchestrator: phases, the claude invocation, gating)
+- `lib/pm-groom.sh` (scheduling, project selection, queue/cache, doctor)
+- `lib/plane.py` groom pieces (`groom_run`, `thinness_flags`, `suggest_auto_stages`,
+  gate/marker labels like `GROOMED_LABEL`)
+- `commands/templates/project-manager/groom-drive.txt` (the judgment-pass instructions:
+  ASSESS & LABEL, the quality gate, autonomous-mode rules)
+- `lib/hooks/groom-triage-guard.sh` (the triage-only safety boundary)
+- any new env var, branch, phase, or invariant in the above
+
+When such a change lands, edit `docs/nightly-groom-flow.html` to match (the node it
+affects + the footer's "traced from / invariants" line) so the diagram never drifts
+from the code. If a change makes a whole phase obsolete, redraw that lane, don't just
+append a note.
+
 ## Repository layout (monorepo)
 
 Each file carries its own implementation detail in its header comment / docstring; the lines below are one-clause pointers. Slash-command behavior is in the index further down + each `commands/<cmd>.md`.
