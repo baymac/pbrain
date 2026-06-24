@@ -124,7 +124,8 @@ m.ensure_estimate_scale = lambda cfg,c,pid: {"x":1}
 m.est_uuid_to_hours = lambda cfg,pid: {"ep1": 2.0}
 m.thinness_flags = lambda issue, has_estimate_scale=False: []
 m.approved_label_ids = lambda c,pid: [APPROVED]
-m.gate_label_map = lambda c,pid: dict(GP)
+# gate_label_map returns {stage -> SET of label ids} (matches production contract)
+m.gate_label_map = lambda c,pid: {k:{v} for k,v in GP.items()}
 m.state_group = lambda issue, by_id: "unstarted"
 m.blocked_by_ids = lambda cfg,c,ref: []
 

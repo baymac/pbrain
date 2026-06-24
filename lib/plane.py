@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -770,22 +771,45 @@ class PlaneClient:
         if params:
             url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("X-API-Key", self.api_key)
-        req.add_header("Content-Type", "application/json")
+        # Retry on 429 (RATE_LIMIT_EXCEEDED) with backoff. Plane throttles bursts, and
+        # groom now does a label-write per todo issue, so a batch would otherwise drop
+        # writes silently. Honour Retry-After when present, else exponential backoff.
+        # PBRAIN_PLANE_MAX_RETRIES (default 4) / PBRAIN_PLANE_RETRY_BASE (default 1.5s).
         try:
-            with self._opener.open(req, timeout=30) as resp:
-                raw = resp.read().decode()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            detail = ""
+            max_retries = int(os.environ.get("PBRAIN_PLANE_MAX_RETRIES") or 4)
+        except (TypeError, ValueError):
+            max_retries = 4
+        try:
+            base = float(os.environ.get("PBRAIN_PLANE_RETRY_BASE") or 1.5)
+        except (TypeError, ValueError):
+            base = 1.5
+        attempt = 0
+        while True:
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("X-API-Key", self.api_key)
+            req.add_header("Content-Type", "application/json")
             try:
-                detail = e.read().decode()[:400]
-            except Exception:
-                pass
-            raise PlaneError("Plane API %s %s -> HTTP %s %s" % (method, path, e.code, detail))
-        except urllib.error.URLError as e:
-            raise PlaneError("Plane API unreachable (%s): %s" % (url, e))
+                with self._opener.open(req, timeout=30) as resp:
+                    raw = resp.read().decode()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < max_retries:
+                    ra = e.headers.get("Retry-After") if e.headers else None
+                    try:
+                        wait = float(ra) if ra else base * (2 ** attempt)
+                    except (TypeError, ValueError):
+                        wait = base * (2 ** attempt)
+                    time.sleep(min(wait, 30.0))
+                    attempt += 1
+                    continue
+                detail = ""
+                try:
+                    detail = e.read().decode()[:400]
+                except Exception:
+                    pass
+                raise PlaneError("Plane API %s %s -> HTTP %s %s" % (method, path, e.code, detail))
+            except urllib.error.URLError as e:
+                raise PlaneError("Plane API unreachable (%s): %s" % (url, e))
 
     def list_all(self, path, params=None):
         """Follow cursor pagination, return all `results`."""
@@ -1813,14 +1837,21 @@ def groom_run(cfg, client, project_ids, apply=False):
                     row["auto_suggested"] = suggested
                     # Apply: add only the stage labels not already present (idempotent,
                     # never removes a user-set label). Mechanical tier only ADDS.
+                    # gate_map values are SETS of label ids (a project can carry dupes);
+                    # pick one id per suggested stage.
                     if apply and suggested:
-                        want_ids = [gate_map[s] for s in suggested if s in gate_map]
-                        new_ids = merge_labels(cur_ids, add=want_ids)
-                        if set(new_ids) != set(cur_ids):
-                            try:
-                                client.update_work_item(pid, iid, {"labels": new_ids})
-                            except PlaneError:
-                                pass
+                        want_ids = []
+                        for s in suggested:
+                            ids = gate_map.get(s) or set()
+                            if ids:
+                                want_ids.append(sorted(ids)[0])
+                        if want_ids:
+                            new_ids = merge_labels(cur_ids, add=want_ids)
+                            if set(new_ids) != set(cur_ids):
+                                try:
+                                    client.update_work_item(pid, iid, {"labels": new_ids})
+                                except PlaneError:
+                                    pass
                 report["todo"].append(row)
                 counts["todo"] += 1
         report["projects"].append(
