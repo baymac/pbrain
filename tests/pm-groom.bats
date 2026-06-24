@@ -16,6 +16,10 @@ setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
   export PBRAIN_MIGRATIONS=0 PBRAIN_UPDATE_CHECK=0 PBRAIN_SELF_IMPROVE=off PBRAIN_NO_AUTOVAULT=1
+  # Deterministic entry point: default to the /bin/bash fallback so schedule tests
+  # don't depend on whether swiftc is installed. The dedicated wrapper tests below
+  # flip this off explicitly.
+  export PBRAIN_GROOM_NO_APP=1
   export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"
   export HOME="$TMP/home"; mkdir -p "$HOME/Library/LaunchAgents"
   export PBRAIN_VAULT="$TMP/vault"; mkdir -p "$PBRAIN_VAULT"
@@ -230,6 +234,73 @@ SHIM
   grep -q "## Needs review" "$data"
 }
 
+@test "pmg_staging_file is a non-iCloud config path distinct from the vault file" {
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  run pmg_staging_file 2026-06-22
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$PBRAIN_PMG_DIR/2026-06-22.data.md" ]]
+  # and it differs from the iCloud vault path
+  [[ "$output" != "$PBRAIN_VAULT"* ]]
+}
+
+@test "pmg_run writes the STAGING grooming-data even when the vault dir is unwritable" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"ready one"}],"needs_review":[],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"ready one","priority":"high"}]'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  # Simulate the headless-no-FDA case: make the vault grooming-data dir unwritable.
+  mkdir -p "$PBRAIN_VAULT/agent-work/daily-grooming"
+  chmod 500 "$PBRAIN_VAULT/agent-work/daily-grooming"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  chmod 755 "$PBRAIN_VAULT/agent-work/daily-grooming" 2>/dev/null || true
+  # The run still succeeds (vault write is best-effort) and staging IS written.
+  [ "$status" -eq 0 ]
+  staging="$PBRAIN_PMG_DIR/2026-06-22.data.md"
+  [ -f "$staging" ]
+  grep -q "## Queue — ordered (1)" "$staging"
+  grep -q "ready one" "$staging"
+}
+
+@test "pmg_run preserves ## Auto-work from the STAGING file when the vault copy is absent" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"x"}],"needs_review":[],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"x","priority":"high"}]'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  # Seed a prior staging file carrying a recorded Auto-work outcome, and NO vault file.
+  mkdir -p "$PBRAIN_PMG_DIR"
+  printf '# old\n\n## Auto-work\n\n- **1** parked at: test\n' > "$PBRAIN_PMG_DIR/2026-06-22.data.md"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  # The re-render must carry the prior Auto-work content forward (read from staging).
+  grep -q "parked at: test" "$PBRAIN_PMG_DIR/2026-06-22.data.md"
+}
+
 @test "groom run emits the agent-drive block interactively, suppresses it headless" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM
@@ -325,7 +396,8 @@ PYFAKE
     && [[ "$output" == *"today_report: (none)"* ]]
 }
 
-@test "groom enable writes the daily LaunchAgent plist with the run --apply entry" {
+@test "groom enable writes the daily LaunchAgent plist with the run --apply entry (bash fallback)" {
+  # PBRAIN_GROOM_NO_APP=1 (from setup) forces the /bin/bash entry point.
   run PM groom enable --time 06:40 --projects A,B
   [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_ENABLE* ]]
   plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
@@ -334,7 +406,28 @@ PYFAKE
     && grep -q "<integer>6</integer>" "$plist" \
     && grep -q "<integer>40</integer>" "$plist" \
     && grep -q "groom" "$plist" \
-    && grep -q "apply" "$plist"
+    && grep -q "apply" "$plist" \
+    && grep -q "PBRAIN_PMG_HEADLESS" "$plist"
+}
+
+@test "groom enable points the LaunchAgent at pbrain-groom.app when the binary is built" {
+  # Force the app path on, and stub a pre-built binary so no swiftc is needed.
+  unset PBRAIN_GROOM_NO_APP
+  export PBRAIN_GROOM_APP="$TMP/pbrain-groom.app"
+  mkdir -p "$PBRAIN_GROOM_APP/Contents/MacOS"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"
+  chmod +x "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"
+  # A no-op swiftc stub so any build attempt is harmless (source-hash fast path
+  # returns before calling it anyway, since the binary already exists).
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB/swiftc"; chmod +x "$STUB/swiftc"
+  run PM groom enable --time 06:40 --projects A,B
+  [ "$status" -eq 0 ]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  [ -f "$plist" ] \
+    && grep -q "pbrain-groom" "$plist" \
+    && grep -q -- "--script" "$plist" \
+    && grep -q -- "--staging-dir" "$plist" \
+    && grep -q -- "--vault-dir" "$plist"
 }
 
 @test "groom disable removes the LaunchAgent plist" {

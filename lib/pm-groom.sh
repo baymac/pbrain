@@ -44,6 +44,13 @@ pmg_plist()       { printf '%s\n' "$HOME/Library/LaunchAgents/$PMG_LABEL.plist";
 pmg_data_dir()  { printf '%s\n' "${PBRAIN_GROOM_DATA_DIR:-${VAULT_DIR:-$HOME/pbrain-vault}/agent-work/daily-grooming}"; }
 pmg_data_file() { printf '%s\n' "$(pmg_data_dir)/${1:?date}.md"; }
 
+# PB-94 / FDA wrapper: the grooming-data is ALSO rendered to a non-iCloud STAGING
+# path under the config dir. The nightly LaunchAgent runs headless (no Full Disk
+# Access), so it cannot write the iCloud vault path directly — it writes staging
+# (always succeeds), and the FDA-holding pbrain-groom.app copies staging -> vault.
+# The interactive path writes the vault file directly AND staging (harmless mirror).
+pmg_staging_file() { printf '%s\n' "$(pmg_report_dir)/${1:?date}.data.md"; }
+
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
 # reliable). Resolving it lazily inside a function is unsafe: by call time
 # BASH_SOURCE may be empty/relative, pointing pmg_plane_py at the wrong path.
@@ -55,6 +62,26 @@ pmg_plane_py() {
   if [[ -n "${PBRAIN_PLANE_PY:-}" ]]; then printf '%s\n' "$PBRAIN_PLANE_PY"; return; fi
   if [[ -n "${PLANE:-}" && -f "${PLANE:-}" ]]; then printf '%s\n' "$PLANE"; return; fi
   printf '%s\n' "$_PMG_LIB_DIR/plane.py"
+}
+
+# FDA wrapper: the nightly LaunchAgent entry point is a compiled, ad-hoc-signed
+# Swift helper (pbrain-groom.app) that runs this bash groom and then copies the
+# staging grooming-data into the iCloud vault in-process — the one privileged write,
+# attributed to a single binary the user grants Full Disk Access. Mirrors
+# pbrain_notify_build / the tracker app. Best-effort: no swiftc → the app is absent
+# and pmg_schedule_install falls back to plain /bin/bash args (no nightly vault
+# refresh, never a hard failure).
+PBRAIN_GROOM_APP="${PBRAIN_GROOM_APP:-$PMG_CONFIG_DIR/pbrain-groom.app}"
+pmg_groom_bin() { printf '%s\n' "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"; }
+
+pmg_groom_app_build() {
+  # PBRAIN_GROOM_NO_APP=1 forces the plain /bin/bash fallback (skips the compiled
+  # wrapper) — used by tests for a deterministic entry point, and an escape hatch
+  # for anyone who prefers no nightly vault refresh.
+  [[ "${PBRAIN_GROOM_NO_APP:-0}" == 1 ]] && return 0
+  declare -F pbrain_swift_build >/dev/null 2>&1 || return 0
+  pbrain_swift_build "$PBRAIN_GROOM_APP" "$_PMG_LIB_DIR/pbrain-groom.swift" \
+    "com.pbrain.groom" --sign
 }
 
 # pmg_today — today's date (YYYY-MM-DD). Overridable via PBRAIN_PMG_DATE (tests).
@@ -153,13 +180,25 @@ with open(out, "w") as f:
     f.write("\n".join(lines).rstrip() + "\n")
 PYEOF
 
-  # PB-94: also write the vault-synced grooming-data artifact (triage info + the
-  # auto-exec queue). The execute loop appends per-issue auto-work outcomes under
-  # "## Auto-work" when it drives the queue. Best-effort: a vault-write failure
-  # must not fail the (headless) groom run, so it's wrapped and never fatal.
-  local data_out; data_out="$(pmg_data_file "$date")"
-  mkdir -p "$(pmg_data_dir)" 2>/dev/null || true
-  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" PMG_DATA_OUT="$data_out" python3 - <<'PYEOF' 2>>"$logf" || true
+  # PB-94: write the grooming-data artifact (triage info + the ordered queue). The
+  # execute loop appends per-issue auto-work outcomes under "## Auto-work" when it
+  # drives the queue.
+  #
+  # FDA wrapper: render ONCE and write to TWO destinations —
+  #   * STAGING (~/.config/pbrain/pm-groom/<date>.data.md): non-iCloud, always
+  #     writable even headless under launchd (no Full Disk Access needed).
+  #   * VAULT (iCloud-synced, the file the user reviews): best-effort. The
+  #     interactive path has FDA and writes it directly here; the nightly
+  #     LaunchAgent can't, so pbrain-groom.app copies staging -> vault instead.
+  # The "## Auto-work" preservation reads the prior content from the VAULT file if
+  # readable, else the STAGING file — so a re-run never clobbers recorded outcomes
+  # regardless of which destination the last run managed to write.
+  local data_out staging_out
+  data_out="$(pmg_data_file "$date")"
+  staging_out="$(pmg_staging_file "$date")"
+  mkdir -p "$(pmg_data_dir)" "$(pmg_report_dir)" 2>/dev/null || true
+  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" \
+    PMG_DATA_OUT="$data_out" PMG_STAGING_OUT="$staging_out" python3 - <<'PYEOF' 2>>"$logf" || true
 import json, os
 data = json.loads(os.environ["PMG_JSON"])
 try:
@@ -168,18 +207,22 @@ except Exception:
     queue = []
 date = os.environ["PMG_DATE"]
 out = os.environ["PMG_DATA_OUT"]
+staging = os.environ.get("PMG_STAGING_OUT") or ""
 # Preserve an existing "## Auto-work" section (the execute loop / pmw writes into it
 # as it drives + parks issues), so a re-run of the scan doesn't clobber the day's
-# recorded outcomes.
+# recorded outcomes. Prefer the vault file (canonical), fall back to staging.
 existing_autowork = ""
-if os.path.exists(out):
+for src in (out, staging):
+    if not src:
+        continue
     try:
-        prev = open(out).read()
-        idx = prev.find("\n## Auto-work")
-        if idx != -1:
-            existing_autowork = prev[idx:].rstrip() + "\n"
+        prev = open(src).read()
     except Exception:
-        existing_autowork = ""
+        continue
+    idx = prev.find("\n## Auto-work")
+    if idx != -1:
+        existing_autowork = prev[idx:].rstrip() + "\n"
+        break
 L = []
 L.append("---")
 L.append("type: daily-grooming")
@@ -228,8 +271,24 @@ else:
     L.append("_Empty until `/plan-my-work` drives the queue — each id records how far "
              "it got (which stages auto-advanced) and the manual stage it parked at._")
     L.append("")
-with open(out, "w") as f:
-    f.write("\n".join(L).rstrip() + "\n")
+body = "\n".join(L).rstrip() + "\n"
+# STAGING write first — always-writable, the durable source of truth and the file
+# pbrain-groom.app copies into the vault when run headless without FDA.
+if staging:
+    try:
+        os.makedirs(os.path.dirname(staging), exist_ok=True)
+        with open(staging, "w") as f:
+            f.write(body)
+    except Exception:
+        pass
+# VAULT write best-effort — succeeds on the interactive (FDA) path, denied (EPERM)
+# under the headless LaunchAgent, where pbrain-groom.app handles the copy instead.
+try:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as f:
+        f.write(body)
+except Exception:
+    pass
 PYEOF
 
   pmg_prune "$(pmg_report_dir)" "${PBRAIN_PMG_KEEP:-14}"
@@ -269,6 +328,21 @@ pmg_status() {
   echo "scheduled: $sched"
   echo "label: $PMG_LABEL"
   echo "report_dir: $(pmg_report_dir)"
+  # FDA wrapper: which entry point is wired + whether the binary is built. When the
+  # plist invokes the binary, the nightly run refreshes the vault file in-process
+  # (needs the one-time Full Disk Access grant on pbrain-groom.app); otherwise it
+  # falls back to /bin/bash and only the interactive run refreshes the vault.
+  local bin; bin="$(pmg_groom_bin)"
+  if [[ -x "$bin" ]]; then
+    echo "groom_app: built ($PBRAIN_GROOM_APP)"
+  else
+    echo "groom_app: (not built — bash fallback; no nightly vault refresh)"
+  fi
+  if [[ -f "$plist" ]] && grep -q "pbrain-groom" "$plist" 2>/dev/null; then
+    echo "entry_point: pbrain-groom.app (grant it Full Disk Access for nightly vault writes)"
+  elif [[ -f "$plist" ]]; then
+    echo "entry_point: /bin/bash (interactive run backfills the vault)"
+  fi
   local today; today="$(pmg_today)"
   if pmg_report_fresh "$today"; then
     echo "today_report: $(pmg_report_file "$today")"
@@ -317,6 +391,24 @@ pmg_doctor() {
   if pbrain_launchagent_loaded "$PMG_LABEL" 2>/dev/null; then loaded=yes; fi
   echo "scheduled: $sched"
   echo "loaded: $loaded"
+
+  # --- 1b. FDA wrapper: nightly vault-write capability (read-only) --------
+  # The nightly LaunchAgent has no Full Disk Access, so it can only refresh the
+  # iCloud vault grooming-data file if it runs through pbrain-groom.app AND that
+  # binary has been granted FDA. Without it, the staging file is still written and
+  # the next interactive run backfills the vault.
+  local gbin; gbin="$(pmg_groom_bin)"
+  if [[ -x "$gbin" ]]; then
+    echo "groom_app: built"
+    if [[ -f "$plist" ]] && grep -q "pbrain-groom" "$plist" 2>/dev/null; then
+      echo "groom_entry: pbrain-groom.app"
+      echo "fda_action: grant Full Disk Access to $PBRAIN_GROOM_APP, then 'launchctl kickstart -k gui/\$(id -u)/$PMG_LABEL' — needed for nightly vault refresh"
+    else
+      echo "groom_entry: /bin/bash (re-run 'groom enable' to wire the app)"
+    fi
+  else
+    echo "groom_app: (not built — no swiftc? bash fallback; interactive run backfills the vault)"
+  fi
 
   # --- 2. Power source + AC Power Nap policy (read-only) -----------------
   local power_source="unknown" powernap_ac="unknown" sleep_ac="unknown"
@@ -400,13 +492,30 @@ pmg_schedule_install() {
   </dict>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>PBRAIN_PMG_HEADLESS</key><string>1</string>
   </dict>"
   # The scheduled run APPLIES the conservative triage (--apply) for the named
   # projects; thin issues are still only queued, never edited.
-  local args=(/bin/bash "$sh" groom run --apply)
-  [[ -n "$projects" ]] && args+=(--projects "$projects")
+  #
+  # FDA wrapper: prefer the compiled pbrain-groom.app as the entry point — it runs
+  # this same bash groom AND copies the staging grooming-data into the iCloud vault
+  # in-process (the one write that needs Full Disk Access, granted to that single
+  # binary). It sets PBRAIN_PMG_HEADLESS=1 + a Homebrew PATH itself, so the plist's
+  # EnvironmentVariables are only needed for the bash fallback below. If swiftc is
+  # unavailable (app not built), fall back to plain /bin/bash — the job still grooms
+  # and writes staging, just without the nightly vault refresh.
+  pmg_groom_app_build || true
+  local bin; bin="$(pmg_groom_bin)"
+  local args
+  if [[ -x "$bin" ]]; then
+    args=("$bin" --script "$sh")
+    [[ -n "$projects" ]] && args+=(--projects "$projects")
+    args+=(--staging-dir "$(pmg_report_dir)" --vault-dir "$(pmg_data_dir)")
+  else
+    args=(/bin/bash "$sh" groom run --apply)
+    [[ -n "$projects" ]] && args+=(--projects "$projects")
+  fi
   pbrain_launchagent_install "$PMG_LABEL" "$(pmg_plist)" "$(pmg_log_file)" "$extra" -- "${args[@]}"
 }
 

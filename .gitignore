@@ -12,9 +12,10 @@
 # Serena MCP per-project workspace (symbol cache, config, memories) — tool-
 # generated, regenerated on each run; never committed.
 .serena/
-# Compiled notifier app — a per-machine build artifact (normally built to
-# ~/.config/pbrain); never commit it if PBRAIN_NOTIFY_APP points in-tree.
-pbrain-notify.app/
+# Compiled helper apps (notify / overlay / reminders / tracker / groom) — per-machine
+# build artifacts compiled from lib/*.swift, normally built to ~/.config/pbrain; never
+# commit one if its PBRAIN_*_APP override ever points in-tree.
+pbrain-*.app/
 # Promo video raw renders — build artifacts; compressed copy lives in docs/media/
 promo-video/renders/
 
