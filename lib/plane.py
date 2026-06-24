@@ -872,6 +872,18 @@ class PlaneClient:
             body["color"] = color
         return self._request("POST", "projects/%s/labels/" % project_id, body=body)
 
+    def update_label(self, project_id, label_id, color=None, name=None):
+        body = {}
+        if color:
+            body["color"] = color
+        if name:
+            body["name"] = name
+        return self._request("PATCH", "projects/%s/labels/%s/" % (project_id, label_id),
+                             body=body)
+
+    def delete_label(self, project_id, label_id):
+        return self._request("DELETE", "projects/%s/labels/%s/" % (project_id, label_id))
+
     def list_members(self, project_id):
         return self.list_all("projects/%s/members/" % project_id)
 
@@ -2449,12 +2461,14 @@ def create_project(cfg, client, name, shortcut=None):
 def seed_convention_labels(client, project_id):
     """Ensure pbrain's seed labels exist on `project_id`: the CONVENTION_LABELS
     work types (PB-70), the plan-approved seam (PB-45), and the per-gate auto:*
-    clearances (PB-94). Idempotent: existing labels (fuzzy-matched by normalised
-    name) are left untouched; only missing ones are created, with their canonical
-    color. Returns {"created": [...names...], "existing": [...names...],
+    clearances (PB-94). Idempotent: a missing label is created with its canonical
+    color; an existing one (fuzzy-matched by normalised name) is left alone UNLESS
+    its color differs from the spec, in which case it is PATCHed to the canonical
+    color (so labels created colorless or with the wrong shade self-repair on a
+    re-seed). Returns {"created": [...], "existing": [...], "recolored": [...],
     "error": <str?>}. Never raises — label seeding is best-effort and reported,
     not fatal."""
-    out = {"created": [], "existing": []}
+    out = {"created": [], "existing": [], "recolored": []}
     try:
         existing = client.list_labels(project_id)
     except PlaneError as e:
@@ -2463,8 +2477,20 @@ def seed_convention_labels(client, project_id):
     by_norm = {_norm(l.get("name")): l for l in existing}
     for spec in _seed_label_specs():
         name = spec["name"]
-        if _norm(name) in by_norm:
-            out["existing"].append(name)
+        want = (spec.get("color") or "").lower()
+        match = by_norm.get(_norm(name))
+        if match is not None:
+            have = (match.get("color") or "").lower()
+            # Repair a missing or mismatched color on an existing label.
+            if want and have != want and match.get("id"):
+                try:
+                    client.update_label(project_id, match["id"], color=spec.get("color"))
+                    out["recolored"].append(name)
+                except PlaneError as e:
+                    out.setdefault("error", "")
+                    out["error"] += ("; " if out["error"] else "") + ("%s: %s" % (name, e))
+            else:
+                out["existing"].append(name)
             continue
         try:
             client.create_label(project_id, name, color=spec.get("color"))

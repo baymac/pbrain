@@ -558,7 +558,7 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "seed_convention_labels creates only missing convention labels, idempotent, fuzzy-skips existing (PB-70)" {
+@test "seed_convention_labels creates missing labels, recolors colorless/mismatched existing, idempotent (PB-70)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
@@ -572,26 +572,38 @@ assert {"bug","feature","chore","docs", m.APPROVED_LABEL} <= seed_names, seed_na
 assert {"auto:%s" % g for g in m.GATE_NAMES} <= seed_names, seed_names
 
 class FC:
-    def __init__(self, existing): self.labels=list(existing); self.created=[]
+    def __init__(self, existing): self.labels=list(existing); self.created=[]; self.recolored=[]
     def list_labels(self, pid): return list(self.labels)
     def create_label(self, pid, name, color=None):
         rec={"id":"n%d"%len(self.created),"name":name,"color":color}
         self.created.append(name); self.labels.append(rec); return rec
+    def update_label(self, pid, label_id, color=None, name=None):
+        for l in self.labels:
+            if l.get("id")==label_id:
+                if color: l["color"]=color
+                if name: l["name"]=name
+        self.recolored.append(label_id); return {"id":label_id,"color":color}
 
-# Start with one already present, fuzzily ('Bug' vs 'bug') -> it is skipped; the rest of
-# the seed set (convention types minus bug + plan-approved + auto:* gates) is created.
-fc=FC([{"id":"l1","name":"Bug"}])
+# Start with one already present, fuzzily ('Bug' vs 'bug') but COLORLESS -> it is
+# RECOLORED to the canonical color (not recreated); the rest of the seed set
+# (convention types minus bug + plan-approved + auto:* gates) is created.
+fc=FC([{"id":"l1","name":"Bug","color":None}])
 r1=m.seed_convention_labels(fc,"p")
 expected_created = sorted((seed_names - {"bug"}))
 assert sorted(r1["created"])==expected_created, (r1, expected_created)
-assert r1["existing"]==["bug"], r1
+assert r1["recolored"]==["bug"], r1                 # colorless existing -> repaired
+assert "bug" not in r1["existing"], r1
 assert "error" not in r1, r1
 # colors are applied on create
 assert any(l.get("color") for l in fc.labels if l["name"]=="feature"), fc.labels
+# and the recolor actually patched the existing 'Bug' label to the spec color
+bugspec=next(s for s in m._seed_label_specs() if s["name"]=="bug")
+assert any(l.get("color")==bugspec["color"] for l in fc.labels if l["name"]=="Bug"), fc.labels
 
-# Idempotent: a second pass creates nothing.
+# Idempotent: a second pass creates nothing and recolors nothing (colors now match).
 r2=m.seed_convention_labels(fc,"p")
 assert r2["created"]==[], r2
+assert r2["recolored"]==[], r2
 assert sorted(r2["existing"])==sorted(seed_names), r2
 
 # list_labels failure degrades to a reported error, never raises.
