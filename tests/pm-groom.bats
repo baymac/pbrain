@@ -603,6 +603,39 @@ PYFAKE
   [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_DISABLE* ]] && [ ! -f "$plist" ]
 }
 
+@test "groom enable --autonomous writes HOME/USER/AUTONOMOUS env (and no secret)" {
+  run PM groom enable --time 06:40 --autonomous
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: on"* ]]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  # the autonomous env keys are present...
+  local envblock
+  envblock="$(awk '/<key>EnvironmentVariables/,/<\/dict>/' "$plist")"
+  [[ "$envblock" == *PBRAIN_GROOM_AUTONOMOUS* ]]
+  [[ "$envblock" == *"<key>HOME</key>"* ]]
+  [[ "$envblock" == *"<key>USER</key>"* ]]
+  # ...and NO secret is ever written.
+  ! grep -qiE "api.?key|sk-ant|ANTHROPIC_API_KEY|token|secret" "$plist"
+}
+
+@test "plain groom enable does NOT add the autonomous env keys" {
+  run PM groom enable --time 06:40
+  [ "$status" -eq 0 ]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  local envblock
+  envblock="$(awk '/<key>EnvironmentVariables/,/<\/dict>/' "$plist")"
+  [[ "$envblock" != *PBRAIN_GROOM_AUTONOMOUS* ]]
+  [[ "$envblock" != *"<key>HOME</key>"* ]]
+}
+
+@test "groom status reports the autonomous mode (on after --autonomous, off otherwise)" {
+  PM groom enable --time 06:40 --autonomous >/dev/null
+  run PM groom status
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: on"* ]]
+  PM groom enable --time 06:40 >/dev/null
+  run PM groom status
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: off"* ]]
+}
+
 # --- PB-79: groom doctor (macOS power-settings diagnostic) -------------------
 
 @test "groom doctor FAILs when the agent isn't scheduled (clean machine)" {

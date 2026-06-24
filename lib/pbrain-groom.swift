@@ -111,6 +111,77 @@ do {
     exit(127)
 }
 
+// --- 1b. AUTONOMOUS judgment triage (opt-in) -------------------------------
+// When PBRAIN_GROOM_AUTONOMOUS=1, run a HEADLESS Claude session that does the
+// judgment triage the mechanical bash pass can't: enrich thin needs_review issues
+// (descriptions/estimates) and refine auto:* labels by real complexity. TRIAGE-ONLY
+// — the allowlist excludes git/gh/Edit and /plan-my-work, so it structurally cannot
+// execute issues. dontAsk mode = any clarifying question / unapproved tool is denied,
+// not blocked, so the agent uses its own judgment and never hangs. Best-effort: a
+// failure (claude missing, not logged in, timeout, budget) is logged and we still do
+// the vault copy of the mechanical result — never worse than today.
+if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
+    func envOr(_ key: String, _ fallback: String) -> String {
+        let v = ProcessInfo.processInfo.environment[key]
+        return (v != nil && !v!.isEmpty) ? v! : fallback
+    }
+    let maxTurns = envOr("PBRAIN_GROOM_MAX_TURNS", "30")
+    let budget   = envOr("PBRAIN_GROOM_MAX_BUDGET_USD", "2.00")
+    let timeoutS = envOr("PBRAIN_GROOM_CLAUDE_TIMEOUT", "600")
+    // Triage-only allowlist: Plane reads/writes via python3 + the project-manager
+    // wrapper, plus read tools. NO Bash(git*), NO gh, NO Edit, NO /plan-my-work.
+    let allowed = "Bash(python3 *),Bash(bash *project-manager.sh *),Read,Glob,Skill"
+    // Run claude under `timeout` so a hung session can't run forever. The session
+    // executes the same /project-manager groom skill; in headless dontAsk mode it
+    // can't reach /plan-my-work, so it stops after enrich + ASSESS & LABEL.
+    let claude = Process()
+    claude.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    claude.arguments = [
+        "timeout", timeoutS, "claude", "-p", "/project-manager groom",
+        "--permission-mode", "dontAsk",
+        "--allowedTools", allowed,
+        "--max-turns", maxTurns,
+        "--max-budget-usd", budget,
+    ]
+    // Run in the pbrain repo so the skill + plane.py resolve. Inherit our env (which
+    // launchd populated with HOME/USER/PATH) so the subscription keychain login is
+    // found; keep PBRAIN_PMG_HEADLESS so any nested groom stays non-interactive.
+    claude.environment = env
+    claude.currentDirectoryURL = URL(fileURLWithPath: (script as NSString).deletingLastPathComponent)
+        .deletingLastPathComponent()  // commands/ -> repo root
+    log("autonomous triage: launching headless claude (max-turns=\(maxTurns), budget=$\(budget), timeout=\(timeoutS)s)")
+    do {
+        try claude.run()
+        claude.waitUntilExit()
+        let rc = claude.terminationStatus
+        if rc == 124 {
+            log("autonomous triage: claude TIMED OUT after \(timeoutS)s — using mechanical result")
+        } else if rc != 0 {
+            log("autonomous triage: claude exited \(rc) — using mechanical result")
+        } else {
+            log("autonomous triage: claude completed")
+        }
+    } catch {
+        log("autonomous triage: could not launch claude (\(error)) — is it on PATH? using mechanical result")
+    }
+    // The claude session updated Plane (enriched + labeled), but the staging
+    // grooming-data file was written by the EARLIER bash pass. Re-run the bash groom
+    // (scan only, no apply needed for re-render — but --apply is idempotent) so the
+    // staging file reflects the post-triage Plane state before we copy it to the vault.
+    let rerender = Process()
+    rerender.executableURL = URL(fileURLWithPath: "/bin/bash")
+    var rargs = [script, "groom", "run", "--apply"]
+    if let p = projects, !p.isEmpty { rargs += ["--projects", p] }
+    rerender.arguments = rargs
+    rerender.environment = env
+    do {
+        try rerender.run()
+        rerender.waitUntilExit()
+    } catch {
+        log("autonomous triage: re-render after claude failed (\(error)) — vault may lag Plane")
+    }
+}
+
 // --- 2. copy staging -> vault in-process (this is the FDA-holding write) -----
 // Best-effort: never let a copy failure change the exit code. The staging file is
 // the durable source of truth; the vault copy is the convenience the FDA grant buys.

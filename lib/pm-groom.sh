@@ -427,6 +427,11 @@ pmg_status() {
   elif [[ -f "$plist" ]]; then
     echo "entry_point: /bin/bash (interactive run backfills the vault)"
   fi
+  if pmg_autonomous_enabled; then
+    echo "autonomous: on (headless Claude judgment triage — run 'groom doctor' to verify the login)"
+  else
+    echo "autonomous: off (mechanical triage only)"
+  fi
   local today; today="$(pmg_today)"
   if pmg_report_fresh "$today"; then
     echo "today_report: $(pmg_report_file "$today")"
@@ -494,6 +499,34 @@ pmg_doctor() {
     echo "groom_app: (not built — no swiftc? bash fallback; interactive run backfills the vault)"
   fi
 
+  # --- 1c. Autonomous (headless Claude) readiness ------------------------
+  # Only meaningful when the plist is wired for autonomous triage. We check the
+  # claude CLI AND its login UNDER THE LAUNCHD-EQUIVALENT ENV (env -i HOME/USER/PATH)
+  # so the result reflects what the nightly job actually sees — a check that only
+  # passed in the interactive shell would hide a broken nightly run. auto_bad drives
+  # the verdict so a missing CLI / not-logged-in surfaces here instead of silently
+  # no-op'ing every night.
+  local auto_bad=""
+  if pmg_autonomous_enabled; then
+    echo "autonomous: on (headless Claude judgment triage)"
+    local cli; cli="$(pmg_claude_cli)"
+    if [[ -n "$cli" ]]; then
+      echo "claude_cli: found ($cli)"
+      local probe; probe="$(pmg_claude_auth_probe)"
+      case "$probe" in
+        ok)         echo "claude_auth: OK (subscription login readable under launchd env)";;
+        notlogged)  echo "claude_auth: NOT LOGGED IN under launchd env — run /login in an interactive Claude session"; auto_bad=1;;
+        nocli)      echo "claude_auth: (no cli)"; auto_bad=1;;
+        unknown:*)  echo "claude_auth: UNKNOWN — ${probe#unknown:}"; auto_bad=1;;
+      esac
+    else
+      echo "claude_cli: MISSING under launchd PATH — install Claude Code or add it to the LaunchAgent PATH"
+      auto_bad=1
+    fi
+  else
+    echo "autonomous: off (mechanical triage only; 'groom enable --autonomous' to turn on)"
+  fi
+
   # --- 2. Power source + AC Power Nap policy (read-only) -----------------
   local power_source="unknown" powernap_ac="unknown" sleep_ac="unknown"
   if command -v pmset >/dev/null 2>&1; then
@@ -529,6 +562,11 @@ pmg_doctor() {
   if [[ "$sched" != yes || "$loaded" != yes ]]; then
     verdict="FAIL"
     fix="groom isn't scheduled — run: /project-manager groom enable"
+  elif [[ -n "$auto_bad" ]]; then
+    # Scheduled, but autonomous mode is on and the Claude CLI/login won't work under
+    # launchd — the nightly judgment-triage pass would silently no-op every night.
+    verdict="FAIL"
+    fix="autonomous groom is enabled but the headless Claude run can't authenticate — see claude_cli/claude_auth above (install Claude Code or run /login in an interactive session). The mechanical groom still works; fix this to get judgment triage."
   elif [[ "$powernap_ac" == "unknown" ]]; then
     verdict="UNKNOWN"
     fix="couldn't read AC power policy (pmset unavailable) — can't confirm overnight firing"
@@ -560,14 +598,72 @@ pmg_doctor() {
   return 0
 }
 
-# pmg_schedule_install [HH:MM] [csv-projects] — daily LaunchAgent that runs the
-# groom scan. Default 06:40 (a few hours before a typical first work block).
+# pmg_groom_launchd_path — the PATH the LaunchAgent needs. Homebrew (python/envsubst)
+# + the standard dirs, PLUS — for autonomous mode — the claude CLI dir and node's dir
+# (claude's hooks shell out to node). Derived from the live install so it matches what
+# the user actually has, not a guess.
+pmg_groom_launchd_path() {
+  local base="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local extra_dirs=""
+  local claude_bin node_bin
+  claude_bin="$(command -v claude 2>/dev/null || true)"
+  node_bin="$(command -v node 2>/dev/null || true)"
+  [[ -n "$claude_bin" ]] && extra_dirs+=":$(dirname "$claude_bin")"
+  [[ -n "$node_bin" ]] && extra_dirs+=":$(dirname "$node_bin")"
+  printf '%s%s\n' "$base" "$extra_dirs"
+}
+
+# pmg_autonomous_enabled — is the live plist wired for the headless-Claude triage pass?
+pmg_autonomous_enabled() {
+  local plist; plist="$(pmg_plist)"
+  [[ -f "$plist" ]] && grep -q "PBRAIN_GROOM_AUTONOMOUS" "$plist" 2>/dev/null
+}
+
+# pmg_claude_cli — path to the claude CLI as the LAUNCHD job would resolve it (using
+# the plist PATH), or empty. Echoes the path; rc 0 if found.
+pmg_claude_cli() {
+  local p; p="$(pmg_groom_launchd_path)"
+  env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$p" command -v claude 2>/dev/null
+}
+
+# pmg_claude_auth_probe — does headless claude AUTH work under the LAUNCHD-equivalent
+# clean env? This is the whole point: a check that passes in the interactive shell but
+# fails under launchd would be worse than none. Bounded + read-only (one trivial
+# prompt). Echoes: ok | notlogged | unknown:<first line> | nocli.
+pmg_claude_auth_probe() {
+  local cli; cli="$(pmg_claude_cli)"
+  [[ -n "$cli" ]] || { printf 'nocli\n'; return 0; }
+  local p out; p="$(pmg_groom_launchd_path)"
+  out="$(timeout 30 env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$p" \
+        claude -p "Reply with the single word: OK" --max-turns 1 </dev/null 2>&1 || true)"
+  if printf '%s' "$out" | grep -qi "not logged in"; then printf 'notlogged\n'
+  elif printf '%s' "$out" | grep -qi "\bOK\b"; then printf 'ok\n'
+  else printf 'unknown:%s\n' "$(printf '%s' "$out" | head -1 | cut -c1-80)"; fi
+}
+
+# pmg_schedule_install [HH:MM] [csv-projects] [autonomous] — daily LaunchAgent that
+# runs the groom scan. Default 06:40 (a few hours before a typical first work block).
+# autonomous=1 wires the headless-Claude judgment-triage pass (PBRAIN_GROOM_AUTONOMOUS
+# + HOME/USER + a claude/node-inclusive PATH so the subscription keychain login is
+# found). NO secret is written — auth is the user's existing keychain login.
 pmg_schedule_install() {
-  local hhmm="${1:-06:40}" projects="${2:-}"
+  local hhmm="${1:-06:40}" projects="${2:-}" autonomous="${3:-}"
   local sh
   sh="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../commands" && pwd -P)/project-manager.sh"
   local hh="${hhmm%%:*}" mm="${hhmm##*:}"
   hh=$((10#${hh:-6})); mm=$((10#${mm:-40}))
+  local path_val auto_env=""
+  if [[ "$autonomous" == 1 ]]; then
+    path_val="$(pmg_groom_launchd_path)"
+    # HOME/USER let the launchd-spawned claude locate its keychain login; the
+    # AUTONOMOUS flag turns on the wrapper's Claude step. No token, ever.
+    auto_env="    <key>HOME</key><string>$HOME</string>
+    <key>USER</key><string>${USER:-$(id -un)}</string>
+    <key>PBRAIN_GROOM_AUTONOMOUS</key><string>1</string>
+"
+  else
+    path_val="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  fi
   local extra
   extra="  <key>StartCalendarInterval</key>
   <dict>
@@ -576,9 +672,9 @@ pmg_schedule_install() {
   </dict>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>$path_val</string>
     <key>PBRAIN_PMG_HEADLESS</key><string>1</string>
-  </dict>"
+$auto_env  </dict>"
   # The scheduled run APPLIES the conservative triage (--apply) for the named
   # projects; thin issues are still only queued, never edited.
   #

@@ -11,6 +11,20 @@ BACKLOG IS UNTOUCHED. groom only ever looks at `todo` — backlog is the user's 
 area. An issue runs only once the user has moved it to todo; you never promote backlog
 here.
 
+AUTONOMOUS MODE (headless nightly run, no human present). If you are running
+non-interactively (a launchd-spawned `claude -p` session — there is no user to answer
+questions, and AskUserQuestion/unapproved tools are DENIED, not awaited), then:
+  • Do TRIAGE ONLY — enrich + ASSESS & LABEL — and STOP before DRIVE. You have no
+    git/PR tools and cannot reach `/plan-my-work`; do not attempt to execute issues.
+  • ENRICH thin issues yourself with your best judgment: for each `## Needs review`
+    item, write a concrete description (what/why/done), set a sensible priority and a
+    rough estimate, via `${PM_CMD} enrich`/`tag`/`update`. Don't ask — decide. A
+    reasonable enrichment the user can adjust beats leaving the issue un-runnable.
+  • Then ASSESS & LABEL the queue (below) by judgment, and finish. Leave a one-line
+    summary of what you enriched + labeled; the user reviews it on waking.
+This is the whole job in autonomous mode: turn a raw todo list into a groomed, labeled,
+runnable queue overnight — using judgment in place of the questions you'd otherwise ask.
+
 READ FIRST. Open the `## Queue — ordered` table in $GROOM_DATA_FILE. The `Auto` column
 shows the stages the NIGHTLY mechanical heuristic pre-granted (a conservative floor).
 An empty queue → nothing to drive; say so and stop (the `## Needs review` list still

@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -821,8 +821,12 @@ PYEOF
         ;;
       enable)
         echo "PM_GROOM_ENABLE"
-        pmg_schedule_install "${F_time:-06:40}" "${F_projects:-}" || true
+        pmg_schedule_install "${F_time:-06:40}" "${F_projects:-}" \
+          "$(_has_bool autonomous && printf 1 || printf 0)" || true
         echo "scheduled: $(pmg_plist)"
+        if _has_bool autonomous; then
+          echo "autonomous: on (headless Claude judgment triage; run 'groom doctor' to verify the claude login)"
+        fi
         ;;
       disable)
         echo "PM_GROOM_DISABLE"
