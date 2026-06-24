@@ -81,10 +81,22 @@ the page. The renderer (`lib/whats-new-render.py`) understands:
 Prose with **bold**, `code`, [links](https://…).
 - optional bullets
 
+​```flow                        ← a connected-chip pipeline diagram
+plan -> implement -> test -> ship -> land
+​```
+
 ​```bash                        ← a fenced block becomes a "Try it" command card
 /some-command --flag
 ​```
+
+| Command | What changed | Try |   ← a scannable coverage table
+|---|---|---|
+| `/x` | does y | `cmd` |
 ```
+
+Lean on the **table** for breadth (cover every changed command at a glance) and
+the **flow** + **try-it cards** for the headline features. The goal is a guide a
+user can skim in 20 seconds, not a wall of prose.
 
 Keep it to a few features, lead with the user-visible win, and put a runnable
 command in each "try it" block. If no `<version>.md` exists, the pipeline falls

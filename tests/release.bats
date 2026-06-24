@@ -181,6 +181,33 @@ EOF
   [[ "$out" == *"/cmd"* ]]
 }
 
+@test "render: a markdown table becomes a styled <table>" {
+  out="$(printf '## S\n\n| Command | Does |\n|---|---|\n| `/x` | thing |\n| `/y` | other |\n' \
+    | bash "$SBX/lib/whats-new.sh" render 1.0.0)"
+  [[ "$out" == *"<table>"* ]]
+  [[ "$out" == *"<th>Command</th>"* ]]
+  [[ "$out" == *"<td><code>/x</code></td>"* ]]
+  [[ "$out" == *"<td>thing</td>"* ]]
+  [[ "$out" == *"<td>other</td>"* ]]
+}
+
+@test "render: a flow block becomes connected chips" {
+  out="$(printf '## S\n\n```flow\nplan -> implement -> land\n```\n' \
+    | bash "$SBX/lib/whats-new.sh" render 1.0.0)"
+  [[ "$out" == *'class="flow"'* ]]
+  [[ "$out" == *'class="chip">plan</span>'* ]]
+  [[ "$out" == *'class="chip">implement</span>'* ]]
+  [[ "$out" == *'class="chip">land</span>'* ]]
+  [[ "$out" == *'class="arrow"'* ]]
+}
+
+@test "render: flow accepts unicode arrows too" {
+  out="$(printf '## S\n\n```flow\na → b\n```\n' \
+    | bash "$SBX/lib/whats-new.sh" render 1.0.0)"
+  [[ "$out" == *'class="chip">a</span>'* ]]
+  [[ "$out" == *'class="chip">b</span>'* ]]
+}
+
 @test "whats-new latest picks the highest SemVer doc" {
   mkdir -p "$SBX/docs/whats-new"
   : > "$SBX/docs/whats-new/0.9.0.html"
