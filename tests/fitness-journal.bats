@@ -319,8 +319,11 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
+  # PB-37: fitness-journal is a profile-owning command, so a persisted standing pref
+  # folds into the fitness profile's "prefs" array (fitness-profile.vN.md), NOT a
+  # separate fitness-journal/prefs.md file.
   [[ "$output" == *"or say 'skip'"* && "$output" == *"Skip the quick check-in"* \
-     && "$output" == *"fitness-journal/prefs.md"* ]]
+     && "$output" == *"fitness-profile"* && "$output" == *'"prefs" array'* ]]
 }
 
 @test "phase 2 is today's picture with one question, not a menu dump" {

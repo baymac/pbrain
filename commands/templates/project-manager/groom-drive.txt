@@ -11,9 +11,79 @@ BACKLOG IS UNTOUCHED. groom only ever looks at `todo` — backlog is the user's 
 area. An issue runs only once the user has moved it to todo; you never promote backlog
 here.
 
-READ FIRST. Open the `## Queue — ordered` table in $GROOM_DATA_FILE. An empty queue →
-nothing to drive; say so and stop (the `## Needs review` list still stands for the user
-to enrich). Otherwise, drive the queue top to bottom:
+AUTONOMOUS MODE (headless nightly run, no human present). If you are running
+non-interactively (a launchd-spawned `claude -p` session — there is no user to answer
+questions, and AskUserQuestion/unapproved tools are DENIED, not awaited), then:
+  • Do TRIAGE ONLY — enrich + ASSESS & LABEL — and STOP before DRIVE. You have no
+    git/PR tools and cannot reach `/plan-my-work`; do not attempt to execute issues.
+  • ENRICH thin issues yourself with your best judgment: for each `## Needs review`
+    item, write a concrete description (what/why/done), set a sensible priority and a
+    rough estimate, via `${PM_CMD} enrich`/`tag`/`update`. Don't ask — decide. A
+    reasonable enrichment the user can adjust beats leaving the issue un-runnable.
+  • Then ASSESS & LABEL the queue (below) by judgment — and apply the step-1a QUALITY
+    GATE to EVERY queue item too, not only the `## Needs review` list: a half-baked
+    description (one letter / placeholder / vague) that slipped past the empty-only thin
+    check still gets enriched here (skip any issue already tagged `auto:groomed`). Then
+    finish. Leave a one-line summary of what you enriched + labeled; reviewed on waking.
+This is the whole job in autonomous mode: turn a raw todo list into a groomed, labeled,
+runnable queue overnight — using judgment in place of the questions you'd otherwise ask.
+
+READ FIRST. Open the `## Queue — ordered` table in $GROOM_DATA_FILE. The `Auto` column
+shows the stages the NIGHTLY mechanical heuristic pre-granted (a conservative floor).
+An empty queue → nothing to drive; say so and stop (the `## Needs review` list still
+stands for the user to enrich). Otherwise, do ASSESS & LABEL, then DRIVE.
+
+ASSESS & LABEL — this is a MAJOR part of grooming, not a preamble. The nightly heuristic
+is deliberately conservative (it only grants auto:implement to approved+small+unblocked
+issues). YOU have the judgment it lacks: read each queued issue and decide how far it
+should auto-run, then set the labels. For each id in `## Queue — ordered`:
+  1. Read the issue: `${PM_CMD} spec "<tie>" --read` → has_plan, approved, description,
+     comments (AUTHORITATIVE — newest wins), blocked_by, current auto_gates, and labels.
+  1a. QUALITY GATE (judgment, not presence). The thin-check upstream only catches EMPTY
+     fields — a one-letter or placeholder description ("x", "wip", "todo", "tbd", "?") or a
+     vague target-less one-liner ("fix the thing", "make it better") PASSES it but is NOT
+     good enough to run. You already have the description/priority/estimate in hand, so judge
+     QUALITY before labeling:
+       • Description — does it say WHAT to change and HOW you'd know it's done? Placeholder /
+         single-word / vague-no-target ⇒ not good enough.
+       • Priority — plausible for the work? A clearly high-impact/blocking issue left at
+         low/none, or a trivial chore at urgent, is wrong ⇒ reset it.
+       • Estimate (only if the project has a scale) — set and roughly plausible for scope?
+         Missing/absurd ⇒ set a sensible one.
+     If it FAILS any check, ENRICH it now — exactly like a `## Needs review` item
+     (`${PM_CMD} enrich`/`priority`/`estimate`/`update`) — then continue to labeling.
+     Autonomous mode: decide and apply, don't ask. Interactive: propose, then apply.
+     Be CONSERVATIVE — improve genuinely-thin fields; do NOT rewrite already-adequate prose.
+     IDEMPOTENCY: if the issue ALREADY carries `auto:groomed`, SKIP this gate (a prior run
+     vetted it — don't re-touch good work). Once it clears (or you enriched it to clear),
+     `${PM_CMD} tag "<tie>" --add auto:groomed`. (auto:groomed is a marker, not a pipeline
+     stage — it never affects auto-advance.)
+     RECORD each issue you ENRICHED (not the ones already fine): append ONE line under the
+     `## Enriched this run` heading in the grooming-data file ($GROOM_DATA_FILE), in the form
+     `- [<REF>](<url>) — <what you set>` (e.g. `- [PB-108](…/browse/PB-108) — wrote
+     description; priority→high; est 3`). Use the SAME clickable link format as the queue
+     (project SHORTCUT, e.g. PB/YT/KA — never the project name). This is what the morning
+     review reads to see what the AI auto-enriched; leave the heading's placeholder line
+     untouched if you enriched nothing.
+  2. JUDGE which stages are safe to auto-advance (you may grant MORE than the nightly
+     floor, or REMOVE one it set that you judge unwarranted):
+       • auto:plan      — if the issue is well-formed enough to plan. Low-risk; default yes.
+       • auto:implement — if the work is clearly SIMPLE and low-risk: small, well-scoped,
+                          no thorny unknowns, blockers resolved. A complicated or vague
+                          issue does NOT get it (let it park at plan for your review).
+                          You may grant this from the description even with NO saved plan,
+                          when the work is obviously easy.
+       • auto:test      — if testing is straightforward (clear test surface / existing
+                          test patterns). Skip for pure docs/chore where tests don't apply.
+       • auto:ship      — if shipping intent is clear (a real change headed for a PR).
+       • auto:land      — NEVER. Merge is always a manual, irreversible gate.
+  3. APPLY your decision: `${PM_CMD} tag "<tie>" --add "auto:implement,auto:test,auto:ship"`
+     for the stages you grant; `${PM_CMD} tag "<tie>" --remove "auto:test"` to strip one
+     the heuristic over-granted. Labels are independent + stop-at-first-gap, so only grant
+     a contiguous run from plan (granting ship without implement just parks at implement).
+  4. Note the final stage set per id; you'll record it in `## Auto-work` after driving.
+Conservative bias: when unsure, grant LESS — a parked issue is a safe review point, an
+over-granted one auto-runs code you didn't vet. Never grant auto:land.
 
 DRIVE THE QUEUE — for each id in `## Queue — ordered`, in order:
   1. Hand it to the execution loop: `/plan-my-work <PB-id>`. That command owns the
@@ -31,9 +101,10 @@ INVARIANTS (owned by execute.txt — never weakened here):
   • The merge (stage land) is irreversible. Without `auto:land` it is a manual park
     point; even WITH `auto:land`, CI must be green — a red CI parks the issue, never
     merges. groom never types the confirm for you.
-  • groom never adds an `auto:<stage>` label to make something auto-run. The labels are
-    the user's (or the triage agent's) decision; groom only feeds ids and records
-    outcomes.
+  • groom DOES assign auto:plan/implement/test/ship by judgment (the ASSESS & LABEL
+    phase above) — that's intended grooming. But it NEVER assigns `auto:land`: the
+    final merge is always the user's manual gate. Granting a stage = trusting it to run
+    unattended, so bias conservative and leave the irreversible step to the user.
   • Thin issues (in `## Needs review`) are NOT in the queue — they need enrichment
     first and must not be driven.
 

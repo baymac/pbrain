@@ -16,6 +16,10 @@ setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TMP="$(mktemp -d)"
   export PBRAIN_MIGRATIONS=0 PBRAIN_UPDATE_CHECK=0 PBRAIN_SELF_IMPROVE=off PBRAIN_NO_AUTOVAULT=1
+  # Deterministic entry point: default to the /bin/bash fallback so schedule tests
+  # don't depend on whether swiftc is installed. The dedicated wrapper tests below
+  # flip this off explicitly.
+  export PBRAIN_GROOM_NO_APP=1
   export XDG_CONFIG_HOME="$TMP/config"; mkdir -p "$XDG_CONFIG_HOME/pbrain"
   export HOME="$TMP/home"; mkdir -p "$HOME/Library/LaunchAgents"
   export PBRAIN_VAULT="$TMP/vault"; mkdir -p "$PBRAIN_VAULT"
@@ -230,6 +234,315 @@ SHIM
   grep -q "## Needs review" "$data"
 }
 
+@test "pmg_staging_file is a non-iCloud config path distinct from the vault file" {
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  run pmg_staging_file 2026-06-22
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$PBRAIN_PMG_DIR/2026-06-22.data.md" ]]
+  # and it differs from the iCloud vault path
+  [[ "$output" != "$PBRAIN_VAULT"* ]]
+}
+
+@test "pmg_web_base resolves the BROWSER host (plane.localhost), not the 127.0.0.1 loopback" {
+  # A real plane.json whose base_url is the loopback the API client uses.
+  mkdir -p "$XDG_CONFIG_HOME/pbrain"
+  cat > "$XDG_CONFIG_HOME/pbrain/plane.json" <<'JSON'
+{"base_url":"http://127.0.0.1:1800","api_key":"k","workspace":"pb"}
+JSON
+  run env -u PBRAIN_PLANE_WEB_BASE PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_web_base"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "http://plane.localhost:1800/pb" ]]
+  [[ "$output" != *127.0.0.1* ]]
+}
+
+# Seed a committed weekly-goals profile for the test ISO week (PBRAIN_PMG_DATE
+# 2026-06-22 -> ISO 2026-W26) listing the given comma-separated plane_project ids.
+_seed_weekly_goals() {
+  local store="$PBRAIN_VAULT/life/daily-planning/.profile"
+  mkdir -p "$store"
+  local goals=""
+  local IFS=,; local first=1
+  for pid in $1; do
+    [[ $first -eq 1 ]] || goals+=","
+    goals+="{\"plane_project\":\"$pid\",\"project_name\":\"p\",\"allocation_percent\":100}"
+    first=0
+  done
+  cat > "$store/weekly-goals.v1.md" <<EOF
+---
+version: 1
+committed: true
+---
+\`\`\`json
+{"period":"2026-W26","goals":[$goals]}
+\`\`\`
+EOF
+}
+
+@test "pmg_default_projects returns this week's weekly-goal plane_project ids" {
+  source "$REPO_ROOT/lib/vault.sh"
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  _seed_weekly_goals "PID-ONE,PID-TWO"
+  run pmg_default_projects
+  [ "$status" -eq 0 ]
+  [[ "$output" == "PID-ONE,PID-TWO" ]]
+}
+
+@test "pmg_default_projects is empty when there are no weekly goals (-> all-registry fallback)" {
+  source "$REPO_ROOT/lib/vault.sh"
+  source "$REPO_ROOT/lib/pm-groom.sh"
+  # no weekly-goals file seeded
+  run pmg_default_projects
+  [ "$status" -eq 0 ]
+  [[ -z "$output" ]]
+}
+
+@test "pmg_run with NO --projects scans only the weekly-goal projects" {
+  _seed_weekly_goals "WG-PID"
+  local realpy; realpy="$(command -v python3)"
+  # Shim records which --projects the groom/ready scan was invoked with.
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+seen=""
+for ((k=1;k<=\$#;k++)); do
+  if [[ "\${!k}" == "--projects" ]]; then n=\$((k+1)); seen="\${!n}"; fi
+done
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then echo "PROJECTS_SEEN=\$seen" >> "$TMP/seen.log"
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --apply"
+  [ "$status" -eq 0 ]
+  grep -q "PROJECTS_SEEN=WG-PID" "$TMP/seen.log"
+}
+
+@test "pmg_run with explicit --projects overrides the weekly-goal default" {
+  _seed_weekly_goals "WG-PID"
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+seen=""
+for ((k=1;k<=\$#;k++)); do
+  if [[ "\${!k}" == "--projects" ]]; then n=\$((k+1)); seen="\${!n}"; fi
+done
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then echo "PROJECTS_SEEN=\$seen" >> "$TMP/seen.log"
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects EXPLICIT-PID --apply"
+  [ "$status" -eq 0 ]
+  grep -q "PROJECTS_SEEN=EXPLICIT-PID" "$TMP/seen.log"
+}
+
+@test "queue renders the Issue id as a clickable Plane browse link" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":89,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":89,"title":"x","priority":"urgent","project":"pb"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  grep -q '\[PB-89\](http://plane.localhost:1800/pb/browse/PB-89)' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+}
+
+@test "queue table renders an Auto column with the granted stages" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":7,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":7,"title":"x","priority":"high","project":"pb","auto_gates":["plan","implement"]}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  grep -q '| # | Issue | Priority | Auto | Title |' "$F"
+  grep -q 'plan,implement' "$F"
+}
+
+@test "queue link uses the project SHORTCUT, not the name (multi-word project → no spaces)" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":2,"title":"x","priority":"high","project":"YouTube Summary Extension","project_short":"YT"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  # the link is built from YT (the shortcut), with NO spaces — clickable
+  grep -q '\[YT-2\](http://plane.localhost:1800/pb/browse/YT-2)' "$F"
+  # and the broken name-based form must NOT appear
+  ! grep -q 'YOUTUBE SUMMARY EXTENSION-2' "$F"
+}
+
+@test "queue abridges a long title so the row stays one line" {
+  local realpy; realpy="$(command -v python3)"
+  local longtitle="project-manager enforce file sole intake new work plus audit demote distracting low-level primitives everywhere"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":5,"title":"$longtitle","priority":"high","project":"pb","project_short":"PB"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  # the full untruncated title must NOT appear; the ellipsis must
+  ! grep -q "low-level primitives everywhere" "$F"
+  grep -q '…' "$F"
+}
+
+@test "grooming file has an Enriched-this-run section, preserved across re-renders" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then echo '[]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  grep -q '## Enriched this run' "$F"
+  # simulate the agent appending an entry, then re-render and confirm it survives
+  printf '\n- [PB-9](x) — wrote description; priority→high\n' >> "$F"
+  # also append to the staging copy the re-render reads from
+  S="$PBRAIN_PMG_DIR/2026-06-22.md"
+  [ -f "$S" ] && printf '\n## Enriched this run\n\n- [PB-9](x) — wrote description; priority→high\n' >> "$S" || true
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  grep -q 'PB-9.*wrote description' "$F"
+}
+
+@test "queue Issue cell falls back to a bare ref when no web base is configured" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":89,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":89,"title":"x","priority":"urgent","project":"pb"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  # bare ref present, no markdown link
+  grep -q 'PB-89' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  ! grep -q '](http' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+}
+
+@test "pmg_run writes the STAGING grooming-data even when the vault dir is unwritable" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"ready one"}],"needs_review":[],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"ready one","priority":"high"}]'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  # Simulate the headless-no-FDA case: make the vault grooming-data dir unwritable.
+  mkdir -p "$PBRAIN_VAULT/agent-work/daily-grooming"
+  chmod 500 "$PBRAIN_VAULT/agent-work/daily-grooming"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  chmod 755 "$PBRAIN_VAULT/agent-work/daily-grooming" 2>/dev/null || true
+  # The run still succeeds (vault write is best-effort) and staging IS written.
+  [ "$status" -eq 0 ]
+  staging="$PBRAIN_PMG_DIR/2026-06-22.data.md"
+  [ -f "$staging" ]
+  grep -q "## Queue — ordered (1)" "$staging"
+  grep -q "ready one" "$staging"
+}
+
+@test "pmg_run preserves ## Auto-work from the STAGING file when the vault copy is absent" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":1,"title":"x"}],"needs_review":[],"errors":[]}'
+    exit 0
+  fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":1,"title":"x","priority":"high"}]'
+    exit 0
+  fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  # Seed a prior staging file carrying a recorded Auto-work outcome, and NO vault file.
+  mkdir -p "$PBRAIN_PMG_DIR"
+  printf '# old\n\n## Auto-work\n\n- **1** parked at: test\n' > "$PBRAIN_PMG_DIR/2026-06-22.data.md"
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  # The re-render must carry the prior Auto-work content forward (read from staging).
+  grep -q "parked at: test" "$PBRAIN_PMG_DIR/2026-06-22.data.md"
+}
+
 @test "groom run emits the agent-drive block interactively, suppresses it headless" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM
@@ -325,7 +638,8 @@ PYFAKE
     && [[ "$output" == *"today_report: (none)"* ]]
 }
 
-@test "groom enable writes the daily LaunchAgent plist with the run --apply entry" {
+@test "groom enable writes the daily LaunchAgent plist with the run --apply entry (bash fallback)" {
+  # PBRAIN_GROOM_NO_APP=1 (from setup) forces the /bin/bash entry point.
   run PM groom enable --time 06:40 --projects A,B
   [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_ENABLE* ]]
   plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
@@ -334,7 +648,28 @@ PYFAKE
     && grep -q "<integer>6</integer>" "$plist" \
     && grep -q "<integer>40</integer>" "$plist" \
     && grep -q "groom" "$plist" \
-    && grep -q "apply" "$plist"
+    && grep -q "apply" "$plist" \
+    && grep -q "PBRAIN_PMG_HEADLESS" "$plist"
+}
+
+@test "groom enable points the LaunchAgent at pbrain-groom.app when the binary is built" {
+  # Force the app path on, and stub a pre-built binary so no swiftc is needed.
+  unset PBRAIN_GROOM_NO_APP
+  export PBRAIN_GROOM_APP="$TMP/pbrain-groom.app"
+  mkdir -p "$PBRAIN_GROOM_APP/Contents/MacOS"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"
+  chmod +x "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"
+  # A no-op swiftc stub so any build attempt is harmless (source-hash fast path
+  # returns before calling it anyway, since the binary already exists).
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB/swiftc"; chmod +x "$STUB/swiftc"
+  run PM groom enable --time 06:40 --projects A,B
+  [ "$status" -eq 0 ]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  [ -f "$plist" ] \
+    && grep -q "pbrain-groom" "$plist" \
+    && grep -q -- "--script" "$plist" \
+    && grep -q -- "--staging-dir" "$plist" \
+    && grep -q -- "--vault-dir" "$plist"
 }
 
 @test "groom disable removes the LaunchAgent plist" {
@@ -343,6 +678,39 @@ PYFAKE
   [ -f "$plist" ]
   run PM groom disable
   [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_DISABLE* ]] && [ ! -f "$plist" ]
+}
+
+@test "groom enable --autonomous writes HOME/USER/AUTONOMOUS env (and no secret)" {
+  run PM groom enable --time 06:40 --autonomous
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: on"* ]]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  # the autonomous env keys are present...
+  local envblock
+  envblock="$(awk '/<key>EnvironmentVariables/,/<\/dict>/' "$plist")"
+  [[ "$envblock" == *PBRAIN_GROOM_AUTONOMOUS* ]]
+  [[ "$envblock" == *"<key>HOME</key>"* ]]
+  [[ "$envblock" == *"<key>USER</key>"* ]]
+  # ...and NO secret is ever written.
+  ! grep -qiE "api.?key|sk-ant|ANTHROPIC_API_KEY|token|secret" "$plist"
+}
+
+@test "plain groom enable does NOT add the autonomous env keys" {
+  run PM groom enable --time 06:40
+  [ "$status" -eq 0 ]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  local envblock
+  envblock="$(awk '/<key>EnvironmentVariables/,/<\/dict>/' "$plist")"
+  [[ "$envblock" != *PBRAIN_GROOM_AUTONOMOUS* ]]
+  [[ "$envblock" != *"<key>HOME</key>"* ]]
+}
+
+@test "groom status reports the autonomous mode (on after --autonomous, off otherwise)" {
+  PM groom enable --time 06:40 --autonomous >/dev/null
+  run PM groom status
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: on"* ]]
+  PM groom enable --time 06:40 >/dev/null
+  run PM groom status
+  [ "$status" -eq 0 ] && [[ "$output" == *"autonomous: off"* ]]
 }
 
 # --- PB-79: groom doctor (macOS power-settings diagnostic) -------------------

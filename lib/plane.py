@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -96,10 +97,21 @@ PLAN_MARKER = "Implementation Plan"  # heading the spec walk writes into the des
 GATE_NAMES = ["plan", "implement", "test", "ship", "land"]
 GATE_LABELS = [{"name": "auto:%s" % g, "color": "#7c3aed"} for g in GATE_NAMES]  # violet
 
+# The groom QUALITY-VET marker (not a pipeline gate). The judgment pass (autonomous
+# nightly Claude or interactive groom) sets this once it has vetted an issue's
+# description/priority/estimate quality — so later nights SKIP re-vetting it (zero
+# churn). Strip it in Plane to request a re-vet. Deliberately NOT in GATE_NAMES, so
+# the gate machinery (gate_label_map / suggest_auto_stages / issue_gate_clearances)
+# ignores it — it only ever iterates GATE_NAMES. Seeded so `tag --add auto:groomed`
+# resolves to a real label instead of creating one ad-hoc.
+GROOMED_LABEL = {"name": "auto:groomed", "color": "#8b5cf6"}  # violet (marker, not gate)
+
 # All labels pbrain seeds into a project: work-type conventions (PB-70), the
-# plan-approval seam (PB-45), and the per-gate auto clearances (PB-94).
+# plan-approval seam (PB-45), the per-gate auto clearances (PB-94), and the groom
+# quality-vet marker.
 def _seed_label_specs():
-    return CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}] + GATE_LABELS
+    return (CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}]
+            + GATE_LABELS + [GROOMED_LABEL])
 
 # Canonical "convention" labels (PB-70). Every project gets these work-item TYPE
 # labels so triage is consistent across the workspace: a `bug` filed via
@@ -366,6 +378,25 @@ def project_label(cfg, pid):
     return pid
 
 
+def project_short(cfg, pid):
+    """The project's UPPERCASED shortcut/identifier (e.g. 'PB', 'YT', 'KA') — the slug
+    Plane uses in browse URLs (.../browse/PB-89). Falls back to a spaceless squash of
+    the name, then the id. Pure. Use this (NOT project_label, the display name) anywhere
+    a URL slug or issue ref like '<SHORT>-<seq>' is built — a name with spaces produces
+    a broken link (e.g. 'YOUTUBE SUMMARY EXTENSION-2')."""
+    for p in normalize_registry(cfg):
+        if p["id"] == pid:
+            sc = (p.get("shortcut") or p.get("identifier") or "").strip()
+            if sc:
+                return sc.upper()
+            name = (p.get("name") or "").strip()
+            if name:
+                # last resort: squash the name to a spaceless token so the URL is valid
+                return "".join(name.split()).upper()
+            return pid
+    return pid
+
+
 # --- estimates (story points) ----------------------------------------------
 # Plane's PUBLIC v1 API can neither list nor create estimate points — only the
 # cookie-auth INTERNAL API (/api/workspaces/.../estimates/) exposes them. But
@@ -440,6 +471,48 @@ def _vhost_from_base(base_url):
     except Exception:
         pass
     return hosts
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def web_base(cfg):
+    """The BROWSER-FACING Plane base for clickable issue links — distinct from the
+    API `base_url`, which is the 127.0.0.1 loopback the client talks to. The single
+    source of truth so groom + /plan-my-work never drift.
+
+    Rules:
+      * PBRAIN_PLANE_WEB_BASE wins outright (explicit escape hatch).
+      * Else parse base_url. If its host is a loopback (the local self-host flow,
+        where the browser is served at the vhost while pbrain hits the loopback),
+        swap to the preferred NON-loopback vanity host from _vhost_from_base
+        (i.e. plane.localhost), keeping the same scheme + port. A real hostname
+        (VPS/domain, e.g. plane.example.com) is kept as-is.
+      * Append /<workspace> when known.
+    Returns "" when nothing is resolvable (callers fall back). Pure (reads env)."""
+    override = os.environ.get("PBRAIN_PLANE_WEB_BASE")
+    if override:
+        return override.rstrip("/")
+    base = (cfg or {}).get("base_url") or ""
+    if not base:
+        return ""
+    try:
+        u = urllib.parse.urlparse(base)
+    except Exception:
+        return ""
+    scheme = u.scheme or "http"
+    host = u.hostname or ""
+    port = u.port
+    if host in _LOOPBACK_HOSTS:
+        # Prefer the first non-loopback candidate (plane.localhost) as the browser host.
+        host = next((h for h in _vhost_from_base(base) if h not in _LOOPBACK_HOSTS),
+                    host)
+    netloc = "%s:%s" % (host, port) if port else host
+    out = "%s://%s" % (scheme, netloc)
+    ws = (cfg or {}).get("workspace")
+    if ws:
+        out += "/%s" % ws
+    return out.rstrip("/")
 
 
 # Chromium browsers we know how to read on macOS: dir + Keychain "Safe Storage" key.
@@ -728,22 +801,45 @@ class PlaneClient:
         if params:
             url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("X-API-Key", self.api_key)
-        req.add_header("Content-Type", "application/json")
+        # Retry on 429 (RATE_LIMIT_EXCEEDED) with backoff. Plane throttles bursts, and
+        # groom now does a label-write per todo issue, so a batch would otherwise drop
+        # writes silently. Honour Retry-After when present, else exponential backoff.
+        # PBRAIN_PLANE_MAX_RETRIES (default 4) / PBRAIN_PLANE_RETRY_BASE (default 1.5s).
         try:
-            with self._opener.open(req, timeout=30) as resp:
-                raw = resp.read().decode()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            detail = ""
+            max_retries = int(os.environ.get("PBRAIN_PLANE_MAX_RETRIES") or 4)
+        except (TypeError, ValueError):
+            max_retries = 4
+        try:
+            base = float(os.environ.get("PBRAIN_PLANE_RETRY_BASE") or 1.5)
+        except (TypeError, ValueError):
+            base = 1.5
+        attempt = 0
+        while True:
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("X-API-Key", self.api_key)
+            req.add_header("Content-Type", "application/json")
             try:
-                detail = e.read().decode()[:400]
-            except Exception:
-                pass
-            raise PlaneError("Plane API %s %s -> HTTP %s %s" % (method, path, e.code, detail))
-        except urllib.error.URLError as e:
-            raise PlaneError("Plane API unreachable (%s): %s" % (url, e))
+                with self._opener.open(req, timeout=30) as resp:
+                    raw = resp.read().decode()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < max_retries:
+                    ra = e.headers.get("Retry-After") if e.headers else None
+                    try:
+                        wait = float(ra) if ra else base * (2 ** attempt)
+                    except (TypeError, ValueError):
+                        wait = base * (2 ** attempt)
+                    time.sleep(min(wait, 30.0))
+                    attempt += 1
+                    continue
+                detail = ""
+                try:
+                    detail = e.read().decode()[:400]
+                except Exception:
+                    pass
+                raise PlaneError("Plane API %s %s -> HTTP %s %s" % (method, path, e.code, detail))
+            except urllib.error.URLError as e:
+                raise PlaneError("Plane API unreachable (%s): %s" % (url, e))
 
     def list_all(self, path, params=None):
         """Follow cursor pagination, return all `results`."""
@@ -871,6 +967,18 @@ class PlaneClient:
         if color:
             body["color"] = color
         return self._request("POST", "projects/%s/labels/" % project_id, body=body)
+
+    def update_label(self, project_id, label_id, color=None, name=None):
+        body = {}
+        if color:
+            body["color"] = color
+        if name:
+            body["name"] = name
+        return self._request("PATCH", "projects/%s/labels/%s/" % (project_id, label_id),
+                             body=body)
+
+    def delete_label(self, project_id, label_id):
+        return self._request("DELETE", "projects/%s/labels/%s/" % (project_id, label_id))
 
     def list_members(self, project_id):
         return self.list_all("projects/%s/members/" % project_id)
@@ -1554,9 +1662,11 @@ def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=Fals
         except PlaneError:
             continue
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         for r in rs:
             r["project_id"] = pid
             r["project"] = label
+            r["project_short"] = short
             rows.append(r)
     _ready_sort(rows)
     if ordered:
@@ -1601,6 +1711,7 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
         except PlaneError:
             continue
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         has_scale = bool(ensure_estimate_scale(cfg, client, pid))
         for r in rs:
             iid = r["issue_id"]
@@ -1613,8 +1724,52 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
             flags = thinness_flags(issue, has_estimate_scale=has_scale)
             if flags:
                 out.append({"tie": r["tie"], "project_id": pid, "project": label,
-                            "id": r.get("id"), "title": r["title"], "flags": flags})
+                            "project_short": short, "id": r.get("id"),
+                            "title": r["title"], "flags": flags})
     return out
+
+
+# How small (in estimate-hours) an issue must be for the NIGHTLY mechanical heuristic
+# to call implementation "easy" and pre-grant auto:implement. Conservative on purpose:
+# the heuristic is a safe FLOOR; the interactive agent (Tier 2) does the real judgment
+# and may grant more. Override via PBRAIN_GROOM_AUTO_MAX_HOURS.
+_AUTO_EASY_MAX_HOURS = 3.0
+
+
+def suggest_auto_stages(issue, *, approved=False, has_open_blockers=False,
+                        has_open_children=False, est_hours=None, is_docs_or_chore=False):
+    """The NIGHTLY mechanical heuristic: which auto:<stage> labels to pre-grant a
+    well-formed todo issue, WITHOUT an LLM. Pure. Conservative (better to under-label
+    — the user reviews the Auto column and the interactive agent refines). Rules:
+
+      * auto:plan      — always (drafting + SAVING a plan is low-risk + reviewable).
+      * auto:implement — only when the work looks genuinely easy: an APPROVED plan
+                         exists AND no open blockers AND no open sub-issues AND the
+                         estimate is small (<= _AUTO_EASY_MAX_HOURS). A complicated
+                         plan (no approval / big estimate / blockers / children) does
+                         NOT get auto:implement.
+      * auto:test      — only if implement was granted (test-after-implement) AND the
+                         issue isn't a pure docs/chore item where tests don't apply.
+      * auto:ship      — only if implement was granted (a clear path to a PR).
+      * auto:land      — NEVER (merge stays a manual, irreversible gate).
+
+    Returns a stage-name list in GATE_NAMES order (a subset of plan/implement/test/
+    ship), never including 'land'."""
+    try:
+        max_h = float(os.environ.get("PBRAIN_GROOM_AUTO_MAX_HOURS")
+                      or _AUTO_EASY_MAX_HOURS)
+    except (TypeError, ValueError):
+        max_h = _AUTO_EASY_MAX_HOURS
+    stages = ["plan"]
+    small = (est_hours is not None and est_hours <= max_h)
+    easy_impl = (approved and not has_open_blockers and not has_open_children and small)
+    if easy_impl:
+        stages.append("implement")
+        if not is_docs_or_chore:
+            stages.append("test")
+        stages.append("ship")
+    # NEVER auto:land. Keep GATE_NAMES order.
+    return [g for g in GATE_NAMES if g in stages]
 
 
 def groom_run(cfg, client, project_ids, apply=False):
@@ -1635,10 +1790,16 @@ def groom_run(cfg, client, project_ids, apply=False):
     JSON-able report dict: `todo` (well-formed, pipeline-ready) + `needs_review`
     (thin todo issues to enrich).
     """
+    # PB-94+: groom now also PRE-GRANTS auto:<stage> labels (except auto:land) to
+    # well-formed todo issues via the nightly mechanical heuristic (suggest_auto_stages).
+    # Tier 2 (the interactive groom-drive agent) refines these by real judgment.
+    # PBRAIN_GROOM_NO_AUTO=1 disables auto-assignment (mechanical triage only).
+    auto_off = os.environ.get("PBRAIN_GROOM_NO_AUTO") == "1"
     report = {"generated_for": list(project_ids), "applied": bool(apply),
               "projects": [], "todo": [], "needs_review": [], "errors": []}
     for pid in project_ids:
         label = project_label(cfg, pid)
+        short = project_short(cfg, pid)
         try:
             states = client.list_states(pid)
             states_by_id = {s["id"]: s for s in states}
@@ -1647,6 +1808,22 @@ def groom_run(cfg, client, project_ids, apply=False):
         except PlaneError as e:
             report["errors"].append({"project_id": pid, "project": label, "error": str(e)})
             continue
+        # Per-project maps for the auto-stage heuristic (best-effort; degrade to off).
+        approved_ids = set()
+        gate_map = {}
+        hours_by_ep = {}
+        labels_by_id = {}
+        if not auto_off:
+            try:
+                approved_ids = set(approved_label_ids(client, pid))
+                gate_map = gate_label_map(client, pid)
+                hours_by_ep = est_uuid_to_hours(cfg, pid)
+                labels_by_id = {l.get("id"): (l.get("name") or "")
+                                for l in client.list_labels(pid)}
+            except Exception:
+                # Any failure (PlaneError, or a minimal client lacking these methods)
+                # disables auto-assignment for this project — never crashes groom.
+                approved_ids, gate_map, hours_by_ep, labels_by_id = set(), {}, {}, {}
         counts = {"todo": 0, "needs_review": 0, "skipped": 0}
         for issue in issues:
             if issue.get("parent"):
@@ -1661,12 +1838,62 @@ def groom_run(cfg, client, project_ids, apply=False):
             title = issue.get("name", "")
             flags = thinness_flags(issue, has_estimate_scale=has_scale)
             row = {"tie": "%s:%s" % (pid, iid), "project_id": pid, "project": label,
-                   "id": seq, "title": title, "group": grp}
+                   "project_short": short, "id": seq, "title": title, "group": grp}
             if flags:
                 row["flags"] = flags
                 report["needs_review"].append(row)
                 counts["needs_review"] += 1
             else:
+                # NIGHTLY heuristic: pre-grant auto:<stage> labels (never land).
+                # Skip entirely when the project maps couldn't be built (gate_map empty
+                # = no auto labels resolvable / minimal client) — best-effort.
+                if not auto_off and gate_map:
+                    # CHEAP signals first (no network — all from the already-fetched
+                    # issue + project maps).
+                    cur_ids = issue_labels(issue)
+                    names = {labels_by_id.get(lid, "") for lid in cur_ids}
+                    approved = bool(set(cur_ids) & approved_ids)
+                    ep = issue.get("estimate_point")
+                    est_h = hours_by_ep.get(ep) if ep else None
+                    is_dc = bool(names & {"docs", "chore"})
+                    small = (est_h is not None and est_h <= _AUTO_EASY_MAX_HOURS)
+                    # The EXPENSIVE per-issue checks (sub-issues + blockers, 2 API calls
+                    # each) only change the outcome when implement is otherwise eligible
+                    # (approved AND small). Otherwise the issue gets auto:plan only and
+                    # the checks are wasted — so SKIP them. This keeps the nightly scan
+                    # to ~O(projects) network calls, not O(issues), which is what was
+                    # exhausting Plane's rate limit and emptying the queue.
+                    has_kids = has_block = False
+                    if approved and small:
+                        try:
+                            has_kids = bool(client.list_sub_issues(pid, iid))
+                        except PlaneError:
+                            has_kids = False
+                        try:
+                            has_block = bool(blocked_by_ids(cfg, client, "%s:%s" % (pid, iid)))
+                        except Exception:
+                            has_block = False
+                    suggested = suggest_auto_stages(
+                        issue, approved=approved, has_open_blockers=has_block,
+                        has_open_children=has_kids, est_hours=est_h, is_docs_or_chore=is_dc)
+                    row["auto_suggested"] = suggested
+                    # Apply: add only the stage labels not already present (idempotent,
+                    # never removes a user-set label). Mechanical tier only ADDS.
+                    # gate_map values are SETS of label ids (a project can carry dupes);
+                    # pick one id per suggested stage.
+                    if apply and suggested:
+                        want_ids = []
+                        for s in suggested:
+                            ids = gate_map.get(s) or set()
+                            if ids:
+                                want_ids.append(sorted(ids)[0])
+                        if want_ids:
+                            new_ids = merge_labels(cur_ids, add=want_ids)
+                            if set(new_ids) != set(cur_ids):
+                                try:
+                                    client.update_work_item(pid, iid, {"labels": new_ids})
+                                except PlaneError:
+                                    pass
                 report["todo"].append(row)
                 counts["todo"] += 1
         report["projects"].append(
@@ -2449,12 +2676,14 @@ def create_project(cfg, client, name, shortcut=None):
 def seed_convention_labels(client, project_id):
     """Ensure pbrain's seed labels exist on `project_id`: the CONVENTION_LABELS
     work types (PB-70), the plan-approved seam (PB-45), and the per-gate auto:*
-    clearances (PB-94). Idempotent: existing labels (fuzzy-matched by normalised
-    name) are left untouched; only missing ones are created, with their canonical
-    color. Returns {"created": [...names...], "existing": [...names...],
+    clearances (PB-94). Idempotent: a missing label is created with its canonical
+    color; an existing one (fuzzy-matched by normalised name) is left alone UNLESS
+    its color differs from the spec, in which case it is PATCHed to the canonical
+    color (so labels created colorless or with the wrong shade self-repair on a
+    re-seed). Returns {"created": [...], "existing": [...], "recolored": [...],
     "error": <str?>}. Never raises — label seeding is best-effort and reported,
     not fatal."""
-    out = {"created": [], "existing": []}
+    out = {"created": [], "existing": [], "recolored": []}
     try:
         existing = client.list_labels(project_id)
     except PlaneError as e:
@@ -2463,8 +2692,20 @@ def seed_convention_labels(client, project_id):
     by_norm = {_norm(l.get("name")): l for l in existing}
     for spec in _seed_label_specs():
         name = spec["name"]
-        if _norm(name) in by_norm:
-            out["existing"].append(name)
+        want = (spec.get("color") or "").lower()
+        match = by_norm.get(_norm(name))
+        if match is not None:
+            have = (match.get("color") or "").lower()
+            # Repair a missing or mismatched color on an existing label.
+            if want and have != want and match.get("id"):
+                try:
+                    client.update_label(project_id, match["id"], color=spec.get("color"))
+                    out["recolored"].append(name)
+                except PlaneError as e:
+                    out.setdefault("error", "")
+                    out["error"] += ("; " if out["error"] else "") + ("%s: %s" % (name, e))
+            else:
+                out["existing"].append(name)
             continue
         try:
             client.create_label(project_id, name, color=spec.get("color"))
@@ -2594,6 +2835,19 @@ def cmd_use(args):
     cfg["backend"] = args.backend
     p = save_config(cfg)
     print("PLANE_BACKEND %s (%s)" % (args.backend, p))
+    return 0
+
+
+def cmd_webbase(args):
+    """Print the browser-facing Plane base for clickable links (the single source of
+    truth shared by groom + /plan-my-work). Empty line + rc 0 when unconfigured, so
+    shell callers can `$(... web-base)` without error handling."""
+    try:
+        cfg = load_config()
+    except Exception:
+        print("")
+        return 0
+    print(web_base(cfg))
     return 0
 
 
@@ -3115,6 +3369,7 @@ def build_parser():
 
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)
     sp = sub.add_parser("ping"); sp.add_argument("--project"); sp.set_defaults(func=cmd_ping)
+    sp = sub.add_parser("web-base"); sp.set_defaults(func=cmd_webbase)
     sp = sub.add_parser("states"); sp.add_argument("--project"); sp.set_defaults(func=cmd_states)
 
     sp = sub.add_parser("ready")

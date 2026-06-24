@@ -110,10 +110,19 @@ pbrain_emit_prefs "plan-my-work" || true
 TODAY="$(date +%Y-%m-%d)"
 # PBRAIN_NOW lets tests pin "now" (HH:MM) deterministically; falls back to wall clock.
 NOW_TIME="${PBRAIN_NOW:-$(date +%H:%M)}"
-PLANE_WEB_BASE="${PBRAIN_PLANE_WEB_BASE:-http://plane.localhost:1800/pb}"
 HABITS_CMD="$(pbrain_habits_cmd 2>/dev/null || true)"
 PM_CMD="$(pbrain_projects_manager_cmd 2>/dev/null || true)"
 PM_CMD="${PM_CMD:-/project-manager}"
+
+# Browser-facing Plane base for clickable links — derive from the backend's
+# `web-base` (single source of truth: swaps the 127.0.0.1 loopback for the vanity
+# host, honours PBRAIN_PLANE_WEB_BASE). Fall back to the local-default vhost only if
+# the backend yields nothing, so links are never blank.
+PLANE_WEB_BASE="${PBRAIN_PLANE_WEB_BASE:-}"
+if [[ -z "$PLANE_WEB_BASE" ]]; then
+  PLANE_WEB_BASE="$(eval "$PM_CMD web-base" 2>/dev/null | grep -E '^https?://' | tail -1 || true)"
+fi
+PLANE_WEB_BASE="${PLANE_WEB_BASE:-http://plane.localhost:1800/pb}"
 
 # Plane is the sole state store now — the loop cannot run without it.
 if ! pbrain_plane_configured; then

@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nightly groom — end-to-end flow</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141a23; --panel2:#1b232f; --line:#2a3340;
+    --ink:#e6edf3; --dim:#9aa6b2; --mute:#6e7681;
+    --start:#d29922; --proc:#58a6ff; --dec:#a371f7; --good:#3fb950; --bad:#f85149;
+    --park:#39c5cf; --gate:#7c3aed;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;font-size:14px}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 90px}
+  h1{font-size:28px;margin:0 0 2px;letter-spacing:-.02em}
+  .sub{color:var(--dim);margin:0 0 22px;font-size:14px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 26px;font-size:12px;color:var(--dim)}
+  .legend b{display:inline-flex;align-items:center;gap:6px;font-weight:500}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  .lane{margin:0 0 8px}
+  .lanehdr{display:flex;align-items:center;gap:10px;margin:30px 0 10px}
+  .lanehdr .ph{font-family:var(--mono);font-size:11px;background:var(--gate);color:#fff;padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.03em}
+  .lanehdr h2{font-size:17px;margin:0;letter-spacing:-.01em}
+  .lanehdr .who{font-family:var(--mono);font-size:11px;color:var(--mute);margin-left:auto}
+
+  /* node */
+  .node{border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin:0;background:var(--panel);position:relative}
+  .node .t{font-size:13.5px;font-weight:600}
+  .node .d{font-size:12.5px;color:var(--dim);margin-top:3px}
+  .node code{font-family:var(--mono);font-size:11.5px;background:#0a0d12;padding:1px 5px;border-radius:4px;color:#9fd0ff}
+  .node.start{border-color:#5a430f;background:#241c08}
+  .node.start .t{color:var(--start)}
+  .node.proc{border-left:3px solid var(--proc)}
+  .node.dec{border-left:3px solid var(--dec);background:var(--panel2)}
+  .node.good{border-left:3px solid var(--good)}
+  .node.bad{border-left:3px solid var(--bad)}
+  .node.park{border-left:3px solid var(--park)}
+  .node.leaf{border-style:dashed;background:#10151d}
+
+  .col{display:flex;flex-direction:column;align-items:stretch;gap:0}
+  .arr{align-self:center;color:var(--mute);font-family:var(--mono);font-size:15px;line-height:1;padding:5px 0}
+  .arr.lbl{font-size:11px;color:var(--dim)}
+
+  /* branch split */
+  .split{display:grid;gap:14px;margin:6px 0}
+  .split.two{grid-template-columns:1fr 1fr}
+  .split.three{grid-template-columns:1fr 1fr 1fr}
+  .branch{border:1px dashed var(--line);border-radius:10px;padding:10px 10px 12px;background:#0e131b}
+  .branch .cond{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:20px;display:inline-block;margin-bottom:8px}
+  .cond.y{color:var(--good);border:1px solid #1f4a2b;background:#0c1f14}
+  .cond.n{color:var(--bad);border:1px solid #4a1f1f;background:#1f0c0c}
+  .cond.alt{color:var(--proc);border:1px solid #1d3a52;background:#0c1722}
+
+  .small{font-size:11.5px;color:var(--mute);font-family:var(--mono);margin-top:4px}
+  .ref{font-family:var(--mono);font-size:10.5px;color:var(--mute)}
+  .callout{border:1px solid;border-radius:10px;padding:12px 15px;margin:16px 0;font-size:13px}
+  .callout.key{background:#141026;border-color:#3a2a5a}
+  .callout.key b{color:var(--dec)}
+  .footer{color:var(--mute);font-size:12px;margin-top:46px;border-top:1px solid var(--line);padding-top:14px;font-family:var(--mono)}
+  .tag{font-family:var(--mono);font-size:10px;color:var(--mute);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nightly groom — end-to-end flow</h1>
+  <p class="sub">every branch &amp; leaf, traced from the code · <span class="tag">launchd 06:40</span> <span class="tag">pbrain-groom.app</span></p>
+
+  <div class="legend">
+    <b><span class="dot" style="background:var(--start)"></span> start / trigger</b>
+    <b><span class="dot" style="background:var(--proc)"></span> process</b>
+    <b><span class="dot" style="background:var(--dec)"></span> decision</b>
+    <b><span class="dot" style="background:var(--good)"></span> success path</b>
+    <b><span class="dot" style="background:var(--bad)"></span> blocked / degraded</b>
+    <b><span class="dot" style="background:var(--park)"></span> safety stop</b>
+  </div>
+
+  <!-- ============ TRIGGER ============ -->
+  <div class="lane">
+    <div class="col">
+      <div class="node start"><div class="t">⏰ 06:40 — launchd fires <code>com.pbrain.pm-groom</code></div>
+        <div class="d">StartCalendarInterval. Needs the Mac awake on AC (Power Nap) — <code>groom doctor</code> checks this.</div></div>
+      <div class="arr">│</div>
+      <div class="node dec"><div class="t">Entry point? <span class="ref">(which binary the plist runs)</span></div></div>
+    </div>
+
+    <div class="split two">
+      <div class="branch">
+        <span class="cond y">app built (swiftc present)</span>
+        <div class="node proc"><div class="t">runs <code>pbrain-groom.app</code></div>
+          <div class="d">the FDA-holding orchestrator → continues below</div></div>
+      </div>
+      <div class="branch">
+        <span class="cond n">no swiftc / NO_APP</span>
+        <div class="node bad"><div class="t">falls back to <code>/bin/bash … groom run</code></div>
+          <div class="d">mechanical only · no autonomous step · vault write best-effort (no FDA holder) → interactive run backfills it</div>
+          <div class="small">leaf: degraded-but-works</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PHASE 1: MECHANICAL ============ -->
+  <div class="lanehdr"><span class="ph">phase 1</span><h2>Mechanical scan</h2><span class="who">bash + python · NO LLM</span></div>
+  <div class="col">
+    <div class="node proc"><div class="t">app runs <code>bash project-manager.sh groom run --apply</code></div>
+      <div class="d">with <code>PBRAIN_PMG_HEADLESS=1</code> + a homebrew PATH</div></div>
+    <div class="arr lbl">↓ which projects?</div>
+    <div class="node dec"><div class="t"><code>--projects</code> passed?</div></div>
+  </div>
+  <div class="split two">
+    <div class="branch"><span class="cond alt">no flag (default)</span>
+      <div class="node proc"><div class="t">this week's <b>weekly-goal</b> projects</div>
+        <div class="d">reads <code>plane_project</code> ids from the weekly-goals profile. None set → all-registry fallback.</div></div></div>
+    <div class="branch"><span class="cond alt">explicit <code>--projects</code></span>
+      <div class="node proc"><div class="t">exactly those projects</div><div class="d">override wins</div></div></div>
+  </div>
+
+  <div class="arr">↓ for EACH issue in those projects</div>
+  <div class="node dec"><div class="t">per-issue routing <span class="ref">(groom_run loop)</span></div></div>
+  <div class="split three">
+    <div class="branch"><span class="cond n">has a parent</span>
+      <div class="node leaf"><div class="t">SKIP</div><div class="d">sub-issues groom via their parent</div></div></div>
+    <div class="branch"><span class="cond n">not in todo group</span>
+      <div class="node leaf"><div class="t">SKIP</div><div class="d">backlog &amp; terminal are never touched</div></div></div>
+    <div class="branch"><span class="cond y">todo + top-level</span>
+      <div class="node proc"><div class="t">evaluate it ↓</div></div></div>
+  </div>
+
+  <div class="arr">↓</div>
+  <div class="node dec"><div class="t">thin? <span class="ref">thinness_flags: missing description / priority / estimate</span></div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond n">thin</span>
+      <div class="node park"><div class="t">→ <b>## Needs review</b></div>
+        <div class="d">NOT in the run queue — needs enrichment first (the judgment pass, phase 2, fills these)</div></div></div>
+    <div class="branch"><span class="cond y">well-formed</span>
+      <div class="node good"><div class="t">→ <b>queue</b> + apply the auto-label floor ↓</div></div></div>
+  </div>
+
+  <!-- auto-stage decision -->
+  <div class="arr lbl">↓ mechanical auto-label heuristic (conservative floor, no LLM)</div>
+  <div class="node dec"><div class="t"><code>suggest_auto_stages</code> — which <code>auto:*</code> to pre-grant?</div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond n">NOT (approved &amp; small &amp; no blockers &amp; no children)</span>
+      <div class="node proc"><div class="t">grant <code>auto:plan</code> only</div>
+        <div class="d">a complicated / unapproved / big / blocked issue gets just the plan stage</div></div></div>
+    <div class="branch"><span class="cond y">approved &amp; small (≤3h) &amp; unblocked &amp; childless</span>
+      <div class="node good"><div class="t">grant <code>plan, implement</code><span style="color:var(--mute)"> +</span> <code>test</code><span style="color:var(--mute)"> (unless docs/chore)</span> <code>+ ship</code></div>
+        <div class="d"><b>never <code>auto:land</code></b> — by either tier, ever</div></div></div>
+  </div>
+
+  <div class="arr">↓ build the ordered run queue</div>
+  <div class="node dec"><div class="t"><code>ready --ordered</code> fetch <span class="ref">(blockers hoisted ahead)</span></div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond y">succeeds</span>
+      <div class="node good"><div class="t">render queue + cache it</div><div class="d">stash to <code>&lt;date&gt;.queue.json</code> for resilience</div></div></div>
+    <div class="branch"><span class="cond n">fails (e.g. 429)</span>
+      <div class="node proc"><div class="t">reuse cached queue</div><div class="d">never renders a false "Queue (0)" — the cache fallback. (429s also auto-retry with backoff.)</div></div></div>
+  </div>
+
+  <div class="arr">↓ write the grooming-data file</div>
+  <div class="node proc"><div class="t">render once → <b>staging</b> <code>~/.config/pbrain/pm-groom/&lt;date&gt;.data.md</code> (always)</div>
+    <div class="d">+ best-effort direct vault write · preserves any existing <code>## Auto-work</code> section</div></div>
+
+  <!-- ============ PHASE 2: JUDGMENT ============ -->
+  <div class="lanehdr"><span class="ph">phase 2</span><h2>Autonomous judgment triage</h2><span class="who">headless Claude · gated</span></div>
+  <div class="node dec"><div class="t"><code>PBRAIN_GROOM_AUTONOMOUS=1</code> ?</div>
+    <div class="d">set only by <code>groom enable --autonomous</code></div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond n">off (default)</span>
+      <div class="node leaf"><div class="t">skip phase 2</div>
+        <div class="d">queue + mechanical labels only. The judgment runs when YOU next open an interactive session.</div>
+        <div class="small">leaf: mechanical-only</div></div></div>
+    <div class="branch"><span class="cond y">on</span>
+      <div class="node proc"><div class="t">launch headless Claude ↓</div></div></div>
+  </div>
+
+  <div class="arr">↓</div>
+  <div class="node proc"><div class="t"><code>timeout 600 claude -p "&lt;triage prompt&gt;"</code></div>
+    <div class="d"><code>--permission-mode auto</code> · <code>--max-turns 30</code> · PreToolUse <b>guard hook</b> armed · removes <code>PBRAIN_PMG_HEADLESS</code> so the drive block emits · <b>your subscription login</b> (no API key)</div></div>
+
+  <div class="callout key"><b>The agentic loop.</b> The session runs N <b>turns</b> — each turn = think → call <i>one</i> tool → read result → repeat. It reads the grooming-data file, then enriches + labels via <code>/project-manager</code>. <b>Every Bash/Edit tool call first passes the guard hook ↓</b></div>
+
+  <div class="node dec"><div class="t">guard hook on each tool call <span class="ref">(groom-triage-guard.sh)</span></div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond n">git / gh / push / merge / deploy / <code>/plan-my-work</code> / Edit</div>
+      <div class="node bad"><div class="t">HARD-BLOCKED (deny)</div>
+        <div class="d">"triage-only — do not execute". Structural boundary: the agent <b>cannot</b> touch git/PRs/code.</div></div></div>
+    <div class="branch"><span class="cond y"><code>python3 plane.py …</code> / pm skill / Read</span>
+      <div class="node good"><div class="t">ALLOWED</div><div class="d">enrich + label proceed</div></div></div>
+  </div>
+
+  <div class="arr">↓ what the agent does (allowed actions) — for EACH queue item</div>
+  <div class="node dec"><div class="t">1a · QUALITY GATE <span class="ref">(judgment, not presence)</span></div>
+    <div class="d">already carries <code>auto:groomed</code>? → SKIP (vetted on a prior night, no re-touch — idempotent). Else judge the description/priority/estimate it already read:</div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond n">half-baked — <code>"x"</code> / <code>wip</code> / vague / wrong priority / absurd estimate</span>
+      <div class="node good"><div class="t">ENRICH by judgment</div>
+        <div class="d">write a real description (what/why/done) + fix priority/estimate · <code>enrich</code>/<code>priority</code>/<code>update</code>. The empty-check missed it; the LLM catches QUALITY.</div></div></div>
+    <div class="branch"><span class="cond y">good enough</span>
+      <div class="node good"><div class="t">leave the prose alone</div><div class="d">conservative — no churn on adequate issues</div></div></div>
+  </div>
+  <div class="arr lbl">↓ tag <code>auto:groomed</code> (marker, not a gate) so later nights skip it · and RECORD it</div>
+  <div class="node good"><div class="t">append to <code>## Enriched this run</code></div>
+    <div class="d">one line per enriched issue (id + what was set) in the grooming file — preserved across re-renders, so the morning review sees exactly what the AI fixed. <code>## Needs review</code> then holds only STILL-thin issues.</div></div>
+  <div class="arr">↓</div>
+  <div class="node dec"><div class="t">2 · ASSESS &amp; LABEL by judgment</div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond alt">also: any <code>## Needs review</code> (empty-field) issue</span>
+      <div class="node good"><div class="t">ENRICH</div>
+        <div class="d">same as above — these were flagged by the structural thin-check</div></div></div>
+    <div class="branch"><span class="cond alt">auto:* stages</span>
+      <div class="node good"><div class="t">grant / strip by judgment</div>
+        <div class="d">may <b>add</b> stages the floor was too timid for, or <b>strip</b> one over-granted. Still <b>never <code>auto:land</code></b>.</div></div></div>
+  </div>
+
+  <div class="arr lbl">↓ run ends — how?</div>
+  <div class="split three">
+    <div class="branch"><span class="cond y">finished</span>
+      <div class="node good"><div class="t">agent STOPs on its own</div><div class="d">one-line summary · well before turn 30</div></div></div>
+    <div class="branch"><span class="cond n">hit max-turns / timeout</span>
+      <div class="node proc"><div class="t">force-stopped</div><div class="d">whatever it already wrote to Plane persists · graceful</div></div></div>
+    <div class="branch"><span class="cond n">claude failed (auth / crash)</span>
+      <div class="node proc"><div class="t">logged, ignored</div><div class="d">falls through to the mechanical result — never worse than phase 1</div></div></div>
+  </div>
+
+  <div class="arr">↓ re-render staging from the now-enriched Plane state</div>
+  <div class="node proc"><div class="t">app re-runs <code>groom run --apply</code></div>
+    <div class="d">so the file copied to the vault reflects the judgment pass</div></div>
+
+  <!-- ============ PHASE 3: VAULT ============ -->
+  <div class="lanehdr"><span class="ph">phase 3</span><h2>Vault write</h2><span class="who">the app (holds FDA)</span></div>
+  <div class="node dec"><div class="t">copy staging → iCloud vault, in-process</div>
+    <div class="d">this is the one privileged write — attributed to the signed binary</div></div>
+  <div class="split two">
+    <div class="branch"><span class="cond y">write OK</span>
+      <div class="node good"><div class="t">✅ vault refreshed</div>
+        <div class="d"><code>agent-work/daily-grooming/&lt;date&gt;.md</code> updated</div></div></div>
+    <div class="branch"><span class="cond n">EPERM (no FDA)</span>
+      <div class="node proc"><div class="t">skipped, logged</div>
+        <div class="d">staging file is the durable source · next interactive run backfills the vault</div></div></div>
+  </div>
+
+  <div class="arr">↓</div>
+  <div class="node start" style="background:#0c2114;border-color:#1f4a2b"><div class="t" style="color:var(--good)">🌅 you wake up</div>
+    <div class="d">review the groomed queue (enriched issues, judgment labels in the Auto column) → drive issues yourself with <code>/plan-my-work &lt;id&gt;</code>. <b>Execution is always your move, never the nightly job's.</b></div></div>
+
+  <div class="footer">
+    Traced from lib/pm-groom.sh · lib/plane.py (groom_run, suggest_auto_stages, thinness_flags, GROOMED_LABEL) · lib/pbrain-groom.swift · lib/hooks/groom-triage-guard.sh · commands/templates/project-manager/groom-drive.txt.<br>
+    Invariants: backlog untouched · auto:land never auto-granted · phase 2 gated + hook-locked to triage (no git/PR/execute) · quality gate is LLM-judged + idempotent via auto:groomed · subscription login, no secret written.<br>
+    <span style="color:var(--dim)">This doc is the source-of-truth flow diagram for the nightly groom. Keep it in sync when the groom flow changes (new branch, gate, phase, or invariant).</span>
+  </div>
+</div>
+</body>
+</html>

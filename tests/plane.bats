@@ -40,6 +40,118 @@ PYEOF
   [[ "$output" == *ok* ]]
 }
 
+@test "web_base swaps the loopback for the vanity host, keeps real hostnames, appends workspace" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util, os
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+os.environ.pop("PBRAIN_PLANE_WEB_BASE", None)
+# loopback base -> browser vanity host plane.localhost, same port, + workspace
+assert m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"}) == "http://plane.localhost:1800/pb", m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"})
+assert m.web_base({"base_url":"http://localhost:1800","workspace":"pb"}) == "http://plane.localhost:1800/pb"
+# real hostname (VPS/domain) is kept as-is
+assert m.web_base({"base_url":"https://plane.example.com","workspace":"acme"}) == "https://plane.example.com/acme"
+# no workspace -> no trailing segment
+assert m.web_base({"base_url":"http://127.0.0.1:1800"}) == "http://plane.localhost:1800"
+# empty cfg -> empty string (callers fall back)
+assert m.web_base({}) == ""
+# explicit override wins outright
+os.environ["PBRAIN_PLANE_WEB_BASE"] = "http://custom:9/x"
+assert m.web_base({"base_url":"http://127.0.0.1:1800","workspace":"pb"}) == "http://custom:9/x"
+del os.environ["PBRAIN_PLANE_WEB_BASE"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "suggest_auto_stages: easy approved issue gets plan..ship, hard/blocked gets plan only, NEVER land" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util, os
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+os.environ.pop("PBRAIN_GROOM_AUTO_MAX_HOURS", None)
+i = {}
+# approved + small + unblocked + no children -> full run up to ship
+assert m.suggest_auto_stages(i, approved=True, est_hours=2.0) == ["plan","implement","test","ship"]
+# docs/chore skips test
+assert m.suggest_auto_stages(i, approved=True, est_hours=2.0, is_docs_or_chore=True) == ["plan","implement","ship"]
+# big estimate -> plan only
+assert m.suggest_auto_stages(i, approved=True, est_hours=8.0) == ["plan"]
+# blocked -> plan only
+assert m.suggest_auto_stages(i, approved=True, est_hours=2.0, has_open_blockers=True) == ["plan"]
+# has open children -> plan only
+assert m.suggest_auto_stages(i, approved=True, est_hours=2.0, has_open_children=True) == ["plan"]
+# not approved -> plan only
+assert m.suggest_auto_stages(i, approved=False, est_hours=1.0) == ["plan"]
+# unknown estimate -> plan only (not treated as small)
+assert m.suggest_auto_stages(i, approved=True, est_hours=None) == ["plan"]
+# land is NEVER suggested, in any case
+for c in [m.suggest_auto_stages(i, approved=True, est_hours=0.5),
+          m.suggest_auto_stages(i, approved=True, est_hours=2.0, is_docs_or_chore=True)]:
+    assert "land" not in c, c
+# returns stages in GATE_NAMES order
+assert m.suggest_auto_stages(i, approved=True, est_hours=1.0) == [g for g in m.GATE_NAMES if g in ("plan","implement","test","ship")]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "groom_run --apply assigns the suggested auto:* labels (and PBRAIN_GROOM_NO_AUTO suppresses)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util, os
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# A fake client: one well-formed, approved, small, unblocked, childless todo issue.
+APPROVED="lap"; GP={ "plan":"lp","implement":"li","test":"lt","ship":"ls","land":"lL" }
+class FC:
+    def __init__(self): self.patched={}
+    def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted","default":True}]
+    def list_work_items(self,pid):
+        return [{"id":"i1","sequence_id":7,"name":"easy one","state":"s1",
+                 "labels":[APPROVED],"estimate_point":"ep1","parent":None}]
+    def list_labels(self,pid):
+        return ([{"id":APPROVED,"name":"plan-approved"}] +
+                [{"id":v,"name":"auto:%s"%k} for k,v in GP.items()])
+    def list_sub_issues(self,pid,iid): return []
+    def update_work_item(self,pid,iid,body): self.patched[iid]=body.get("labels"); return {}
+
+# Make estimate resolve to a small hours value + approved-label + gate-map work by
+# monkeypatching the project-level helpers to deterministic values.
+m.ensure_estimate_scale = lambda cfg,c,pid: {"x":1}
+m.est_uuid_to_hours = lambda cfg,pid: {"ep1": 2.0}
+m.thinness_flags = lambda issue, has_estimate_scale=False: []
+m.approved_label_ids = lambda c,pid: [APPROVED]
+# gate_label_map returns {stage -> SET of label ids} (matches production contract)
+m.gate_label_map = lambda c,pid: {k:{v} for k,v in GP.items()}
+m.state_group = lambda issue, by_id: "unstarted"
+m.blocked_by_ids = lambda cfg,c,ref: []
+
+fc=FC()
+os.environ.pop("PBRAIN_GROOM_NO_AUTO", None)
+rep=m.groom_run({}, fc, ["p"], apply=True)
+todo=rep["todo"][0]
+assert todo["auto_suggested"]==["plan","implement","test","ship"], todo
+# the issue got the four stage labels (+ kept plan-approved), but NOT auto:land
+patched=set(fc.patched.get("i1") or [])
+assert {GP["plan"],GP["implement"],GP["test"],GP["ship"]} <= patched, patched
+assert GP["land"] not in patched, patched
+assert APPROVED in patched, patched
+
+# NO_AUTO suppresses assignment entirely.
+fc2=FC(); os.environ["PBRAIN_GROOM_NO_AUTO"]="1"
+rep2=m.groom_run({}, fc2, ["p"], apply=True)
+assert "auto_suggested" not in rep2["todo"][0], rep2["todo"][0]
+assert not fc2.patched, fc2.patched
+del os.environ["PBRAIN_GROOM_NO_AUTO"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
 @test "pick_state_id prefers name match, then default, then lowest sequence" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
@@ -558,7 +670,7 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "seed_convention_labels creates only missing convention labels, idempotent, fuzzy-skips existing (PB-70)" {
+@test "seed_convention_labels creates missing labels, recolors colorless/mismatched existing, idempotent (PB-70)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
@@ -566,32 +678,49 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 names = {l["name"] for l in m.CONVENTION_LABELS}
 assert names == {"bug","feature","chore","docs"}, names   # canon = type set
-# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94).
+# The seeder seeds the convention types + plan-approved + the per-gate auto:* labels (PB-94)
+# + the auto:groomed quality-vet marker (which is NOT a pipeline gate).
 seed_names = {s["name"] for s in m._seed_label_specs()}
 assert {"bug","feature","chore","docs", m.APPROVED_LABEL} <= seed_names, seed_names
 assert {"auto:%s" % g for g in m.GATE_NAMES} <= seed_names, seed_names
+assert "auto:groomed" in seed_names, seed_names
+assert "groomed" not in m.GATE_NAMES, "auto:groomed must NOT be a pipeline gate"
+# the marker never appears in auto-stage suggestions (gate machinery ignores it)
+assert "groomed" not in m.suggest_auto_stages({}, approved=True, est_hours=1.0)
 
 class FC:
-    def __init__(self, existing): self.labels=list(existing); self.created=[]
+    def __init__(self, existing): self.labels=list(existing); self.created=[]; self.recolored=[]
     def list_labels(self, pid): return list(self.labels)
     def create_label(self, pid, name, color=None):
         rec={"id":"n%d"%len(self.created),"name":name,"color":color}
         self.created.append(name); self.labels.append(rec); return rec
+    def update_label(self, pid, label_id, color=None, name=None):
+        for l in self.labels:
+            if l.get("id")==label_id:
+                if color: l["color"]=color
+                if name: l["name"]=name
+        self.recolored.append(label_id); return {"id":label_id,"color":color}
 
-# Start with one already present, fuzzily ('Bug' vs 'bug') -> it is skipped; the rest of
-# the seed set (convention types minus bug + plan-approved + auto:* gates) is created.
-fc=FC([{"id":"l1","name":"Bug"}])
+# Start with one already present, fuzzily ('Bug' vs 'bug') but COLORLESS -> it is
+# RECOLORED to the canonical color (not recreated); the rest of the seed set
+# (convention types minus bug + plan-approved + auto:* gates) is created.
+fc=FC([{"id":"l1","name":"Bug","color":None}])
 r1=m.seed_convention_labels(fc,"p")
 expected_created = sorted((seed_names - {"bug"}))
 assert sorted(r1["created"])==expected_created, (r1, expected_created)
-assert r1["existing"]==["bug"], r1
+assert r1["recolored"]==["bug"], r1                 # colorless existing -> repaired
+assert "bug" not in r1["existing"], r1
 assert "error" not in r1, r1
 # colors are applied on create
 assert any(l.get("color") for l in fc.labels if l["name"]=="feature"), fc.labels
+# and the recolor actually patched the existing 'Bug' label to the spec color
+bugspec=next(s for s in m._seed_label_specs() if s["name"]=="bug")
+assert any(l.get("color")==bugspec["color"] for l in fc.labels if l["name"]=="Bug"), fc.labels
 
-# Idempotent: a second pass creates nothing.
+# Idempotent: a second pass creates nothing and recolors nothing (colors now match).
 r2=m.seed_convention_labels(fc,"p")
 assert r2["created"]==[], r2
+assert r2["recolored"]==[], r2
 assert sorted(r2["existing"])==sorted(seed_names), r2
 
 # list_labels failure degrades to a reported error, never raises.

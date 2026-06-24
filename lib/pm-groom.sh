@@ -44,6 +44,51 @@ pmg_plist()       { printf '%s\n' "$HOME/Library/LaunchAgents/$PMG_LABEL.plist";
 pmg_data_dir()  { printf '%s\n' "${PBRAIN_GROOM_DATA_DIR:-${VAULT_DIR:-$HOME/pbrain-vault}/agent-work/daily-grooming}"; }
 pmg_data_file() { printf '%s\n' "$(pmg_data_dir)/${1:?date}.md"; }
 
+# PB-94 / FDA wrapper: the grooming-data is ALSO rendered to a non-iCloud STAGING
+# path under the config dir. The nightly LaunchAgent runs headless (no Full Disk
+# Access), so it cannot write the iCloud vault path directly — it writes staging
+# (always succeeds), and the FDA-holding pbrain-groom.app copies staging -> vault.
+# The interactive path writes the vault file directly AND staging (harmless mirror).
+pmg_staging_file() { printf '%s\n' "$(pmg_report_dir)/${1:?date}.data.md"; }
+
+# pmg_default_projects — the csv of project ids groom should focus on when the
+# caller passes NO explicit --projects: THIS WEEK'S WEEKLY-GOAL projects, exactly
+# like /end-of-day's WEEKLY_PIDS. So groom respects the user's weekly goals instead
+# of grooming the whole registry. Empty string when there are no weekly goals (or
+# the profile chain isn't sourced) — the caller then falls through to all-registry,
+# so a missing-goals week still yields a queue. Best-effort, never errors.
+# PBRAIN_PMG_DATE (tests) drives the ISO week so a fixture week can be targeted.
+pmg_default_projects() {
+  declare -F pbrain_profile_latest_for_period >/dev/null 2>&1 || { printf '\n'; return 0; }
+  declare -F pbrain_profile_json >/dev/null 2>&1 || { printf '\n'; return 0; }
+  local plan_dir store iso wgf
+  plan_dir="${PBRAIN_PLAN_DIR:-${VAULT_DIR:-$HOME/pbrain-vault}/life/daily-planning}"
+  store="$(pbrain_profile_store "$plan_dir" 2>/dev/null || true)"
+  [[ -n "$store" ]] || { printf '\n'; return 0; }
+  iso="$(python3 -c "import datetime; d=datetime.date.fromisoformat('$(pmg_today)'); y,w,_=d.isocalendar(); print(f'{y}-W{w:02d}')" 2>/dev/null || true)"
+  [[ -n "$iso" ]] || { printf '\n'; return 0; }
+  wgf="$(pbrain_profile_latest_for_period "$store" weekly-goals "$iso" 2>/dev/null || true)"
+  [[ -n "$wgf" ]] || { printf '\n'; return 0; }
+  pbrain_profile_json "$wgf" 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || printf '\n'
+}
+
+# pmg_web_base — the BROWSER-FACING Plane base for clickable issue links in the
+# grooming-data (e.g. http://plane.localhost:1800/pb). Delegates to plane.py's
+# `web-base`, the single source of truth (it swaps the 127.0.0.1 loopback for the
+# vanity host and honours PBRAIN_PLANE_WEB_BASE), so groom + /plan-my-work never
+# drift. Empty on any failure (the renderer falls back to a bare id).
+# PBRAIN_PMG_NO_WEB=1 forces empty (tests).
+pmg_web_base() {
+  [[ "${PBRAIN_PMG_NO_WEB:-0}" == 1 ]] && { printf '\n'; return 0; }
+  local py; py="$(pmg_plane_py 2>/dev/null || true)"
+  [[ -n "$py" && -f "$py" ]] || { printf '\n'; return 0; }
+  python3 "$py" web-base 2>/dev/null || printf '\n'
+}
+
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is
 # reliable). Resolving it lazily inside a function is unsafe: by call time
 # BASH_SOURCE may be empty/relative, pointing pmg_plane_py at the wrong path.
@@ -55,6 +100,26 @@ pmg_plane_py() {
   if [[ -n "${PBRAIN_PLANE_PY:-}" ]]; then printf '%s\n' "$PBRAIN_PLANE_PY"; return; fi
   if [[ -n "${PLANE:-}" && -f "${PLANE:-}" ]]; then printf '%s\n' "$PLANE"; return; fi
   printf '%s\n' "$_PMG_LIB_DIR/plane.py"
+}
+
+# FDA wrapper: the nightly LaunchAgent entry point is a compiled, ad-hoc-signed
+# Swift helper (pbrain-groom.app) that runs this bash groom and then copies the
+# staging grooming-data into the iCloud vault in-process — the one privileged write,
+# attributed to a single binary the user grants Full Disk Access. Mirrors
+# pbrain_notify_build / the tracker app. Best-effort: no swiftc → the app is absent
+# and pmg_schedule_install falls back to plain /bin/bash args (no nightly vault
+# refresh, never a hard failure).
+PBRAIN_GROOM_APP="${PBRAIN_GROOM_APP:-$PMG_CONFIG_DIR/pbrain-groom.app}"
+pmg_groom_bin() { printf '%s\n' "$PBRAIN_GROOM_APP/Contents/MacOS/pbrain-groom"; }
+
+pmg_groom_app_build() {
+  # PBRAIN_GROOM_NO_APP=1 forces the plain /bin/bash fallback (skips the compiled
+  # wrapper) — used by tests for a deterministic entry point, and an escape hatch
+  # for anyone who prefers no nightly vault refresh.
+  [[ "${PBRAIN_GROOM_NO_APP:-0}" == 1 ]] && return 0
+  declare -F pbrain_swift_build >/dev/null 2>&1 || return 0
+  pbrain_swift_build "$PBRAIN_GROOM_APP" "$_PMG_LIB_DIR/pbrain-groom.swift" \
+    "com.pbrain.groom" --sign
 }
 
 # pmg_today — today's date (YYYY-MM-DD). Overridable via PBRAIN_PMG_DATE (tests).
@@ -72,6 +137,14 @@ pmg_run() {
       *) shift ;;
     esac
   done
+  # No explicit --projects → default to THIS WEEK'S WEEKLY-GOAL projects (groom
+  # respects the user's weekly goals, not the whole registry). If there are no
+  # weekly goals this resolves to empty, and we leave it empty so groom/ready fall
+  # through to all registry projects (the missing-goals fallback). An explicit
+  # --projects always wins.
+  if [[ -z "$projects" ]]; then
+    projects="$(pmg_default_projects)"
+  fi
   local py date out
   py="$(pmg_plane_py)"
   date="$(pmg_today)"
@@ -91,10 +164,29 @@ pmg_run() {
   rc=$?
 
   # PB-94: the ORDERED hand-off queue groom feeds to /plan-my-work (blockers ahead
-  # of the issues they block). Best-effort — an empty array if it can't be built.
+  # of the issues they block). If the fetch FAILS (e.g. rate-limited mid-run), we
+  # must NOT render a false "Queue (0)" that hides real work and overwrites a good
+  # file — distinguish "genuinely empty" from "fetch failed". On failure, reuse the
+  # queue from today's existing grooming-data file if present; only fall to [] when
+  # there's nothing to preserve.
   local queue_args=(ready --ordered)
   [[ -n "$projects" ]] && queue_args+=(--projects "$projects")
-  local queue_json; queue_json="$(python3 "$py" "${queue_args[@]}" 2>>"$logf" || echo '[]')"
+  local queue_json queue_rc
+  queue_json="$(python3 "$py" "${queue_args[@]}" 2>>"$logf")"; queue_rc=$?
+  local queue_cache; queue_cache="$(pmg_report_dir)/${date}.queue.json"
+  if [[ $queue_rc -eq 0 && -n "$queue_json" && "$queue_json" != "[]" ]]; then
+    # Stash the good queue so a later rate-limited run can fall back to it.
+    printf '%s\n' "$queue_json" > "$queue_cache" 2>/dev/null || true
+  elif [[ $queue_rc -ne 0 || -z "$queue_json" ]]; then
+    # Fetch failed (e.g. 429 mid-run) — reuse the last good queue instead of
+    # rendering a false "Queue (0)" that hides real work.
+    if [[ -s "$queue_cache" ]]; then
+      queue_json="$(cat "$queue_cache" 2>/dev/null || echo '[]')"
+      printf 'pmg_run: ready --ordered failed (rc=%s); reused cached queue\n' "$queue_rc" >>"$logf" 2>/dev/null || true
+    else
+      queue_json='[]'
+    fi
+  fi
   [[ -n "$queue_json" ]] || queue_json='[]'
   if [[ $rc -ne 0 || -z "$json" ]]; then
     return $rc
@@ -153,13 +245,26 @@ with open(out, "w") as f:
     f.write("\n".join(lines).rstrip() + "\n")
 PYEOF
 
-  # PB-94: also write the vault-synced grooming-data artifact (triage info + the
-  # auto-exec queue). The execute loop appends per-issue auto-work outcomes under
-  # "## Auto-work" when it drives the queue. Best-effort: a vault-write failure
-  # must not fail the (headless) groom run, so it's wrapped and never fatal.
-  local data_out; data_out="$(pmg_data_file "$date")"
-  mkdir -p "$(pmg_data_dir)" 2>/dev/null || true
-  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" PMG_DATA_OUT="$data_out" python3 - <<'PYEOF' 2>>"$logf" || true
+  # PB-94: write the grooming-data artifact (triage info + the ordered queue). The
+  # execute loop appends per-issue auto-work outcomes under "## Auto-work" when it
+  # drives the queue.
+  #
+  # FDA wrapper: render ONCE and write to TWO destinations —
+  #   * STAGING (~/.config/pbrain/pm-groom/<date>.data.md): non-iCloud, always
+  #     writable even headless under launchd (no Full Disk Access needed).
+  #   * VAULT (iCloud-synced, the file the user reviews): best-effort. The
+  #     interactive path has FDA and writes it directly here; the nightly
+  #     LaunchAgent can't, so pbrain-groom.app copies staging -> vault instead.
+  # The "## Auto-work" preservation reads the prior content from the VAULT file if
+  # readable, else the STAGING file — so a re-run never clobbers recorded outcomes
+  # regardless of which destination the last run managed to write.
+  local data_out staging_out
+  data_out="$(pmg_data_file "$date")"
+  staging_out="$(pmg_staging_file "$date")"
+  mkdir -p "$(pmg_data_dir)" "$(pmg_report_dir)" 2>/dev/null || true
+  local web_base; web_base="$(pmg_web_base)"
+  PMG_JSON="$json" PMG_QUEUE="$queue_json" PMG_DATE="$date" PMG_WEB_BASE="$web_base" \
+    PMG_DATA_OUT="$data_out" PMG_STAGING_OUT="$staging_out" python3 - <<'PYEOF' 2>>"$logf" || true
 import json, os
 data = json.loads(os.environ["PMG_JSON"])
 try:
@@ -168,18 +273,65 @@ except Exception:
     queue = []
 date = os.environ["PMG_DATE"]
 out = os.environ["PMG_DATA_OUT"]
+staging = os.environ.get("PMG_STAGING_OUT") or ""
+web_base = (os.environ.get("PMG_WEB_BASE") or "").rstrip("/")
+
+def issue_link(row):
+    """Clickable Plane issue ref: [PB-89](<web_base>/browse/PB-89). Uses the project
+    SHORTCUT (PB/YT/KA) for both the ref and the URL slug — NOT the display name, which
+    can contain spaces and break the link (e.g. 'YOUTUBE SUMMARY EXTENSION-2'). Falls
+    back to a bare id when the web base or shortcut is missing (unconfigured / tests)."""
+    iid = row.get("id")
+    # project_short is the uppercased shortcut (PB/YT/KA); fall back to a spaceless
+    # squash of the legacy 'project' (name) field so an old row still yields a valid URL.
+    short = (row.get("project_short") or "").strip().upper()
+    if not short:
+        short = "".join((row.get("project") or "").split()).upper()
+    if web_base and short and iid is not None:
+        ref = "%s-%s" % (short, iid)
+        return "[%s](%s/browse/%s)" % (ref, web_base, ref)
+    return "%s-%s" % (short, iid) if short and iid is not None else str(iid)
+
+def abridge(s, n=60):
+    """Half-line title for the queue table: collapse internal whitespace/newlines and
+    truncate to ~n chars with an ellipsis, so a long title can't blow up row height.
+    The full title is one click away via the issue link."""
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 # Preserve an existing "## Auto-work" section (the execute loop / pmw writes into it
 # as it drives + parks issues), so a re-run of the scan doesn't clobber the day's
-# recorded outcomes.
+# recorded outcomes. Prefer the vault file (canonical), fall back to staging.
 existing_autowork = ""
-if os.path.exists(out):
+for src in (out, staging):
+    if not src:
+        continue
     try:
-        prev = open(out).read()
-        idx = prev.find("\n## Auto-work")
-        if idx != -1:
-            existing_autowork = prev[idx:].rstrip() + "\n"
+        prev = open(src).read()
     except Exception:
-        existing_autowork = ""
+        continue
+    idx = prev.find("\n## Auto-work")
+    if idx != -1:
+        existing_autowork = prev[idx:].rstrip() + "\n"
+        break
+
+# Preserve the "## Enriched this run" section across re-renders. The mechanical scan
+# can't know what the judgment agent enriched — the agent appends one line per enriched
+# issue under this heading (see groom-drive.txt). A re-render of the scan must keep
+# those lines (between this heading and the next "## "), not clobber them.
+existing_enriched = ""
+for src in (out, staging):
+    if not src:
+        continue
+    try:
+        prev = open(src).read()
+    except Exception:
+        continue
+    idx = prev.find("\n## Enriched this run")
+    if idx != -1:
+        body = prev[idx + 1:]
+        nxt = body.find("\n## ", 1)
+        existing_enriched = (body[:nxt] if nxt != -1 else body).rstrip() + "\n"
+        break
 L = []
 L.append("---")
 L.append("type: daily-grooming")
@@ -197,24 +349,48 @@ L.append("")
 # of the issues they block). groom feeds these ids to /plan-my-work one at a time.
 L.append("## Queue — ordered (%d)" % len(queue))
 L.append("")
+def auto_cell(r):
+    """The auto:<stage> labels granted to this issue (e.g. 'plan,implement'), shown
+    so the morning review surfaces groom's decisions and the user can strip one in
+    Plane before driving. '—' when none granted (the issue parks at the plan gate)."""
+    gates = r.get("auto_gates") or r.get("auto_suggested") or []
+    return ",".join(gates) if gates else "—"
+
 if queue:
-    L.append("| # | Issue | Priority | Title |")
-    L.append("|---|---|---|---|")
+    L.append("| # | Issue | Priority | Auto | Title |")
+    L.append("|---|---|---|---|---|")
     for i, r in enumerate(queue, 1):
-        L.append("| %d | %s | %s | %s |" % (
-            i, r.get("id"), r.get("priority", ""), r.get("title", "")))
+        L.append("| %d | %s | %s | %s | %s |" % (
+            i, issue_link(r), r.get("priority", ""), auto_cell(r), abridge(r.get("title", ""))))
 else:
     L.append("_None — no todo issues ready to run. (Move a backlog issue to todo to "
              "queue it.)_")
 L.append("")
-# Thin todo issues to enrich before running.
+# Issues the judgment pass auto-enriched THIS run (agent-recorded under this heading;
+# see groom-drive.txt). Preserved across scan re-renders so the morning review can see
+# what the AI fixed. Empty heading on a fresh/mechanical-only run.
+L.append("## Enriched this run")
+L.append("")
+if existing_enriched:
+    # strip the heading line the agent may have included; keep the entries
+    body = existing_enriched
+    for h in ("## Enriched this run\n", "## Enriched this run"):
+        if body.lstrip().startswith(h):
+            body = body.lstrip()[len(h):]
+            break
+    body = body.strip()
+    L.append(body if body else "_None enriched this run._")
+else:
+    L.append("_None enriched this run._")
+L.append("")
+# Thin todo issues to enrich before running (still thin AFTER the judgment pass).
 nr = data.get("needs_review", [])
 L.append("## Needs review (thin todo — enrich before running)")
 L.append("")
 if nr:
     for r in nr:
         L.append("- **%s** %s — %s" % (
-            r.get("id"), r.get("title", ""), ", ".join(r.get("flags", []))))
+            issue_link(r), abridge(r.get("title", "")), ", ".join(r.get("flags", []))))
 else:
     L.append("_None — every todo issue is well-formed._")
 L.append("")
@@ -228,8 +404,24 @@ else:
     L.append("_Empty until `/plan-my-work` drives the queue — each id records how far "
              "it got (which stages auto-advanced) and the manual stage it parked at._")
     L.append("")
-with open(out, "w") as f:
-    f.write("\n".join(L).rstrip() + "\n")
+body = "\n".join(L).rstrip() + "\n"
+# STAGING write first — always-writable, the durable source of truth and the file
+# pbrain-groom.app copies into the vault when run headless without FDA.
+if staging:
+    try:
+        os.makedirs(os.path.dirname(staging), exist_ok=True)
+        with open(staging, "w") as f:
+            f.write(body)
+    except Exception:
+        pass
+# VAULT write best-effort — succeeds on the interactive (FDA) path, denied (EPERM)
+# under the headless LaunchAgent, where pbrain-groom.app handles the copy instead.
+try:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as f:
+        f.write(body)
+except Exception:
+    pass
 PYEOF
 
   pmg_prune "$(pmg_report_dir)" "${PBRAIN_PMG_KEEP:-14}"
@@ -269,6 +461,26 @@ pmg_status() {
   echo "scheduled: $sched"
   echo "label: $PMG_LABEL"
   echo "report_dir: $(pmg_report_dir)"
+  # FDA wrapper: which entry point is wired + whether the binary is built. When the
+  # plist invokes the binary, the nightly run refreshes the vault file in-process
+  # (needs the one-time Full Disk Access grant on pbrain-groom.app); otherwise it
+  # falls back to /bin/bash and only the interactive run refreshes the vault.
+  local bin; bin="$(pmg_groom_bin)"
+  if [[ -x "$bin" ]]; then
+    echo "groom_app: built ($PBRAIN_GROOM_APP)"
+  else
+    echo "groom_app: (not built — bash fallback; no nightly vault refresh)"
+  fi
+  if [[ -f "$plist" ]] && grep -q "pbrain-groom" "$plist" 2>/dev/null; then
+    echo "entry_point: pbrain-groom.app (grant it Full Disk Access for nightly vault writes)"
+  elif [[ -f "$plist" ]]; then
+    echo "entry_point: /bin/bash (interactive run backfills the vault)"
+  fi
+  if pmg_autonomous_enabled; then
+    echo "autonomous: on (headless Claude judgment triage — run 'groom doctor' to verify the login)"
+  else
+    echo "autonomous: off (mechanical triage only)"
+  fi
   local today; today="$(pmg_today)"
   if pmg_report_fresh "$today"; then
     echo "today_report: $(pmg_report_file "$today")"
@@ -318,6 +530,52 @@ pmg_doctor() {
   echo "scheduled: $sched"
   echo "loaded: $loaded"
 
+  # --- 1b. FDA wrapper: nightly vault-write capability (read-only) --------
+  # The nightly LaunchAgent has no Full Disk Access, so it can only refresh the
+  # iCloud vault grooming-data file if it runs through pbrain-groom.app AND that
+  # binary has been granted FDA. Without it, the staging file is still written and
+  # the next interactive run backfills the vault.
+  local gbin; gbin="$(pmg_groom_bin)"
+  if [[ -x "$gbin" ]]; then
+    echo "groom_app: built"
+    if [[ -f "$plist" ]] && grep -q "pbrain-groom" "$plist" 2>/dev/null; then
+      echo "groom_entry: pbrain-groom.app"
+      echo "fda_action: grant Full Disk Access to $PBRAIN_GROOM_APP, then 'launchctl kickstart -k gui/\$(id -u)/$PMG_LABEL' — needed for nightly vault refresh"
+    else
+      echo "groom_entry: /bin/bash (re-run 'groom enable' to wire the app)"
+    fi
+  else
+    echo "groom_app: (not built — no swiftc? bash fallback; interactive run backfills the vault)"
+  fi
+
+  # --- 1c. Autonomous (headless Claude) readiness ------------------------
+  # Only meaningful when the plist is wired for autonomous triage. We check the
+  # claude CLI AND its login UNDER THE LAUNCHD-EQUIVALENT ENV (env -i HOME/USER/PATH)
+  # so the result reflects what the nightly job actually sees — a check that only
+  # passed in the interactive shell would hide a broken nightly run. auto_bad drives
+  # the verdict so a missing CLI / not-logged-in surfaces here instead of silently
+  # no-op'ing every night.
+  local auto_bad=""
+  if pmg_autonomous_enabled; then
+    echo "autonomous: on (headless Claude judgment triage)"
+    local cli; cli="$(pmg_claude_cli)"
+    if [[ -n "$cli" ]]; then
+      echo "claude_cli: found ($cli)"
+      local probe; probe="$(pmg_claude_auth_probe)"
+      case "$probe" in
+        ok)         echo "claude_auth: OK (subscription login readable under launchd env)";;
+        notlogged)  echo "claude_auth: NOT LOGGED IN under launchd env — run /login in an interactive Claude session"; auto_bad=1;;
+        nocli)      echo "claude_auth: (no cli)"; auto_bad=1;;
+        unknown:*)  echo "claude_auth: UNKNOWN — ${probe#unknown:}"; auto_bad=1;;
+      esac
+    else
+      echo "claude_cli: MISSING under launchd PATH — install Claude Code or add it to the LaunchAgent PATH"
+      auto_bad=1
+    fi
+  else
+    echo "autonomous: off (mechanical triage only; 'groom enable --autonomous' to turn on)"
+  fi
+
   # --- 2. Power source + AC Power Nap policy (read-only) -----------------
   local power_source="unknown" powernap_ac="unknown" sleep_ac="unknown"
   if command -v pmset >/dev/null 2>&1; then
@@ -353,6 +611,11 @@ pmg_doctor() {
   if [[ "$sched" != yes || "$loaded" != yes ]]; then
     verdict="FAIL"
     fix="groom isn't scheduled — run: /project-manager groom enable"
+  elif [[ -n "$auto_bad" ]]; then
+    # Scheduled, but autonomous mode is on and the Claude CLI/login won't work under
+    # launchd — the nightly judgment-triage pass would silently no-op every night.
+    verdict="FAIL"
+    fix="autonomous groom is enabled but the headless Claude run can't authenticate — see claude_cli/claude_auth above (install Claude Code or run /login in an interactive session). The mechanical groom still works; fix this to get judgment triage."
   elif [[ "$powernap_ac" == "unknown" ]]; then
     verdict="UNKNOWN"
     fix="couldn't read AC power policy (pmset unavailable) — can't confirm overnight firing"
@@ -384,14 +647,73 @@ pmg_doctor() {
   return 0
 }
 
-# pmg_schedule_install [HH:MM] [csv-projects] — daily LaunchAgent that runs the
-# groom scan. Default 06:40 (a few hours before a typical first work block).
+# pmg_groom_launchd_path — the PATH the LaunchAgent needs. Homebrew (python/envsubst)
+# + the standard dirs, PLUS — for autonomous mode — the claude CLI dir and node's dir
+# (claude's hooks shell out to node). Derived from the live install so it matches what
+# the user actually has, not a guess.
+pmg_groom_launchd_path() {
+  local base="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local claude_bin node_bin d
+  claude_bin="$(command -v claude 2>/dev/null || true)"
+  node_bin="$(command -v node 2>/dev/null || true)"
+  # Append claude's + node's dirs only if not already covered by base (dedup).
+  for d in "${claude_bin:+$(dirname "$claude_bin")}" "${node_bin:+$(dirname "$node_bin")}"; do
+    [[ -n "$d" && ":$base:" != *":$d:"* ]] && base="$base:$d"
+  done
+  printf '%s\n' "$base"
+}
+
+# pmg_autonomous_enabled — is the live plist wired for the headless-Claude triage pass?
+pmg_autonomous_enabled() {
+  local plist; plist="$(pmg_plist)"
+  [[ -f "$plist" ]] && grep -q "PBRAIN_GROOM_AUTONOMOUS" "$plist" 2>/dev/null
+}
+
+# pmg_claude_cli — path to the claude CLI as the LAUNCHD job would resolve it (using
+# the plist PATH), or empty. Echoes the path; rc 0 if found.
+pmg_claude_cli() {
+  local p; p="$(pmg_groom_launchd_path)"
+  env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$p" command -v claude 2>/dev/null
+}
+
+# pmg_claude_auth_probe — does headless claude AUTH work under the LAUNCHD-equivalent
+# clean env? This is the whole point: a check that passes in the interactive shell but
+# fails under launchd would be worse than none. Bounded + read-only (one trivial
+# prompt). Echoes: ok | notlogged | unknown:<first line> | nocli.
+pmg_claude_auth_probe() {
+  local cli; cli="$(pmg_claude_cli)"
+  [[ -n "$cli" ]] || { printf 'nocli\n'; return 0; }
+  local p out; p="$(pmg_groom_launchd_path)"
+  out="$(timeout 30 env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$p" \
+        claude -p "Reply with the single word: OK" --max-turns 1 </dev/null 2>&1 || true)"
+  if printf '%s' "$out" | grep -qi "not logged in"; then printf 'notlogged\n'
+  elif printf '%s' "$out" | grep -qi "\bOK\b"; then printf 'ok\n'
+  else printf 'unknown:%s\n' "$(printf '%s' "$out" | head -1 | cut -c1-80)"; fi
+}
+
+# pmg_schedule_install [HH:MM] [csv-projects] [autonomous] — daily LaunchAgent that
+# runs the groom scan. Default 06:40 (a few hours before a typical first work block).
+# autonomous=1 wires the headless-Claude judgment-triage pass (PBRAIN_GROOM_AUTONOMOUS
+# + HOME/USER + a claude/node-inclusive PATH so the subscription keychain login is
+# found). NO secret is written — auth is the user's existing keychain login.
 pmg_schedule_install() {
-  local hhmm="${1:-06:40}" projects="${2:-}"
+  local hhmm="${1:-06:40}" projects="${2:-}" autonomous="${3:-}"
   local sh
   sh="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../commands" && pwd -P)/project-manager.sh"
   local hh="${hhmm%%:*}" mm="${hhmm##*:}"
   hh=$((10#${hh:-6})); mm=$((10#${mm:-40}))
+  local path_val auto_env=""
+  if [[ "$autonomous" == 1 ]]; then
+    path_val="$(pmg_groom_launchd_path)"
+    # HOME/USER let the launchd-spawned claude locate its keychain login; the
+    # AUTONOMOUS flag turns on the wrapper's Claude step. No token, ever.
+    auto_env="    <key>HOME</key><string>$HOME</string>
+    <key>USER</key><string>${USER:-$(id -un)}</string>
+    <key>PBRAIN_GROOM_AUTONOMOUS</key><string>1</string>
+"
+  else
+    path_val="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  fi
   local extra
   extra="  <key>StartCalendarInterval</key>
   <dict>
@@ -400,13 +722,34 @@ pmg_schedule_install() {
   </dict>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>$path_val</string>
     <key>PBRAIN_PMG_HEADLESS</key><string>1</string>
-  </dict>"
+$auto_env  </dict>"
   # The scheduled run APPLIES the conservative triage (--apply) for the named
   # projects; thin issues are still only queued, never edited.
-  local args=(/bin/bash "$sh" groom run --apply)
-  [[ -n "$projects" ]] && args+=(--projects "$projects")
+  #
+  # FDA wrapper: prefer the compiled pbrain-groom.app as the entry point — it runs
+  # this same bash groom AND copies the staging grooming-data into the iCloud vault
+  # in-process (the one write that needs Full Disk Access, granted to that single
+  # binary). It sets PBRAIN_PMG_HEADLESS=1 + a Homebrew PATH itself, so the plist's
+  # EnvironmentVariables are only needed for the bash fallback below. If swiftc is
+  # unavailable (app not built), fall back to plain /bin/bash — the job still grooms
+  # and writes staging, just without the nightly vault refresh.
+  pmg_groom_app_build || true
+  local bin; bin="$(pmg_groom_bin)"
+  local args
+  # --projects is BAKED IN ONLY when the user explicitly pinned it at `groom enable`.
+  # With no pin we OMIT it, so the nightly `groom run` calls pmg_default_projects()
+  # at run time and follows THIS WEEK'S weekly goals automatically (they change week
+  # to week without re-enabling). Don't hardcode the registry here.
+  if [[ -x "$bin" ]]; then
+    args=("$bin" --script "$sh")
+    [[ -n "$projects" ]] && args+=(--projects "$projects")
+    args+=(--staging-dir "$(pmg_report_dir)" --vault-dir "$(pmg_data_dir)")
+  else
+    args=(/bin/bash "$sh" groom run --apply)
+    [[ -n "$projects" ]] && args+=(--projects "$projects")
+  fi
   pbrain_launchagent_install "$PMG_LABEL" "$(pmg_plist)" "$(pmg_log_file)" "$extra" -- "${args[@]}"
 }
 
