@@ -604,13 +604,14 @@ pmg_doctor() {
 # the user actually has, not a guess.
 pmg_groom_launchd_path() {
   local base="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  local extra_dirs=""
-  local claude_bin node_bin
+  local claude_bin node_bin d
   claude_bin="$(command -v claude 2>/dev/null || true)"
   node_bin="$(command -v node 2>/dev/null || true)"
-  [[ -n "$claude_bin" ]] && extra_dirs+=":$(dirname "$claude_bin")"
-  [[ -n "$node_bin" ]] && extra_dirs+=":$(dirname "$node_bin")"
-  printf '%s%s\n' "$base" "$extra_dirs"
+  # Append claude's + node's dirs only if not already covered by base (dedup).
+  for d in "${claude_bin:+$(dirname "$claude_bin")}" "${node_bin:+$(dirname "$node_bin")}"; do
+    [[ -n "$d" && ":$base:" != *":$d:"* ]] && base="$base:$d"
+  done
+  printf '%s\n' "$base"
 }
 
 # pmg_autonomous_enabled — is the live plist wired for the headless-Claude triage pass?
