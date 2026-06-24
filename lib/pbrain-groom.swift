@@ -118,7 +118,7 @@ do {
 // — the allowlist excludes git/gh/Edit and /plan-my-work, so it structurally cannot
 // execute issues. dontAsk mode = any clarifying question / unapproved tool is denied,
 // not blocked, so the agent uses its own judgment and never hangs. Best-effort: a
-// failure (claude missing, not logged in, timeout, budget) is logged and we still do
+// failure (claude missing, not logged in, timeout) is logged and we still do
 // the vault copy of the mechanical result — never worse than today.
 if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
     func envOr(_ key: String, _ fallback: String) -> String {
@@ -126,7 +126,6 @@ if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
         return (v != nil && !v!.isEmpty) ? v! : fallback
     }
     let maxTurns = envOr("PBRAIN_GROOM_MAX_TURNS", "30")
-    let budget   = envOr("PBRAIN_GROOM_MAX_BUDGET_USD", "2.00")
     let timeoutS = envOr("PBRAIN_GROOM_CLAUDE_TIMEOUT", "600")
     // Triage-only allowlist: Plane reads/writes via python3 + the project-manager
     // wrapper, plus read tools. NO Bash(git*), NO gh, NO Edit, NO /plan-my-work.
@@ -134,6 +133,7 @@ if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
     // Run claude under `timeout` so a hung session can't run forever. The session
     // executes the same /project-manager groom skill; in headless dontAsk mode it
     // can't reach /plan-my-work, so it stops after enrich + ASSESS & LABEL.
+    // No USD budget cap (per user) — the run is bounded by --max-turns + timeout.
     let claude = Process()
     claude.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     claude.arguments = [
@@ -141,7 +141,6 @@ if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
         "--permission-mode", "dontAsk",
         "--allowedTools", allowed,
         "--max-turns", maxTurns,
-        "--max-budget-usd", budget,
     ]
     // Run in the pbrain repo so the skill + plane.py resolve. Inherit our env (which
     // launchd populated with HOME/USER/PATH) so the subscription keychain login is
@@ -149,7 +148,7 @@ if ProcessInfo.processInfo.environment["PBRAIN_GROOM_AUTONOMOUS"] == "1" {
     claude.environment = env
     claude.currentDirectoryURL = URL(fileURLWithPath: (script as NSString).deletingLastPathComponent)
         .deletingLastPathComponent()  // commands/ -> repo root
-    log("autonomous triage: launching headless claude (max-turns=\(maxTurns), budget=$\(budget), timeout=\(timeoutS)s)")
+    log("autonomous triage: launching headless claude (max-turns=\(maxTurns), timeout=\(timeoutS)s, no budget cap)")
     do {
         try claude.run()
         claude.waitUntilExit()
