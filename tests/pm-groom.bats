@@ -364,6 +364,28 @@ SHIM
   grep -q '\[PB-89\](http://plane.localhost:1800/pb/browse/PB-89)' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
 }
 
+@test "queue table renders an Auto column with the granted stages" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":7,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":7,"title":"x","priority":"high","project":"pb","auto_gates":["plan","implement"]}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PMG_NO_WEB=1
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  F="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+  grep -q '| # | Issue | Priority | Auto | Title |' "$F"
+  grep -q 'plan,implement' "$F"
+}
+
 @test "queue Issue cell falls back to a bare ref when no web base is configured" {
   local realpy; realpy="$(command -v python3)"
   cat > "$STUB/python3" <<SHIM

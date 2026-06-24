@@ -298,12 +298,19 @@ L.append("")
 # of the issues they block). groom feeds these ids to /plan-my-work one at a time.
 L.append("## Queue — ordered (%d)" % len(queue))
 L.append("")
+def auto_cell(r):
+    """The auto:<stage> labels granted to this issue (e.g. 'plan,implement'), shown
+    so the morning review surfaces groom's decisions and the user can strip one in
+    Plane before driving. '—' when none granted (the issue parks at the plan gate)."""
+    gates = r.get("auto_gates") or r.get("auto_suggested") or []
+    return ",".join(gates) if gates else "—"
+
 if queue:
-    L.append("| # | Issue | Priority | Title |")
-    L.append("|---|---|---|---|")
+    L.append("| # | Issue | Priority | Auto | Title |")
+    L.append("|---|---|---|---|---|")
     for i, r in enumerate(queue, 1):
-        L.append("| %d | %s | %s | %s |" % (
-            i, issue_link(r), r.get("priority", ""), r.get("title", "")))
+        L.append("| %d | %s | %s | %s | %s |" % (
+            i, issue_link(r), r.get("priority", ""), auto_cell(r), r.get("title", "")))
 else:
     L.append("_None — no todo issues ready to run. (Move a backlog issue to todo to "
              "queue it.)_")

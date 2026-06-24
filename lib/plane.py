@@ -1671,6 +1671,49 @@ def review_scan(cfg, client, project_ids, include_backlog=False):
     return out
 
 
+# How small (in estimate-hours) an issue must be for the NIGHTLY mechanical heuristic
+# to call implementation "easy" and pre-grant auto:implement. Conservative on purpose:
+# the heuristic is a safe FLOOR; the interactive agent (Tier 2) does the real judgment
+# and may grant more. Override via PBRAIN_GROOM_AUTO_MAX_HOURS.
+_AUTO_EASY_MAX_HOURS = 3.0
+
+
+def suggest_auto_stages(issue, *, approved=False, has_open_blockers=False,
+                        has_open_children=False, est_hours=None, is_docs_or_chore=False):
+    """The NIGHTLY mechanical heuristic: which auto:<stage> labels to pre-grant a
+    well-formed todo issue, WITHOUT an LLM. Pure. Conservative (better to under-label
+    — the user reviews the Auto column and the interactive agent refines). Rules:
+
+      * auto:plan      — always (drafting + SAVING a plan is low-risk + reviewable).
+      * auto:implement — only when the work looks genuinely easy: an APPROVED plan
+                         exists AND no open blockers AND no open sub-issues AND the
+                         estimate is small (<= _AUTO_EASY_MAX_HOURS). A complicated
+                         plan (no approval / big estimate / blockers / children) does
+                         NOT get auto:implement.
+      * auto:test      — only if implement was granted (test-after-implement) AND the
+                         issue isn't a pure docs/chore item where tests don't apply.
+      * auto:ship      — only if implement was granted (a clear path to a PR).
+      * auto:land      — NEVER (merge stays a manual, irreversible gate).
+
+    Returns a stage-name list in GATE_NAMES order (a subset of plan/implement/test/
+    ship), never including 'land'."""
+    try:
+        max_h = float(os.environ.get("PBRAIN_GROOM_AUTO_MAX_HOURS")
+                      or _AUTO_EASY_MAX_HOURS)
+    except (TypeError, ValueError):
+        max_h = _AUTO_EASY_MAX_HOURS
+    stages = ["plan"]
+    small = (est_hours is not None and est_hours <= max_h)
+    easy_impl = (approved and not has_open_blockers and not has_open_children and small)
+    if easy_impl:
+        stages.append("implement")
+        if not is_docs_or_chore:
+            stages.append("test")
+        stages.append("ship")
+    # NEVER auto:land. Keep GATE_NAMES order.
+    return [g for g in GATE_NAMES if g in stages]
+
+
 def groom_run(cfg, client, project_ids, apply=False):
     """Headless mechanical grooming for the daily loop (PB-46, redefined in PB-94).
 
@@ -1689,6 +1732,11 @@ def groom_run(cfg, client, project_ids, apply=False):
     JSON-able report dict: `todo` (well-formed, pipeline-ready) + `needs_review`
     (thin todo issues to enrich).
     """
+    # PB-94+: groom now also PRE-GRANTS auto:<stage> labels (except auto:land) to
+    # well-formed todo issues via the nightly mechanical heuristic (suggest_auto_stages).
+    # Tier 2 (the interactive groom-drive agent) refines these by real judgment.
+    # PBRAIN_GROOM_NO_AUTO=1 disables auto-assignment (mechanical triage only).
+    auto_off = os.environ.get("PBRAIN_GROOM_NO_AUTO") == "1"
     report = {"generated_for": list(project_ids), "applied": bool(apply),
               "projects": [], "todo": [], "needs_review": [], "errors": []}
     for pid in project_ids:
@@ -1701,6 +1749,22 @@ def groom_run(cfg, client, project_ids, apply=False):
         except PlaneError as e:
             report["errors"].append({"project_id": pid, "project": label, "error": str(e)})
             continue
+        # Per-project maps for the auto-stage heuristic (best-effort; degrade to off).
+        approved_ids = set()
+        gate_map = {}
+        hours_by_ep = {}
+        labels_by_id = {}
+        if not auto_off:
+            try:
+                approved_ids = set(approved_label_ids(client, pid))
+                gate_map = gate_label_map(client, pid)
+                hours_by_ep = est_uuid_to_hours(cfg, pid)
+                labels_by_id = {l.get("id"): (l.get("name") or "")
+                                for l in client.list_labels(pid)}
+            except Exception:
+                # Any failure (PlaneError, or a minimal client lacking these methods)
+                # disables auto-assignment for this project — never crashes groom.
+                approved_ids, gate_map, hours_by_ep, labels_by_id = set(), {}, {}, {}
         counts = {"todo": 0, "needs_review": 0, "skipped": 0}
         for issue in issues:
             if issue.get("parent"):
@@ -1721,6 +1785,42 @@ def groom_run(cfg, client, project_ids, apply=False):
                 report["needs_review"].append(row)
                 counts["needs_review"] += 1
             else:
+                # NIGHTLY heuristic: pre-grant auto:<stage> labels (never land).
+                # Skip entirely when the project maps couldn't be built (gate_map empty
+                # = no auto labels resolvable / minimal client) — best-effort.
+                if not auto_off and gate_map:
+                    cur_ids = issue_labels(issue)
+                    names = {labels_by_id.get(lid, "") for lid in cur_ids}
+                    approved = bool(set(cur_ids) & approved_ids)
+                    ep = issue.get("estimate_point")
+                    est_h = hours_by_ep.get(ep) if ep else None
+                    is_dc = bool(names & {"docs", "chore"})
+                    # has_open_children: best-effort sub-issue check.
+                    try:
+                        kids = client.list_sub_issues(pid, iid)
+                        has_kids = bool(kids)
+                    except PlaneError:
+                        has_kids = False
+                    # has_open_blockers: best-effort.
+                    try:
+                        blockers = blocked_by_ids(cfg, client, "%s:%s" % (pid, iid))
+                        has_block = bool(blockers)
+                    except Exception:
+                        has_block = False
+                    suggested = suggest_auto_stages(
+                        issue, approved=approved, has_open_blockers=has_block,
+                        has_open_children=has_kids, est_hours=est_h, is_docs_or_chore=is_dc)
+                    row["auto_suggested"] = suggested
+                    # Apply: add only the stage labels not already present (idempotent,
+                    # never removes a user-set label). Mechanical tier only ADDS.
+                    if apply and suggested:
+                        want_ids = [gate_map[s] for s in suggested if s in gate_map]
+                        new_ids = merge_labels(cur_ids, add=want_ids)
+                        if set(new_ids) != set(cur_ids):
+                            try:
+                                client.update_work_item(pid, iid, {"labels": new_ids})
+                            except PlaneError:
+                                pass
                 report["todo"].append(row)
                 counts["todo"] += 1
         report["projects"].append(
