@@ -140,3 +140,15 @@ declare -F pbrain_run_migrations >/dev/null && pbrain_run_migrations || true
 _PBRAIN_UPDATE_CHECK_SCRIPT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/update-check.sh"
 [[ -f "$_PBRAIN_UPDATE_CHECK_SCRIPT" ]] && source "$_PBRAIN_UPDATE_CHECK_SCRIPT" || true
 unset _PBRAIN_UPDATE_CHECK_SCRIPT
+
+# What's-new surface (PB-129). When the local plugin version advances (a
+# `/plugin update` landed) and a matching docs/whats-new/<v>.html exists, prints
+# a one-line pointer and (on macOS) opens the doc — once per upgrade. Never
+# fatal. Skipped on dev installs ($PBRAIN_DEV_DIR), where the version may sit
+# ahead of any generated doc and shouldn't pop on every git pull.
+if [[ -z "${PBRAIN_DEV_DIR:-}" ]]; then
+  _PBRAIN_WHATS_NEW_SCRIPT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/whats-new.sh"
+  [[ -f "$_PBRAIN_WHATS_NEW_SCRIPT" ]] && source "$_PBRAIN_WHATS_NEW_SCRIPT" \
+    && declare -F _whats_new_check >/dev/null && _whats_new_check || true
+  unset _PBRAIN_WHATS_NEW_SCRIPT
+fi

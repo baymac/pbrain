@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pbrain v0.24.0 — what's new</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141a23; --panel2:#1b232f; --line:#2a3340;
+    --ink:#e6edf3; --dim:#9aa6b2; --mute:#6e7681; --acc:#58a6ff; --good:#3fb950;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:var(--sans);line-height:1.6;font-size:15px}
+  .wrap{max-width:860px;margin:0 auto;padding:56px 24px 100px}
+  .tag{display:inline-block;font-family:var(--mono);font-size:12px;
+    color:var(--good);border:1px solid var(--line);border-radius:999px;
+    padding:4px 12px;margin-bottom:18px}
+  h1{font-size:34px;line-height:1.15;margin:0 0 12px;letter-spacing:-.02em}
+  .lede{color:var(--dim);font-size:18px;margin:0 0 14px;line-height:1.5}
+  .hr{height:1px;background:var(--line);border:0;margin:36px 0}
+  section{margin:0 0 38px}
+  h2{font-size:21px;margin:0 0 12px;letter-spacing:-.01em}
+  ul{margin:8px 0 16px;padding-left:20px}
+  li{margin:0 0 6px}
+  p{margin:0 0 13px}
+  code{font-family:var(--mono);font-size:.85em;background:var(--panel2);
+    border:1px solid var(--line);border-radius:4px;padding:1px 5px;white-space:nowrap}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  strong{color:#fff}
+  /* try-it command card */
+  .card{background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;overflow:hidden;margin:14px 0 18px}
+  .card-h{font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--good);
+    background:var(--panel2);border-bottom:1px solid var(--line);padding:7px 14px}
+  .card pre{margin:0;padding:14px;overflow-x:auto;font-family:var(--mono);
+    font-size:13px;line-height:1.55;color:var(--ink)}
+  /* pipeline flow diagram */
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+    margin:14px 0 20px;padding:16px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px}
+  .flow .chip{font-family:var(--mono);font-size:13px;color:var(--ink);
+    background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;padding:6px 12px}
+  .flow .chip code{background:none;border:0;padding:0;white-space:normal}
+  .flow .arrow{color:var(--mute);font-size:14px}
+  /* coverage table */
+  .tablewrap{overflow-x:auto;margin:14px 0 20px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;vertical-align:top;padding:9px 12px;
+    border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;background:var(--panel2)}
+  tbody tr:hover{background:var(--panel)}
+  td code{white-space:nowrap}
+  .foot{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="tag">v0.24.0</span>
+    <h1>Your task queue now runs itself</h1>
+    <p class="lede">pbrain 0.24.0 turns the daily loop into an auto-execution pipeline, a smarter overnight groom, and a real project + infra backbone — Plane on a VPS, vault backups, and tighter privacy.</p>
+    <hr class="hr">
+    <section><h2>The new mental model: a 5-stage pipeline</h2><p><code>/plan-my-work</code> is now a pure execution layer. Hand it one Plane issue and it walks five stages, auto-advancing each one that carries its <code>auto:&lt;stage&gt;</code> label and <strong>parking</strong> at the first one that doesn&#x27;t — so a later run resumes exactly where it stopped.</p>
+<div class="flow"><span class="chip">plan</span><span class="arrow">→</span><span class="chip">implement</span><span class="arrow">→</span><span class="chip">test</span><span class="arrow">→</span><span class="chip">ship</span><span class="arrow">→</span><span class="chip">land</span></div>
+<div class="card"><div class="card-h">Try it</div><pre># Drive one issue — by id, or in plain words
+/plan-my-work PB-128
+/plan-my-work fix the flaky habits rollup test</pre></div>
+<p>Each stage logs back to the issue (plan, files changed, test results, PR link). Merge stays safe: a red CI hard-stops <code>land</code>, and <code>auto:land</code> is <strong>never</strong> auto-assigned.</p></section>
+<section><h2>Groom preps tomorrow&#x27;s queue while you sleep</h2><p>Groom builds your ordered run queue (blockers first) and now labels issues by judgment. Turn on autonomous mode for a headless overnight pass, then wake to a ready queue.</p>
+<div class="card"><div class="card-h">Try it</div><pre>/project-manager groom                      # review today&#x27;s queue
+/project-manager groom enable --autonomous  # nightly headless judgment pass</pre></div>
+<div class="tablewrap"><table><thead><tr><th>Change</th><th>What it means for you</th></tr></thead><tbody><tr><td><strong>Judgment labels</strong></td><td>Groom decides which stages auto-run per issue — never <code>auto:land</code>, so merges stay yours.</td></tr><tr><td><strong>Quality gate</strong></td><td>Half-baked issues (<code>x</code>, <code>wip</code>, &quot;fix the thing&quot;) get enriched before they reach the queue.</td></tr><tr><td><strong>Autonomous nightly</strong></td><td><code>enable --autonomous</code> triages overnight; you review a finished queue in the morning.</td></tr><tr><td><strong>Weekly-goal scope</strong></td><td>Defaults to this week&#x27;s goal projects, with clickable issue links.</td></tr></tbody></table></div></section>
+<section><h2>Plan your work with a spec gate</h2><div class="card"><div class="card-h">Try it</div><pre>/project-manager spec PB-42   # Socratic walk → drafts + approves a plan
+/plan-my-work PB-42           # approved issues skip the live planning step</pre></div>
+<p>Approve a plan once and the pipeline runs it without re-asking — less hand-holding, fewer surprises mid-build.</p></section>
+<section><h2>Run Plane wherever you need it</h2><div class="tablewrap"><table><thead><tr><th>Feature</th><th>Command</th><th>Use it for</th></tr></thead><tbody><tr><td><strong>Host Plane on a VPS</strong></td><td><code>/project-manager host</code></td><td>Move Plane off localhost — deploy, domain, VPN, or import an existing instance</td></tr><tr><td><strong>GitHub setup</strong></td><td><code>/init-plane github</code></td><td>Wire GitHub integration into your Plane instance</td></tr><tr><td><strong>Daily Plane backups</strong></td><td><code>/project-manager backup</code></td><td>Snapshots → local / external / VPS, with retention + restore</td></tr><tr><td><strong>Tidier labels &amp; links</strong></td><td><code>/project-manager labels --seed</code></td><td>Repairs label colors; issue links now open your real host, not <code>127.0.0.1</code></td></tr></tbody></table></div></section>
+<section><h2>Back up your vault, keep it private</h2><div class="card"><div class="card-h">Try it</div><pre>/vault-backup enable   # nightly off-iCloud vault snapshots
+/vault-backup now      # snapshot on demand; restore never overwrites the live vault</pre></div>
+<ul><li><strong>Off-iCloud vault backup</strong> — a full snapshot of your vault to local / external / VPS, with retention and stale-backup alerts.</li><li><strong>pbrain learns from your corrections</strong> — at <code>/end-of-day</code> it reviews the day and proposes improvements it noticed, one at a time, before changing anything.</li><li><strong>Your Plane token is never shown</strong> — it stays out of the terminal and logs.</li></ul></section>
+<section><h2>Also changed</h2><div class="tablewrap"><table><thead><tr><th>Area</th><th>Change</th></tr></thead><tbody><tr><td><strong>Goals</strong></td><td>Allocation now reads as &quot;% of expected time&quot; instead of &quot;% of importance&quot; — easier to plan against.</td></tr></tbody></table></div></section>
+    <div class="foot">
+      Full history in the
+      <a href="https://github.com/baymac/pbrain/blob/main/CHANGELOG.md">changelog</a>.
+      Update any time with <code>/plugin update pbrain</code>.
+    </div>
+  </div>
+</body>
+</html>

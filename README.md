@@ -344,10 +344,13 @@ pbrain/
 │   ├── pbrain-reminders.swift          ← source for the EventKit Reminders helper app (/remind)
 │   ├── pbrain-notify.swift             ← source for pbrain's macOS notifier app
 │   ├── pbrain-overlay.swift            ← source for pbrain's full-screen blocking overlay app (warning panel + lock-persist)
-│   └── pbrain-tracker.swift            ← source for the laptop-tracking daemon (foreground + bg_media tracking)
+│   ├── pbrain-tracker.swift            ← source for the laptop-tracking daemon (foreground + bg_media tracking)
+│   ├── whats-new.sh                     ← per-release "what's new" doc: render + surface-once-on-update (PB-129)
+│   └── whats-new-render.py              ← changelog-section → styled HTML renderer
 ├── scripts/
 │   ├── install-commands.sh             ← symlink commands into ~/.claude/commands/
-│   └── uninstall-commands.sh           ← reverse of install
+│   ├── uninstall-commands.sh           ← reverse of install
+│   └── release.sh                       ← reproducible release pipeline: bump + changelog + whats-new + tag + publish (PB-128; see docs/release.md)
 ├── tests/                              ← bats test suite for lib/ helpers
 ├── docs/                               ← one short doc per command (user-facing)
 ├── gbrain/                             ← gbrain ops (sync, launchd, docs)
