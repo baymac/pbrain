@@ -8,19 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Plane",
-        "url": "http://localhost:1800/",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 800,
-        "minHeight": 600,
-        "center": true,
-        "titleBarStyle": "Overlay"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -28,13 +16,17 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["plane"]
+        "schemes": [
+          "plane"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

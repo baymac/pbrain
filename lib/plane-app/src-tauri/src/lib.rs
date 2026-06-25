@@ -61,6 +61,37 @@ fn first_target(urls: &[url::Url]) -> Option<String> {
     urls.iter().find_map(|u| plane_uri_to_http(u.as_str()))
 }
 
+/// Polyfill injected into the webview at document-start, before any Plane code runs.
+///
+/// Apple's WebKit (and therefore the WKWebView this app embeds) does NOT implement
+/// `window.requestIdleCallback` / `cancelIdleCallback`. Plane's Board / spreadsheet
+/// layout calls `requestIdleCallback(...)` to measure row heights; in the WebView that
+/// call throws `TypeError: requestIdleCallback is not a function`, React Router's error
+/// boundary catches it during render, and the entire Board view renders blank. The List
+/// layout never touches that path, which is why only Board breaks. (Chrome/Firefox ship
+/// the API, so the same Plane build works fine in a normal browser.)
+///
+/// This is the standard setTimeout-based shim. It only defines the functions when they
+/// are missing, so a future WebKit that ships the real API is left untouched.
+const RIC_POLYFILL: &str = r#"
+(function () {
+  if (typeof window.requestIdleCallback !== 'function') {
+    window.requestIdleCallback = function (cb, opts) {
+      var start = Date.now();
+      return setTimeout(function () {
+        cb({
+          didTimeout: false,
+          timeRemaining: function () { return Math.max(0, 50 - (Date.now() - start)); }
+        });
+      }, (opts && opts.timeout) ? Math.min(opts.timeout, 1) : 1);
+    };
+  }
+  if (typeof window.cancelIdleCallback !== 'function') {
+    window.cancelIdleCallback = function (id) { clearTimeout(id); };
+  }
+})();
+"#;
+
 /// Navigate the main window to `target` and bring it to the foreground.
 fn focus_and_navigate(app: &tauri::AppHandle, target: &str) {
     if let Some(win) = app.get_webview_window("main") {
@@ -80,9 +111,24 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // Build the main window in Rust (rather than tauri.conf.json) so we can
+            // attach an initialization script: it runs at document-start on EVERY
+            // navigation, before any Plane code, which is the only place the
+            // requestIdleCallback polyfill (see RIC_POLYFILL) can land early enough to
+            // keep the Board layout from crashing in this WKWebView.
+            let base = PLANE_BASE.parse().expect("PLANE_BASE is a valid URL");
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(base))
+                .title("Plane")
+                .inner_size(1400.0, 900.0)
+                .min_inner_size(800.0, 600.0)
+                .center()
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .initialization_script(RIC_POLYFILL)
+                .build()?;
+
             // Cold launch: if the app was started by a plane:// link, the main
-            // window (configured in tauri.conf.json to load the Plane home) is
-            // navigated to the deep-linked page before the user sees it.
+            // window (built just above to load the Plane home) is navigated to the
+            // deep-linked page before the user sees it.
             if let Ok(Some(urls)) = app.deep_link().get_current() {
                 if let Some(target) = first_target(&urls) {
                     focus_and_navigate(&handle, &target);
