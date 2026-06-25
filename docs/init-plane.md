@@ -17,6 +17,8 @@ Plane is pbrain's **sole** project backend — task-based planning ([`/plan-my-w
 
 After setup, `/plan-my-work` pulls ready Plane issues into your work blocks and `/end-of-day` writes their status back. Manage the actual task tree in Plane's UI.
 
+**Custom state model (PB-130).** Projects created or seeded through `/project-manager` replace Plane's default `Todo` / `In Progress` states with the lifecycle pipeline **Backlog → Triage → Planning → Building → Testing → Review** (+ **Done** / **Cancelled**), and `/plan-my-work` advances issues through it automatically (plan→Planning, implement→Building, test→Testing, ship/land→Review, merge→Done). See [project-manager.md](project-manager.md#state-model-pb-130). State creation needs Plane's internal API (session login); if that isn't wired, the seed hands back the exact UI steps to set the states up by hand.
+
 ## Usage
 
 Run `/init-plane` and follow the wizard. The underlying subcommands (also runnable directly):

@@ -77,6 +77,16 @@ append a tight comment via `${PM_CMD} comment "<tie>" --body "..."` capturing wh
 happened + the artifacts (plan link, files changed, TEST RESULTS, PR url, park note).
 At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
 
+PB-130 — PIPELINE STATE PER STAGE. On projects bootstrapped with pbrain's custom
+state model (Backlog → Triage → Planning → Building → Testing → Review + Done +
+Cancelled), advance the issue into the STAGE's state as you ENTER each stage, with
+`--to-state`: plan → Planning, implement → Building, test → Testing, ship & land →
+Review, then Done on merge (stage 6). The form is
+`${PM_CMD} move "<tie>" --to doing --to-state <PipelineState>` (the `--to doing`
+keeps the started-group status; `--to-state` picks the named state inside it). On a
+project WITHOUT the pipeline states, `--to-state` degrades to the started group's
+default — harmless — so always pass it; you don't need to detect the state model.
+
 0. RESOLVE WORKING LOCATION. Look up the issue's project in WORKING LOCATIONS.
    Absent → [GATE] ask the user for the absolute path to the project's repo / workspace
    and offer to record it: `${PM_CMD} workdir "<project-ref>" --path "<abs>"
@@ -94,7 +104,9 @@ At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
    or recreate from the pushed branch if the local one is gone:
      git -C <path> worktree add <wt> -b pbrain/<slug> origin/pbrain/<slug>
    READ the TARGET repo's CLAUDE.md / AGENTS.md conventions (not pbrain's). State the
-   branch + base. THEN the plan itself:
+   branch + base. Move the issue into the Planning state:
+     ${PM_CMD} move "<tie>" --to doing --to-state Planning
+   THEN the plan itself:
      - approved == true (the issue already has an approved `## Implementation Plan` in
        its description) → FAST PATH: read that plan and implement against it; do not
        re-draft. Honor authoritative user comments if they override the description.
@@ -109,18 +121,21 @@ At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
    writing ANY code; no go → PARK (step P).
 
 2. IMPLEMENT  (auto:implement)
+   Move the issue into the Building state: `${PM_CMD} move "<tie>" --to doing --to-state Building`.
    Write code per the plan + the target repo's conventions. Commit locally in the
    worktree (clear message; reference the PB-id). Comment the issue with a one-line
    summary + files changed. GATE: auto:implement → announce + proceed; absent → [GATE];
    no go → PARK.
 
 3. TEST  (auto:test)
+   Move the issue into the Testing state: `${PM_CMD} move "<tie>" --to doing --to-state Testing`.
    Run the repo's tests / linters / build. Capture the RESULTS (pass/fail counts, any
    failures) and comment them onto the issue — this is the part a CEO reviews. If tests
    fail, fix and re-run until green (or surface the failure and stop). GATE: auto:test →
    announce + proceed; absent → [GATE]; no go → PARK.
 
 4. SHIP  (auto:ship)
+   Move the issue into the Review state: `${PM_CMD} move "<tie>" --to doing --to-state Review`.
    Probe `command -v gh`.
      - gh present → push the branch, then `gh pr create --fill --base <base_branch>`.
        Put the PR url in the issue: `${PM_CMD} comment "<tie>" --body "PR: <url>"`.

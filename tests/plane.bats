@@ -186,6 +186,91 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Triage default, no dup names" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+ps = m.PIPELINE_STATES
+names = [s["name"] for s in ps]
+assert names == ["Backlog","Triage","Planning","Building","Testing","Review","Done","Cancelled"], names
+by = {s["name"]: s for s in ps}
+assert by["Backlog"]["group"]=="backlog"
+assert by["Triage"]["group"]=="unstarted"
+for n in ("Planning","Building","Testing","Review"):
+    assert by[n]["group"]=="started", n
+assert by["Done"]["group"]=="completed"
+assert by["Cancelled"]["group"]=="cancelled"
+# exactly one default, and it is Triage (newly-filed lands ready)
+defaults=[s["name"] for s in ps if s.get("default")]
+assert defaults==["Triage"], defaults
+# orders are unique and ascending → distinct sequences when seeded
+orders=[s["order"] for s in ps]
+assert orders==sorted(orders) and len(set(orders))==len(orders)
+# every group used is one pbrain knows about (ready contract intact)
+groups=set(s["group"] for s in ps)
+assert groups <= set(("backlog","unstarted","started","completed","cancelled")), groups
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 STAGE_TO_STATE maps the auto-exec stages to pipeline states" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.STAGE_TO_STATE=={"plan":"Planning","implement":"Building","test":"Testing","ship":"Review","land":"Review"}, m.STAGE_TO_STATE
+# every mapped state name is a real pipeline state in the started group
+by={s["name"]:s for s in m.PIPELINE_STATES}
+for stage,name in m.STAGE_TO_STATE.items():
+    assert name in by, name
+    assert by[name]["group"]=="started", (stage,name)
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 build_status_body to_state targets the named state, falls back to group default" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# A pipeline project: distinct started-group states by name.
+pipeline=[
+  {"id":"plan","name":"Planning","group":"started","sequence":3},
+  {"id":"build","name":"Building","group":"started","sequence":4},
+  {"id":"test","name":"Testing","group":"started","sequence":5},
+  {"id":"rev","name":"Review","group":"started","sequence":6},
+  {"id":"done","name":"Done","group":"completed","default":True},
+]
+assert m.build_status_body("doing",pipeline,to_state="Building")=={"state":"build"}
+assert m.build_status_body("doing",pipeline,to_state="Review")=={"state":"rev"}
+# case-insensitive name match (pick_state_id lowercases)
+assert m.build_status_body("doing",pipeline,to_state="testing")=={"state":"test"}
+# Non-pipeline project (no named states): to_state degrades to the started default.
+legacy=[{"id":"prog","group":"started","default":True},{"id":"done","group":"completed","default":True}]
+assert m.build_status_body("doing",legacy,to_state="Building")=={"state":"prog"}
+# to_state=None keeps the old behaviour exactly.
+assert m.build_status_body("doing",legacy)=={"state":"prog"}
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 state_group_id reads expanded-dict or bare-uuid state" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.state_group_id({"state":{"id":"abc","name":"Building"}})=="abc"
+assert m.state_group_id({"state":"xyz"})=="xyz"
+assert m.state_group_id({})  is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "filter_ready drops backlog by default and orders by priority then due" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

@@ -557,9 +557,14 @@ PYEOF
   move)
     _parse_args "$@"
     tie="${POS[0]:-}"; to="$(_flag to)"; [[ -n "$to" ]] || to="$(_flag status)"
-    [[ -n "$tie" && -n "$to" ]] || { echo "Usage: /project-manager move <tie> --to <status>" >&2; exit 1; }
+    [[ -n "$tie" && -n "$to" ]] || { echo "Usage: /project-manager move <tie> --to <status> [--to-state <PipelineState>]" >&2; exit 1; }
     echo "PM_MOVE"
-    python3 "$PLANE" move --tie "$tie" --status "$to" ${F_completed_at:+--completed-at "$F_completed_at"} || true
+    # PB-130: --to-state targets a named pipeline state (Planning/Building/Testing/
+    # Review) within the status's group; absent → the group's default (back-compat).
+    to_state="$(_flag to_state)"
+    python3 "$PLANE" move --tie "$tie" --status "$to" \
+      ${to_state:+--to-state "$to_state"} \
+      ${F_completed_at:+--completed-at "$F_completed_at"} || true
     ;;
 
   priority)

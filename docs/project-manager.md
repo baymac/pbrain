@@ -51,9 +51,9 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `explode <ref> [--project R]` | **Read-only** context for breaking ONE issue down. Resolves the ref, then prefetches its description + existing sub-issues + estimate scale and emits a **Socratic walk** (see below). |
 | `spec <ref> [--project R] [--read]` | The **spec/approval gate** (PB-45). A **Socratic walk** that drafts a tight `## Implementation Plan` into the issue description and, on explicit approval, adds the `plan-approved` label. An approved issue lets `/plan-my-work task execute` skip its live planning gate (fast path). `--read` emits JSON only (plan + approval state, no walk) — how `task execute` reads it. |
 | `file "<dump>" [--project R] [--fast]` (aliases `create`/`track`/`capture`) | The **generic work-item intake & triage convention** (PB-67). **Read-only** until you file. Explodes a free-text dump into a triage-ready item of ANY type (bug/feature/docs/chore/refactor/improvement, inferred), dedupes against open items. **Full path** (default) = Socratic build-up: type → body → sub-issues → labels → estimate → priority → deadline. **`--fast`** = infer + one confirm. Creates with the type's convention label + a severity-derived priority (bugs). "file this …" / "create an issue for …" route here. |
-| `labels --seed [--projects R,…]` | Seed the convention labels `bug`/`feature`/`chore`/`docs` onto the project(s) (default: all). Idempotent; new projects get them on create (PB-70). |
+| `labels --seed [--projects R,…]` | Seed the convention labels `bug`/`feature`/`chore`/`docs` **and** the custom lifecycle states (PB-130) onto the project(s) (default: all). Idempotent; new projects get both on create (PB-70/PB-130). The states pass needs the Plane **internal** API (session cookie / login); without it, the result carries the exact UI steps to set the pipeline up by hand. |
 | `enrich` / `update --edits '<json>'` | The generic write path: `[{tie,field,value}]`. `field` ∈ description · title · priority · target_date/due · start_date · estimate · assignees(name\|uuid) · tag/untag/labels · state · parent · cycle · module · comment · link · subissue · relation:&lt;type&gt;. One batch shares a creation-guard + cache. |
-| `move <tie> --to <status>` | Status (`todo\|doing\|done\|blocked\|dropped`). |
+| `move <tie> --to <status> [--to-state <PipelineState>]` | Status (`todo\|doing\|done\|blocked\|dropped`). PB-130: `--to-state` targets a named pipeline state (`Planning\|Building\|Testing\|Review`, …) inside that status's group; absent or unknown → the group's default (so non-pipeline projects are unaffected). `/plan-my-work` uses it to advance issues through the lifecycle (plan→Planning, implement→Building, test→Testing, ship/land→Review, merge→Done). |
 | `priority <tie> --value <p>` | Priority (`urgent\|high\|medium\|low\|none`). |
 | `timeline <tie> --target-date <d>` | Target date (`YYYY-MM-DD`). |
 | `tag <tie> --add a,b [--remove c] [--set x,y]` | Labels — add (auto-created, capped), remove, or replace the whole set. |
@@ -66,6 +66,27 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `labels\|members\|cycles\|modules [--project R]` | List a project's labels / members / cycles / modules (the name→uuid tables). |
 
 A **tie** is `<project_id>:<issue_id>` — the handle that flows through the daily loop (the `## Work tracker` carries it, `/end-of-day` resolves it back).
+
+## State model (PB-130)
+
+Every pbrain-bootstrapped project replaces Plane's default `Todo` / `In Progress` states with a custom lifecycle pipeline:
+
+**Backlog → Triage → Planning → Building → Testing → Review**, plus **Done** and **Cancelled**.
+
+Each state keeps a Plane **state group** so the `ready` / `READY_GROUPS` contract still resolves pickable work (pbrain resolves work by *group*, not name):
+
+| State | Group | Role |
+|---|---|---|
+| Backlog | `backlog` | the user's staging area — **not** "ready" |
+| Triage | `unstarted` | filed, not yet planned — the project **default** (newly-filed issues land here, ready) |
+| Planning | `started` | `/plan-my-work` **plan** stage |
+| Building | `started` | **implement** stage |
+| Testing | `started` | **test** stage |
+| Review | `started` | **ship** / **land** stages (PR open) |
+| Done | `completed` | merged |
+| Cancelled | `cancelled` | dropped |
+
+Seeded on `project-create` and backfilled onto existing projects via `labels --seed`. Plane's public token API can't write states, so the seed uses the **internal** API (session cookie / login, the same seam estimates use); when that auth isn't configured the command makes no changes and hands back the exact Plane-UI steps instead. Existing issues are **not** auto-migrated (a separate follow-up) — only the two superseded defaults are removed, after any issue on them is re-pointed (Todo→Triage, In Progress→Building). Supersedes PB-118's triage→todo-vs-backlog ambiguity for new projects.
 
 ## Backups (PB-17)
 
