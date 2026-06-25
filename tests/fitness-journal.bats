@@ -279,16 +279,19 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"sleep_bed:"* && "$output" == *"sleep_wake:"* && "$output" == *"sleep_hours:"* ]]
 }
 
-@test "Step 4 instructs to backfill sleep_* instead of leaving blank (PB-110)" {
+@test "Step 4 asks for sleep and never fabricates it (PB-110, revised)" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  # The fix: when this session doesn't capture sleep, carry it forward rather than
-  # silently leave the four fields blank.
+  # Revised contract: sleep is mandatory to ASK, carry-forward only on confirm, and
+  # a fabricated reading (profile window / assumed time) is forbidden.
   [[ "$output" == *"MOST RECENT SLEEP"* ]]
   [[ "$output" == *"CARRY FORWARD"* ]]
-  [[ "$output" == *"do NOT leave them blank when a source exists"* ]]
+  [[ "$output" == *"mandatory to surface"* ]]
+  [[ "$output" == *"fabricated reading is false data"* ]]
+  # The old "fill from a source so it's never blank" phrasing must be gone.
+  [[ "$output" != *"do NOT leave them blank when a source exists"* ]]
 }
 
 @test "MOST RECENT SLEEP block carries the newest non-blank session's sleep (PB-110)" {
@@ -309,19 +312,24 @@ sleep_hours: 7.5
 # Gym
 EOF
   run FIT
-  [[ "$output" == *"MOST RECENT SLEEP"* ]]
+  [[ "$output" == *"MOST RECENT SLEEP (confirm-and-carry source for Step 4)"* ]]
   [[ "$output" == *"most recent session (2026-06-20)"* ]]
   [[ "$output" == *"sleep_bed: 23:40"* && "$output" == *"sleep_hours: 7.5"* ]]
 }
 
-@test "MOST RECENT SLEEP falls back to the profile window when no session has sleep (PB-110)" {
+@test "MOST RECENT SLEEP never fabricates from the profile window (PB-110, revised)" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  # No prior sessions on record → profile's typical sleep window is the source.
-  [[ "$output" == *"profile typical sleep window"* ]]
-  [[ "$output" == *"sleep_bed: 23:00"* && "$output" == *"sleep_wake: 07:00"* ]]
+  # No prior session has sleep → cold start. The profile window (23:00/07:00) must
+  # NOT be surfaced as a sleep source; the model is told to ask and not invent.
+  [[ "$output" == *"no prior sleep on record — ask the user; do not invent"* ]]
+  [[ "$output" != *"profile typical sleep window"* ]]
+  # write_overall_profile sets the window to 23:00/07:00 — neither may appear as a
+  # synthetic sleep_* default in the MOST RECENT SLEEP block.
+  [[ "$output" != *"sleep_bed: 23:00"* ]]
+  [[ "$output" != *"sleep_wake: 07:00"* ]]
 }
 
 @test "daily flow opens with a skippable readiness check-in, logger-framed" {
@@ -332,6 +340,19 @@ EOF
   [[ "$output" == *"flexible LOGGER"* && "$output" == *"Quick check-in"* \
      && "$output" == *"LOGGER, not an interrogation"* \
      && "$output" == *"straight to logging"* ]]
+}
+
+@test "sleep is mandatory to ask even when the check-in is skipped (PB-110, revised)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # Step 1 must carve sleep out of the skip: the check-in is skippable, the one
+  # sleep line is not, and it is asked once and never force-filled or invented.
+  [[ "$output" == *"sleep is the one mandatory field"* ]]
+  [[ "$output" == *"ALWAYS ask"* ]]
+  [[ "$output" == *"still confirm the one sleep line"* ]]
+  [[ "$output" == *"a fabricated reading is false data; a blank field is honest"* ]]
 }
 
 @test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {
