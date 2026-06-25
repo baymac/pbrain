@@ -157,7 +157,9 @@ default — harmless — so always pass it; you don't need to detect the state m
         the typed word is required.
    With BOTH satisfied (green/waived AND [typed word OR auto:land]):
      gh pr merge <pr> --squash --delete-branch
-   then clean up: git -C <path> worktree remove <wt>.
+   then clean up with the GC sweep (squash-merge safe; removes this now-merged worktree
+   + its pbrain/<slug> branch, and harmlessly SKIPS any not-yet-merged/dirty peers):
+     ${PM_CMD} prune-merged --repo <path>
    GATE: auto:land present → (typed half waived, CI still required); absent → manual
    typed-confirm gate; no go → PARK (the PR stays open; resume re-attaches at this
    stage).
@@ -188,8 +190,10 @@ stops). Parking must leave the partial work DURABLE + RESUMABLE:
 THEN record the resume breadcrumb on the issue (this is the resume key):
      ${PM_CMD} comment "<tie>" --body "pbrain park: branch pbrain/<slug>, parked at <stage>; <PR url if any>; resume with /plan-my-work <PB-id>"
    Leave the status as doing. Never `worktree remove` a parked worktree — only a
-   successful merge (stage 5) removes it. A different machine can still resume from the
-   pushed branch (stage 1 RE-ATTACH recreates the worktree from origin/pbrain/<slug>).
+   successful merge (stage 5) removes it, via `${PM_CMD} prune-merged` whose merged+clean
+   gate inherently skips a parked worktree (it is either unmerged or carries a WIP commit
+   that diverges from base → KEPT). A different machine can still resume from the pushed
+   branch (stage 1 RE-ATTACH recreates the worktree from origin/pbrain/<slug>).
 
 ================================== CLOSE ==================================
 When the issue (or, for a parent, its last child) is done — or you parked — give one
