@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -450,7 +450,16 @@ PYEOF
 
   states)
     _parse_args "$@"
-    python3 "$PLANE" states ${F_project:+--project "$F_project"}
+    # PB-130: `states` lists a project's states; `states --seed` creates/reconciles
+    # the custom pipeline; `states --migrate` also re-points existing issues onto it.
+    # Both default to the whole registry; --projects R,... narrows the set.
+    echo "PM_STATES"
+    python3 "$PLANE" states \
+      ${F_project:+--project "$F_project"} \
+      ${F_projects:+--projects "$F_projects"} \
+      $(_has_bool seed && echo --seed) \
+      $(_has_bool migrate && echo --migrate) \
+      $(_has_bool dry_run && echo --dry-run) || true
     ;;
 
   web-base)
@@ -557,9 +566,14 @@ PYEOF
   move)
     _parse_args "$@"
     tie="${POS[0]:-}"; to="$(_flag to)"; [[ -n "$to" ]] || to="$(_flag status)"
-    [[ -n "$tie" && -n "$to" ]] || { echo "Usage: /project-manager move <tie> --to <status>" >&2; exit 1; }
+    [[ -n "$tie" && -n "$to" ]] || { echo "Usage: /project-manager move <tie> --to <status> [--to-state <PipelineState>]" >&2; exit 1; }
     echo "PM_MOVE"
-    python3 "$PLANE" move --tie "$tie" --status "$to" ${F_completed_at:+--completed-at "$F_completed_at"} || true
+    # PB-130: --to-state targets a named pipeline state (Planning/Building/Testing/
+    # Review) within the status's group; absent → the group's default (back-compat).
+    to_state="$(_flag to_state)"
+    python3 "$PLANE" move --tie "$tie" --status "$to" \
+      ${to_state:+--to-state "$to_state"} \
+      ${F_completed_at:+--completed-at "$F_completed_at"} || true
     ;;
 
   priority)
@@ -583,15 +597,18 @@ PYEOF
     project="${POS[0]:-$(_flag project)}"
     title="$(_flag title)"
     [[ -n "$project" && -n "$title" ]] || {
-      echo "Usage: /project-manager issue --project <ref> --title <title> [--priority p] [--target-date YYYY-MM-DD]" >&2
+      echo "Usage: /project-manager issue --project <ref> --title <title> [--priority p] [--target-date YYYY-MM-DD] [--state <name>]" >&2
       exit 1
     }
     echo "PM_ISSUE"
+    # PB-130: --state files the issue directly into a named state (e.g. Backlog);
+    # default is the project default (Todo).
     python3 "$PLANE" issue \
       --project "$project" \
       --title "$title" \
       ${F_priority:+--priority "$F_priority"} \
-      ${F_target_date:+--target-date "$F_target_date"} || true
+      ${F_target_date:+--target-date "$F_target_date"} \
+      ${F_state:+--state "$F_state"} || true
     ;;
 
   project-create)

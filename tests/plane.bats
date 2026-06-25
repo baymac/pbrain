@@ -186,6 +186,180 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Todo default, no dup names" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+ps = m.PIPELINE_STATES
+names = [s["name"] for s in ps]
+# Todo is KEPT (not renamed to "Triage" — Plane reserves that name for its intake).
+assert names == ["Backlog","Todo","Planning","Building","Testing","Review","Done","Cancelled"], names
+by = {s["name"]: s for s in ps}
+assert by["Backlog"]["group"]=="backlog"
+assert by["Todo"]["group"]=="unstarted"
+for n in ("Planning","Building","Testing","Review"):
+    assert by[n]["group"]=="started", n
+assert by["Done"]["group"]=="completed"
+assert by["Cancelled"]["group"]=="cancelled"
+# exactly one default, and it is Todo (newly-filed lands ready)
+defaults=[s["name"] for s in ps if s.get("default")]
+assert defaults==["Todo"], defaults
+# only In Progress is removed; Todo is kept (not in the removal map)
+assert "in progress" in m.DEFAULT_STATES_TO_REMOVE and "todo" not in m.DEFAULT_STATES_TO_REMOVE
+# orders are unique and ascending → distinct sequences when seeded
+orders=[s["order"] for s in ps]
+assert orders==sorted(orders) and len(set(orders))==len(orders)
+# every group used is one pbrain knows about (ready contract intact)
+groups=set(s["group"] for s in ps)
+assert groups <= set(("backlog","unstarted","started","completed","cancelled")), groups
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 STAGE_TO_STATE maps the auto-exec stages to pipeline states" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.STAGE_TO_STATE=={"plan":"Planning","implement":"Building","test":"Testing","ship":"Review","land":"Review"}, m.STAGE_TO_STATE
+# every mapped state name is a real pipeline state in the started group
+by={s["name"]:s for s in m.PIPELINE_STATES}
+for stage,name in m.STAGE_TO_STATE.items():
+    assert name in by, name
+    assert by[name]["group"]=="started", (stage,name)
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 build_status_body to_state targets the named state, falls back to group default" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# A pipeline project: distinct started-group states by name.
+pipeline=[
+  {"id":"plan","name":"Planning","group":"started","sequence":3},
+  {"id":"build","name":"Building","group":"started","sequence":4},
+  {"id":"test","name":"Testing","group":"started","sequence":5},
+  {"id":"rev","name":"Review","group":"started","sequence":6},
+  {"id":"done","name":"Done","group":"completed","default":True},
+]
+assert m.build_status_body("doing",pipeline,to_state="Building")=={"state":"build"}
+assert m.build_status_body("doing",pipeline,to_state="Review")=={"state":"rev"}
+# case-insensitive name match (pick_state_id lowercases)
+assert m.build_status_body("doing",pipeline,to_state="testing")=={"state":"test"}
+# Non-pipeline project (no named states): to_state degrades to the started default.
+legacy=[{"id":"prog","group":"started","default":True},{"id":"done","group":"completed","default":True}]
+assert m.build_status_body("doing",legacy,to_state="Building")=={"state":"prog"}
+# to_state=None keeps the old behaviour exactly.
+assert m.build_status_body("doing",legacy)=={"state":"prog"}
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 state_group_id reads expanded-dict or bare-uuid state" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.state_group_id({"state":{"id":"abc","name":"Building"}})=="abc"
+assert m.state_group_id({"state":"xyz"})=="xyz"
+assert m.state_group_id({})  is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 resolve_state_id: matches by name (ci), by status word, None on miss" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+states=[
+  {"id":"bk","name":"Backlog","group":"backlog"},
+  {"id":"td","name":"Todo","group":"unstarted","default":True},
+  {"id":"bd","name":"Building","group":"started"},
+]
+# by exact name (case-insensitive)
+assert m.resolve_state_id(states,"Backlog")=="bk"
+assert m.resolve_state_id(states,"backlog")=="bk"
+# by pbrain status word → that group's default/lowest
+assert m.resolve_state_id(states,"todo")=="td"      # unstarted default
+assert m.resolve_state_id(states,"doing")=="bd"     # started
+# name takes precedence over status word when both could match
+# (none here), and a miss / empty returns None
+assert m.resolve_state_id(states,"Nonexistent") is None
+assert m.resolve_state_id(states,"") is None
+assert m.resolve_state_id(states,None) is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 seed_pipeline_states: creates work states, keeps Todo, removes In Progress after re-point (fake client)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class Fake:
+    """In-memory Plane: default 5 states + 2 issues (one on In Progress)."""
+    def __init__(self):
+        self.states=[
+          {"id":"bk","name":"Backlog","group":"backlog","default":False},
+          {"id":"td","name":"Todo","group":"unstarted","default":True},
+          {"id":"ip","name":"In Progress","group":"started","default":False},
+          {"id":"dn","name":"Done","group":"completed","default":False},
+          {"id":"cx","name":"Cancelled","group":"cancelled","default":False},
+        ]
+        self.items=[{"id":"i1","state":"td"},{"id":"i2","state":"ip"}]
+        self._n=0
+    def _has_internal_auth(self): return True
+    def list_states(self,pid): return [dict(s) for s in self.states]
+    def list_work_items(self,pid): return [dict(it) for it in self.items]
+    def create_state(self,pid,name,group,color=None,default=False,sequence=None):
+        self._n+=1; sid="new%d"%self._n
+        self.states.append({"id":sid,"name":name,"group":group,"default":default})
+        return {"id":sid}
+    def update_state(self,pid,sid,**kw):
+        for s in self.states:
+            if s["id"]==sid: s.update({k:v for k,v in kw.items() if v is not None})
+        return {}
+    def delete_state(self,pid,sid):
+        self.states=[s for s in self.states if s["id"]!=sid]; return {}
+    def update_work_item(self,pid,iid,body):
+        for it in self.items:
+            if it["id"]==iid: it["state"]=body.get("state",it["state"])
+        return {}
+
+c=Fake()
+out=m.seed_pipeline_states(c, "P")
+names=[s["name"] for s in c.states]
+# the 4 work states were created
+assert set(["Planning","Building","Testing","Review"]).issubset(set(names)), names
+# Todo kept, In Progress removed
+assert "Todo" in names and "In Progress" not in names, names
+assert "In Progress" in out["removed"], out
+# the issue that was on In Progress got re-pointed to Building
+building_id=next(s["id"] for s in c.states if s["name"]=="Building")
+assert any(it["id"]=="i2" and it["state"]==building_id for it in c.items), c.items
+# idempotent: a second seed makes no further removals/creates
+out2=m.seed_pipeline_states(c, "P")
+assert out2["created"]==[] and out2["removed"]==[], out2
+# no internal auth → manual steps, no writes
+class NoAuth(Fake):
+    def _has_internal_auth(self): return False
+na=NoAuth(); o=m.seed_pipeline_states(na,"P")
+assert o.get("manual_steps") and "In Progress" in [s["name"] for s in na.states]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "filter_ready drops backlog by default and orders by priority then due" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
