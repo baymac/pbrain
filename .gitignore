@@ -26,6 +26,7 @@ __pycache__/
 # e2e harness reports (PB-89) — standalone, timestamped HTML run artifacts;
 # regenerated on every `bats tests/e2e-pmw.bats`, never committed.
 .e2e_report/
+.e2e_results/
 
 # Tauri deep-link Plane app (lib/plane-app/, PB-148): commit the source, ignore
 # the Rust/Tauri build artifacts and generated schemas. The actual build happens

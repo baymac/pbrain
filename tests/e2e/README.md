@@ -142,3 +142,20 @@ in `tests/e2e-pmw.bats` pairing it with the persona(s) you want. An optional
   parent is closed last.
 - **intent parser** is asserted against each persona utterance's ground-truth
   intent (a misparse is a caught failure).
+
+## Queue e2e (PB-141 / PB-146) — `queue.bash`
+
+A standalone engine-level e2e for the Queued-state queue model. Unlike the
+persona scenarios above, it drives the REAL queue engine in `lib/plane.py`
+(`enqueue_ordered`, `queued_multi`, `rank_done_by_completion`, the Queued state +
+`sort_order`) through a full lifecycle, faking only the network boundary with an
+in-memory `PlaneClient` stand-in. Seven steps, one per lifecycle transition:
+intake→Todo, enqueue ranks Todo→Queued, in-progress never re-queued, Backlog
+untouched, pmw reads the queue in order, completing advances out, Done ranked
+newest-first. Emits an HTML report via the same `report.py` (showing the Plane
+write-journal per step).
+
+```
+bash tests/e2e/queue.bash                  # run + write the HTML report, print its path
+PBRAIN_E2E_OPEN=1 bash tests/e2e/queue.bash # also open it (macOS)
+```
