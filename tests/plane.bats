@@ -186,7 +186,7 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Todo default, no dup names" {
+@test "PB-130/PB-141 PIPELINE_STATES: 9 states incl. Queued, correct names+groups, Todo default, no dup names" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
@@ -194,10 +194,14 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 ps = m.PIPELINE_STATES
 names = [s["name"] for s in ps]
 # Todo is KEPT (not renamed to "Triage" — Plane reserves that name for its intake).
-assert names == ["Backlog","Todo","Planning","Building","Testing","Review","Done","Cancelled"], names
+# PB-141: Queued sits between Todo and Planning (groom's ranked run queue).
+assert names == ["Backlog","Todo","Queued","Planning","Building","Testing","Review","Done","Cancelled"], names
 by = {s["name"]: s for s in ps}
 assert by["Backlog"]["group"]=="backlog"
 assert by["Todo"]["group"]=="unstarted"
+# PB-141: Queued shares the unstarted group with Todo (ready-eligible), is NOT default.
+assert by["Queued"]["group"]=="unstarted" and not by["Queued"].get("default")
+assert m.QUEUED_STATE == "Queued"
 for n in ("Planning","Building","Testing","Review"):
     assert by[n]["group"]=="started", n
 assert by["Done"]["group"]=="completed"
@@ -213,6 +217,136 @@ assert orders==sorted(orders) and len(set(orders))==len(orders)
 # every group used is one pbrain knows about (ready contract intact)
 groups=set(s["group"] for s in ps)
 assert groups <= set(("backlog","unstarted","started","completed","cancelled")), groups
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-141 queued_multi keeps only the Queued state sorted by sort_order; enqueue skips in-progress" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# state_name resolves both expanded-object and bare-id forms.
+sbi = {"q": {"name": "Queued", "group": "unstarted"},
+       "t": {"name": "Todo",   "group": "unstarted"}}
+assert m.state_name({"state": {"name": "Queued"}}, sbi) == "Queued"
+assert m.state_name({"state": "q"}, sbi) == "Queued"
+
+# queued_multi filters to Queued and orders by sort_order (lower first).
+rows = [
+  {"tie":"p:1","id":1,"state_name":"Todo","sort_order":None,"priority":"high","due":""},
+  {"tie":"p:2","id":2,"state_name":"Queued","sort_order":2000.0,"priority":"low","due":""},
+  {"tie":"p:3","id":3,"state_name":"Queued","sort_order":1000.0,"priority":"low","due":""},
+]
+m.ready_multi = lambda *a, **k: rows           # stub the source
+got = [r["id"] for r in m.queued_multi({}, None, ["p"])]
+assert got == [3, 2], got                       # only Queued, sort_order asc
+
+# enqueue_ordered: todo rows get Queued + ascending sort_order; in-progress skipped.
+class FakeClient:
+    def __init__(self): self.patches=[]
+    def list_states(self, pid): return [
+        {"id":"q","name":"Queued","group":"unstarted"},
+        {"id":"t","name":"Todo","group":"unstarted","default":True}]
+    def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
+fc = FakeClient()
+ordered = [
+  {"tie":"p:10","status":"todo","priority":"high","due":""},
+  {"tie":"p:11","status":"doing","priority":"high","due":""},   # already in progress
+  {"tie":"p:12","status":"todo","priority":"low","due":""},
+]
+out = m.enqueue_ordered({}, fc, ordered)
+moved = [(iid, body["sort_order"]) for iid, body in fc.patches]
+assert [iid for iid,_ in moved] == ["10","12"], moved   # only todo rows moved
+assert moved[0][1] < moved[1][1], moved                  # ascending rank
+assert all(body["state"]=="q" for _,body in fc.patches)  # → Queued state id
+assert any(r.get("skipped") for r in out)                # doing row reported skipped
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-141 claim_next_queued: two sessions claim DIFFERENT issues sequentially (no collision)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+SID = {"Todo":"t","Queued":"q","Planning":"pl"}
+STATES = [{"id":"t","name":"Todo","group":"unstarted","default":True},
+          {"id":"q","name":"Queued","group":"unstarted"},
+          {"id":"pl","name":"Planning","group":"started"}]
+
+class Shared:
+    """One in-memory store shared by both 'sessions' (like the live Plane)."""
+    def __init__(self):
+        self.issues = {
+            "A": {"id":"A","name":"A","state":"q","sort_order":1000.0,"priority":"high","parent":None},
+            "B": {"id":"B","name":"B","state":"q","sort_order":2000.0,"priority":"low","parent":None},
+        }
+    def list_states(self, pid): return list(STATES)
+    def list_work_items(self, pid): return [dict(v) for v in self.issues.values()]
+    def list_labels(self, pid): return []
+    def list_modules(self, pid): return []
+    def update_work_item(self, pid, iid, body): self.issues[iid].update(body)
+    def get_work_item(self, pid, iid): return dict(self.issues[iid])
+
+cfg = {"default_est_h": 2.0}
+sh = Shared()
+# Two sessions claim in turn (sequential calls model the common case + the verify
+# guarantees safety even if interleaved). Distinct session tokens → distinct sentinels.
+c1 = m.claim_next_queued(cfg, sh, ["p"], "1001")
+c2 = m.claim_next_queued(cfg, sh, ["p"], "2002")
+got = sorted([c1["tie"].split(":")[-1], c2["tie"].split(":")[-1]])
+assert got == ["A","B"], got                       # they took DIFFERENT issues
+# both claimed issues are now OUT of the queue (in Planning)
+assert sh.issues["A"]["state"]=="pl" and sh.issues["B"]["state"]=="pl"
+# queue is now empty → a third claim returns None (nothing left)
+assert m.claim_next_queued(cfg, sh, ["p"], "3003") is None
+
+# Same-instant race: both sessions see A as top and both PATCH it; last write wins.
+# Re-run with a store where only A is queued; the LOSER must fall through to None
+# (not double-own A).
+sh2 = Shared(); del sh2.issues["B"]                 # only A in the queue
+winner = m.claim_next_queued(cfg, sh2, ["p"], "5005")
+assert winner is not None and winner["tie"].endswith("A")
+# A is claimed; a second claimer now finds the queue empty → None (no double-claim)
+assert m.claim_next_queued(cfg, sh2, ["p"], "6006") is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-146 rank_done_by_completion: Done column ranked newest-completed-first (smallest sort_order)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class FakeClient:
+    def __init__(self): self.patches=[]
+    def list_states(self, pid): return [
+        {"id":"d","name":"Done","group":"completed"},
+        {"id":"t","name":"Todo","group":"unstarted"}]
+    def list_work_items(self, pid): return [
+        {"id":"a","state":"d","completed_at":"2026-06-20T10:00:00Z"},
+        {"id":"b","state":"d","completed_at":"2026-06-25T10:00:00Z"},  # newest
+        {"id":"c","state":"d","completed_at":""},                       # no date → last
+        {"id":"z","state":"t","completed_at":""},                       # not Done → ignored
+    ]
+    def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
+
+fc = FakeClient()
+out = m.rank_done_by_completion({}, fc, ["p"])
+ranked = [(iid, body["sort_order"]) for iid, body in fc.patches]
+# Only Done issues touched; the Todo issue z is never patched.
+assert [iid for iid,_ in ranked] == ["b","a","c"], ranked   # newest→oldest→undated
+# newest (b) gets the smallest sort_order so it floats to the top of the column
+assert ranked[0][1] < ranked[1][1] < ranked[2][1], ranked
+assert all(set(body.keys())=={"sort_order"} for _,body in fc.patches)  # state untouched
+assert all(r.get("ok") for r in out)
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]

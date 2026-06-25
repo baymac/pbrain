@@ -161,9 +161,13 @@
       <div class="node proc"><div class="t">reuse cached queue</div><div class="d">never renders a false "Queue (0)" — the cache fallback. (429s also auto-retry with backoff.)</div></div></div>
   </div>
 
-  <div class="arr">↓ write the grooming-data file</div>
+  <div class="arr">↓ write the queue INTO Plane <span class="ref">(PB-141)</span></div>
+  <div class="node good"><div class="t"><code>enqueue</code> → move ranked todo issues into the <b>Queued</b> state + <code>sort_order</code> · rank <b>Done</b> by completed_at <span class="ref">(PB-146)</span></div>
+    <div class="d">only on <code>--apply</code> (gate <code>PBRAIN_GROOM_ENQUEUE</code>) · idempotent · Backlog never touched · in-progress issues left alone · <b>Plane is now the queue</b>; <code>/plan-my-work</code> (no id) atomically CLAIMS the top of the Queued state (<code>claim-next</code>) so two parallel sessions walk it sequentially · Done column ordered newest-completed-first</div></div>
+
+  <div class="arr">↓ write the grooming-data file <span class="ref">(now a run-log)</span></div>
   <div class="node proc"><div class="t">render once → <b>staging</b> <code>~/.config/pbrain/pm-groom/&lt;date&gt;.data.md</code> (always)</div>
-    <div class="d">+ best-effort direct vault write · preserves any existing <code>## Auto-work</code> section</div></div>
+    <div class="d">+ best-effort direct vault write · the <code>## Queue</code> table is a RUN-LOG of what was enqueued (PB-141) · preserves any existing <code>## Auto-work</code> section</div></div>
 
   <!-- ============ PHASE 2: JUDGMENT ============ -->
   <div class="lanehdr"><span class="ph">phase 2</span><h2>Autonomous judgment triage</h2><span class="who">headless Claude · gated</span></div>
@@ -249,8 +253,8 @@
     <div class="d">review the groomed queue (enriched issues, judgment labels in the Auto column) → drive issues yourself with <code>/plan-my-work &lt;id&gt;</code>. <b>Execution is always your move, never the nightly job's.</b></div></div>
 
   <div class="footer">
-    Traced from lib/pm-groom.sh · lib/plane.py (groom_run, suggest_auto_stages, thinness_flags, GROOMED_LABEL) · lib/pbrain-groom.swift · lib/hooks/groom-triage-guard.sh · commands/templates/project-manager/groom-drive.txt.<br>
-    Invariants: backlog untouched · auto:land never auto-granted · phase 2 gated + hook-locked to triage (no git/PR/execute) · quality gate is LLM-judged + idempotent via auto:groomed · subscription login, no secret written.<br>
+    Traced from lib/pm-groom.sh · lib/plane.py (groom_run, suggest_auto_stages, thinness_flags, GROOMED_LABEL, enqueue_ordered, QUEUED_STATE) · lib/pbrain-groom.swift · lib/hooks/groom-triage-guard.sh · commands/templates/project-manager/groom-drive.txt.<br>
+    Invariants: backlog untouched · auto:land never auto-granted · phase 2 gated + hook-locked to triage (no git/PR/execute) · quality gate is LLM-judged + idempotent via auto:groomed · subscription login, no secret written · PB-141: groom enqueues ranked todo → Plane Queued state (Plane is the queue; markdown is a run-log) · enqueue idempotent, in-progress issues never pulled back.<br>
     <span style="color:var(--dim)">This doc is the source-of-truth flow diagram for the nightly groom. Keep it in sync when the groom flow changes (new branch, gate, phase, or invariant).</span>
   </div>
 </div>

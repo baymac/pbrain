@@ -83,16 +83,24 @@ STATUS_TO_GROUP = {
 # token API can't write states (read-only), so seeding goes through the internal API
 # (PlaneClient.create_state/update_state/delete_state); a UI-steps fallback covers the
 # no-internal-auth case.
+# PB-141: "Queued" sits between Todo (intake landing) and Planning. Groom moves the
+# RANKED todo set here (in sort_order) and /plan-my-work walks it top-down — Plane is
+# the queue, the vault markdown is demoted to a run-log. Queued is group=unstarted so
+# it stays ready-eligible (READY_GROUPS) and maps to status "todo"; Todo keeps
+# default:True so /project-manager intake still lands in Todo, NOT Queued.
 PIPELINE_STATES = [
     {"name": "Backlog",  "group": "backlog",   "color": "#d1d5db", "default": False, "order": 0},
     {"name": "Todo",     "group": "unstarted", "color": "#f59e0b", "default": True,  "order": 1},
-    {"name": "Planning", "group": "started",   "color": "#8b5cf6", "default": False, "order": 2},
-    {"name": "Building", "group": "started",   "color": "#3b82f6", "default": False, "order": 3},
-    {"name": "Testing",  "group": "started",   "color": "#06b6d4", "default": False, "order": 4},
-    {"name": "Review",   "group": "started",   "color": "#ec4899", "default": False, "order": 5},
-    {"name": "Done",     "group": "completed",  "color": "#16a34a", "default": False, "order": 6},
-    {"name": "Cancelled", "group": "cancelled", "color": "#6b7280", "default": False, "order": 7},
+    {"name": "Queued",   "group": "unstarted", "color": "#eab308", "default": False, "order": 2},
+    {"name": "Planning", "group": "started",   "color": "#8b5cf6", "default": False, "order": 3},
+    {"name": "Building", "group": "started",   "color": "#3b82f6", "default": False, "order": 4},
+    {"name": "Testing",  "group": "started",   "color": "#06b6d4", "default": False, "order": 5},
+    {"name": "Review",   "group": "started",   "color": "#ec4899", "default": False, "order": 6},
+    {"name": "Done",     "group": "completed",  "color": "#16a34a", "default": False, "order": 7},
+    {"name": "Cancelled", "group": "cancelled", "color": "#6b7280", "default": False, "order": 8},
 ]
+# The state name groom moves ranked todo issues into, and that /plan-my-work walks.
+QUEUED_STATE = "Queued"
 
 # Plane defaults this pipeline supersedes. Only "In Progress" is removed (Todo is
 # kept as the default unstarted state); its issues are re-pointed to Building first
@@ -1325,6 +1333,18 @@ def state_group(issue, states_by_id):
     return ""
 
 
+def state_name(issue, states_by_id):
+    """Resolve an issue's state NAME (PB-141 — needed to single out the Queued state,
+    which shares the unstarted group with Todo). Handles expanded-object or bare-id
+    `state`."""
+    st = issue.get("state")
+    if isinstance(st, dict):
+        return st.get("name", "")
+    if isinstance(st, str) and st in states_by_id:
+        return states_by_id[st].get("name", "")
+    return ""
+
+
 def pick_state_id(states, group, want_name=None):
     """Choose the state id to write for a target group.
 
@@ -1384,6 +1404,10 @@ def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est
         "lane": module_by_issue.get(iid, ""),
         "due": issue.get("target_date") or "",
         "status": GROUP_TO_STATUS.get(grp, "todo"),
+        # PB-141: the state NAME (e.g. Todo / Queued) + the queue rank, so groom can
+        # single out Queued and pmw can walk it in sort_order.
+        "state_name": state_name(issue, states_by_id),
+        "sort_order": issue.get("sort_order"),
         "priority": issue.get("priority") or "none",
         "is_sub": bool(issue.get("parent")),
         "approved": approved,
@@ -1566,6 +1590,7 @@ ENRICH_FIELD_MAP = {
     "name": "name",
     "assignees": "assignees",
     "assignee": "assignees",
+    "sort_order": "sort_order",  # PB-141: groom writes the queue rank (ascending)
 }
 
 # Relation types supported by Plane's relations API.
@@ -1864,6 +1889,138 @@ def ready_multi(cfg, client, project_ids, include_backlog=False, with_lanes=Fals
     if ordered:
         rows = order_ready_stream(cfg, client, rows)
     return rows
+
+
+def queued_multi(cfg, client, project_ids):
+    """PB-141: the QUEUE — issues groom has moved into the Queued state, in the rank
+    order groom wrote (sort_order ascending, ties broken by priority → due → id). This
+    is what /plan-my-work walks: Plane is the queue, not the vault markdown. Reuses
+    ready_multi (Queued is group=unstarted, so it's already ready-eligible) and keeps
+    only state_name == QUEUED_STATE."""
+    rows = [r for r in ready_multi(cfg, client, project_ids)
+            if r.get("state_name") == QUEUED_STATE]
+    rows.sort(key=lambda r: (
+        r["sort_order"] if isinstance(r.get("sort_order"), (int, float)) else float("inf"),
+        PRIORITY_RANK.get(r.get("priority"), 4),
+        r.get("due") or "9999-99-99",
+        str(r.get("id")),
+    ))
+    return rows
+
+
+def claim_next_queued(cfg, client, project_ids, session_token):
+    """PB-141 concurrency: atomically CLAIM the top of the Queued state for THIS
+    session, so two `/plan-my-work` drivers walking the queue in parallel pick
+    DIFFERENT issues sequentially instead of colliding on the same top.
+
+    Claim+verify protocol (Plane has no compare-and-set, so we use last-write-wins
+    on a per-session sentinel):
+      1. read the queue (queued_multi); walk candidates top-down.
+      2. CLAIM: PATCH the candidate to the Planning state AND stamp its sort_order
+         with a session-unique sentinel, in ONE call. This also moves it OUT of the
+         Queued (unstarted) group, so other sessions' queue reads stop seeing it.
+      3. VERIFY: re-read the issue. If it's no longer unstarted AND its sort_order
+         equals OUR sentinel, this session owns it (our PATCH was the last write).
+         Otherwise another session won the race — skip to the next candidate.
+    Returns the claimed ready-row (with project_id) or None when the queue is empty
+    / every candidate was taken. Best-effort; a transient error skips that candidate.
+
+    `session_token` must be unique per caller (the shell passes $$ + epoch); it maps
+    to a distinct negative sentinel so two simultaneous claimers never collide on the
+    sentinel value itself."""
+    try:
+        sentinel = -1.0 - (abs(int(session_token)) % 1_000_000_000)
+    except (TypeError, ValueError):
+        sentinel = -1.0 - (abs(hash(session_token)) % 1_000_000_000)
+    for row in queued_multi(cfg, client, project_ids):
+        tie = row.get("tie", "")
+        if ":" not in tie:
+            continue
+        pid, iid = tie.split(":", 1)
+        try:
+            states = client.list_states(pid)
+            body = build_status_body("doing", states, to_state="Planning")
+            body["sort_order"] = sentinel
+            client.update_work_item(pid, iid, body)          # CLAIM
+            fresh = client.get_work_item(pid, iid)            # VERIFY
+        except PlaneError:
+            continue
+        sbi = {s["id"]: s for s in states}
+        still_queued = GROUP_TO_STATUS.get(state_group(fresh, sbi)) == "todo"
+        mine = (not still_queued) and fresh.get("sort_order") == sentinel
+        if mine:
+            row["claimed"] = True
+            return row
+        # Lost the race for this one (another session's write stuck) — try the next.
+    return None
+
+
+def enqueue_ordered(cfg, client, ordered_rows):
+    """PB-141: write the computed run queue INTO Plane. Move each row (in the given
+    order) to the Queued state and stamp an ascending sort_order so the board and
+    /plan-my-work both see groom's ranking. Idempotent: re-running re-ranks the same
+    set; a row already past Queued (group=started/completed/cancelled, i.e. work has
+    begun) is LEFT ALONE — only todo-group issues (Todo/Queued) are (re)queued, so we
+    never yank an in-flight issue back into the queue. Backlog is never a target.
+    Per-row best-effort; returns a summary list."""
+    out = []
+    states_cache = {}
+    # sort_order increments; use a coarse step so manual nudges fit between ranks.
+    rank = 0.0
+    for r in ordered_rows:
+        tie = r.get("tie", "")
+        if ":" not in tie:
+            out.append({"tie": tie, "ok": False, "error": "bad tie"})
+            continue
+        pid, iid = tie.split(":", 1)
+        # Only (re)queue work that hasn't started. status comes from the row's group.
+        if r.get("status") not in ("todo",):
+            out.append({"tie": tie, "ok": True, "skipped": "already in progress"})
+            continue
+        rank += 1000.0
+        try:
+            if pid not in states_cache:
+                states_cache[pid] = client.list_states(pid)
+            body = build_status_body("todo", states_cache[pid], to_state=QUEUED_STATE)
+            body["sort_order"] = rank
+            client.update_work_item(pid, iid, body)
+            out.append({"tie": tie, "ok": True, "state": QUEUED_STATE, "sort_order": rank})
+        except PlaneError as e:
+            out.append({"tie": tie, "ok": False, "error": str(e)})
+    return out
+
+
+def rank_done_by_completion(cfg, client, project_ids):
+    """PB-146: order each project's Done column newest-completed-first. Plane's board
+    sorts a column by sort_order ascending, so we stamp the most-recently-completed
+    issue with the SMALLEST sort_order. Touches only sort_order (no state change) on
+    completed-group issues; issues without a completed_at sink to the bottom. Idempotent
+    — re-running reproduces the same ranking. Per-row best-effort; returns a summary."""
+    out = []
+    for pid in project_ids:
+        try:
+            items = client.list_work_items(pid)
+            states = client.list_states(pid)
+        except PlaneError as e:
+            out.append({"project_id": pid, "ok": False, "error": str(e)})
+            continue
+        sbi = {s["id"]: s for s in states}
+        done = [it for it in items
+                if GROUP_TO_STATUS.get(state_group(it, sbi)) == "done"]
+        # Newest completed_at first → smallest sort_order. Missing completed_at sorts
+        # last (empty string is < any real ISO timestamp, so negate via the flag).
+        done.sort(key=lambda it: (it.get("completed_at") or "",), reverse=True)
+        rank = 0.0
+        for it in done:
+            rank += 1000.0
+            try:
+                client.update_work_item(pid, it.get("id"), {"sort_order": rank})
+                out.append({"tie": "%s:%s" % (pid, it.get("id")), "ok": True,
+                            "sort_order": rank})
+            except PlaneError as e:
+                out.append({"tie": "%s:%s" % (pid, it.get("id")), "ok": False,
+                            "error": str(e)})
+    return out
 
 
 def progress(cfg, client, project_ids, since=None):
@@ -3384,6 +3541,57 @@ def cmd_ready(args):
     return 0
 
 
+def cmd_queued(args):
+    """PB-141: print the QUEUE — issues in the Queued state, in groom's rank order.
+    This is what /plan-my-work walks (Plane is the queue)."""
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = (project_ids_from_arg(cfg, args.projects) if getattr(args, "projects", None)
+           else [args.project or cfg.get("project")])
+    ids = [i for i in ids if i]
+    if not ids:
+        raise PlaneError("no project id — pass --project/--projects or set it in setup")
+    print(json.dumps(queued_multi(cfg, client, ids), ensure_ascii=False))
+    return 0
+
+
+def cmd_claim_next(args):
+    """PB-141: atomically claim the top of the Queued state for this session (so
+    parallel /plan-my-work drivers pick different issues). Prints the claimed row
+    as JSON, or `null` when the queue is empty. --session is a per-caller token."""
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = (project_ids_from_arg(cfg, args.projects) if getattr(args, "projects", None)
+           else [args.project or cfg.get("project")])
+    ids = [i for i in ids if i]
+    if not ids:
+        raise PlaneError("no project id — pass --project/--projects or set it in setup")
+    row = claim_next_queued(cfg, client, ids, getattr(args, "session", "") or "0")
+    print(json.dumps(row, ensure_ascii=False))
+    return 0
+
+
+def cmd_enqueue(args):
+    """PB-141: groom writes the computed run queue into Plane — move the ordered set
+    into the Queued state with ascending sort_order. Input is the ordered ready
+    stream (ready --ordered); we re-read it here so groom stays a thin caller.
+    PB-146: also rank each project's Done column newest-completed-first (--no-done
+    skips it)."""
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = (project_ids_from_arg(cfg, args.projects) if getattr(args, "projects", None)
+           else [args.project or cfg.get("project")])
+    ids = [i for i in ids if i]
+    if not ids:
+        raise PlaneError("no project id — pass --project/--projects or set it in setup")
+    ordered = ready_multi(cfg, client, ids, ordered=True)
+    result = {"queued": enqueue_ordered(cfg, client, ordered)}
+    if not getattr(args, "no_done", False):
+        result["done_ranked"] = rank_done_by_completion(cfg, client, ids)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
 def cmd_resolve(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -3888,6 +4096,26 @@ def build_parser():
                     help="PB-94: hoist blockers ahead of the issues they block "
                          "(the groom→pmw hand-off stream)")
     sp.set_defaults(func=cmd_ready)
+
+    # PB-141: the Queue. `queued` reads the Queued state (pmw walks this); `enqueue`
+    # writes the ordered ready stream INTO the Queued state (groom does this).
+    sp = sub.add_parser("queued")
+    sp.add_argument("--project")
+    sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
+    sp.set_defaults(func=cmd_queued)
+
+    sp = sub.add_parser("claim-next")
+    sp.add_argument("--project")
+    sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
+    sp.add_argument("--session", help="per-caller token (e.g. pid+epoch) for the atomic claim")
+    sp.set_defaults(func=cmd_claim_next)
+
+    sp = sub.add_parser("enqueue")
+    sp.add_argument("--project")
+    sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
+    sp.add_argument("--no-done", action="store_true",
+                    help="PB-146: skip ranking the Done column by completed_at")
+    sp.set_defaults(func=cmd_enqueue)
 
     sp = sub.add_parser("resolve"); sp.add_argument("--ties", required=True); sp.set_defaults(func=cmd_resolve)
 

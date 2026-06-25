@@ -228,7 +228,7 @@ SHIM
   data="$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
   [ -f "$data" ]
   grep -q "type: daily-grooming" "$data"
-  grep -q "## Queue — ordered (1)" "$data"
+  grep -q "## Queue — ordered → Plane Queued state (1)" "$data"
   grep -q "ready one" "$data"
   grep -q "## Auto-work" "$data"
   grep -q "## Needs review" "$data"
@@ -535,7 +535,7 @@ SHIM
   [ "$status" -eq 0 ]
   staging="$PBRAIN_PMG_DIR/2026-06-22.data.md"
   [ -f "$staging" ]
-  grep -q "## Queue — ordered (1)" "$staging"
+  grep -q "## Queue — ordered → Plane Queued state (1)" "$staging"
   grep -q "ready one" "$staging"
 }
 

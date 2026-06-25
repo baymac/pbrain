@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run|--ordered)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -207,7 +207,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping web-base states projects ready progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping web-base states projects ready queued claim-next enqueue progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -483,7 +483,39 @@ PYEOF
       ${F_projects:+--projects "$F_projects"} \
       ${F_project:+--project "$F_project"} \
       $(_has_bool include_backlog && echo --include-backlog) \
-      $(_has_bool with_lanes && echo --with-lanes) || true
+      $(_has_bool with_lanes && echo --with-lanes) \
+      $(_has_bool require_approved && echo --require-approved) \
+      $(_has_bool ordered && echo --ordered) || true
+    ;;
+
+  # PB-141: the QUEUE. `queued` = the ordered run queue (the Queued state) that
+  # /plan-my-work walks. `enqueue` = groom writes the ordered ready stream INTO
+  # the Queued state (move + sort_order). Plane is the queue, not the markdown.
+  queued)
+    _parse_args "$@"
+    echo "PM_QUEUED"
+    python3 "$PLANE" queued \
+      ${F_projects:+--projects "$F_projects"} \
+      ${F_project:+--project "$F_project"} || true
+    ;;
+
+  # PB-141: atomically claim the top Queued issue for THIS session, so two
+  # parallel /plan-my-work drivers walk the queue sequentially (no collision).
+  claim-next)
+    _parse_args "$@"
+    echo "PM_CLAIM_NEXT"
+    python3 "$PLANE" claim-next \
+      ${F_projects:+--projects "$F_projects"} \
+      ${F_project:+--project "$F_project"} \
+      ${F_session:+--session "$F_session"} || true
+    ;;
+
+  enqueue)
+    _parse_args "$@"
+    echo "PM_ENQUEUE"
+    python3 "$PLANE" enqueue \
+      ${F_projects:+--projects "$F_projects"} \
+      ${F_project:+--project "$F_project"} || true
     ;;
 
   progress)
