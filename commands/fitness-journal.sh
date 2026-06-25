@@ -65,6 +65,11 @@ DOW="$(date +%a)"
 # never compute the weekday itself (it gets it wrong). %e is space-padded day
 # (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
 TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+# Authoritative local clock (24h HH:MM), same machine-time provenance as the
+# date fields above. This is the disambiguator between a PLANNED session (stated
+# time is in the future) and a COMPLETED one (stated time is at/past now) — the
+# LLM compares the user's stated session time against this, never guesses.
+TIME_NOW="$(date '+%H:%M')"
 OUT_FILE="$TRACKING_DIR/$TODAY.md"
 DIET_DIR="${PBRAIN_DIET_DIR:-$VAULT_DIR/fitness/diet-tracking}"
 
@@ -803,6 +808,7 @@ if [[ -f "$OUT_FILE" ]]; then
 FITNESS_JOURNAL_EXISTING
 date: $TODAY
 date_human: $TODAY_HUMAN
+time_now: $TIME_NOW
 output_file: $OUT_FILE
 training_gap_days: $TRAINING_GAP_DAYS
 training_gap_band: $TRAINING_GAP_BAND
@@ -838,6 +844,11 @@ Step 2 — Based on intent:
   A) DID THE PLANNED SESSION → fill the ## Logged section from what they hit (add
      it if the entry was plan-ahead-only), and flip \`status: planned\` →
      \`completed\` (or \`partial\` if they fell short). Don't touch ## Planned.
+     CLOCK GUARD: only do this when the session has actually happened. If the
+     entry carries a session time that is still in the FUTURE relative to time_now
+     ($TIME_NOW), or the user is merely re-stating the plan, leave it
+     \`status: planned\` with ## Planned only — do NOT fabricate ## Logged actuals
+     for a session that hasn't occurred yet.
   B) MORE OF THE SAME / CORRECTING A NUMBER → update the relevant cells in
      ## Logged (or ## Planned if they're adjusting the target). Partial is fine.
   C) A SECOND ACTIVITY today → append a new "# {Activity} — $TODAY" block below the
@@ -889,6 +900,7 @@ FITNESS_JOURNAL_SESSION
 date: $TODAY
 day_of_week: $DOW
 date_human: $TODAY_HUMAN
+time_now: $TIME_NOW
 output_file: $OUT_FILE
 training_gap_days: $TRAINING_GAP_DAYS
 training_gap_band: $TRAINING_GAP_BAND
@@ -919,6 +931,13 @@ their OWN. Follow these steps in order.
 DATE — today is date_human above ($TODAY_HUMAN). Use it VERBATIM for the weekday
 and date. NEVER compute or guess the day of the week yourself — copy day_of_week
 ($DOW) / date_human exactly. (This is the local machine time; it is authoritative.)
+
+TIME — time_now above ($TIME_NOW, 24h HH:MM) is the authoritative current local
+clock. It is the ONLY reliable disambiguator between a session the user is
+PLANNING (stated time still in the future) and one they have DONE (stated time
+at/past now). Whenever the user gives a session time, compare it against time_now
+(see Step 3 and the planned-vs-completed contract in Step 6) — never assume a
+session is completed just because it was described in the past tense.
 
 Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above says to
   skip the check-in, SKIP the rest of this step — BUT sleep is the one mandatory
@@ -982,6 +1001,18 @@ Step 3 — PARSE the description into the chosen activity's KPIs, EXPLODING it i
     what they DID, that is the LOGGED layer; mirror it (or the activity's typical
     target) as the Planned so both layers exist. When they only state a PLAN they
     haven't done yet, that is the Planned layer and there is no Logged yet.
+  - STATED SESSION TIME → use the CLOCK to decide planned vs done. If the user
+    gives a time for the session ("Apple Fitness at 2:45 pm", "gym at 18:00"),
+    convert it to 24h and compare against time_now ($TIME_NOW):
+      · time is in the FUTURE relative to time_now → it has NOT happened. This is a
+        PLAN, not a log — Planned layer only, NO Logged actuals (Step 6 sets
+        \`status: planned\`), even if they phrased it as "I am doing X at 2:45".
+      · time is AT or PAST time_now AND they describe it as done → treat the given
+        numbers as the LOGGED layer (Step 6 → completed/partial).
+      · no time given and it is ambiguous whether it is done → do NOT assume
+        completed; default to Planned (status: planned) or ask one quick
+        "done already, or planning it?" Never invent Logged actuals for a session
+        that may not have happened.
   - TOLERATE MISSING: only fill KPIs the user actually gave; leave the rest "—".
     Don't pepper them to complete every KPI — at most ONE follow-up, only for
     something central they clearly meant to give. A one-line log is a complete log.
@@ -1049,16 +1080,24 @@ Step 5 — GENERATE a plan-ahead session, or stay the logger (logger-first):
 
 Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   ## Planned (intended/target work) and ## Logged (actuals). WHICH appear, and the
-  \`status:\`, depend on what the user did:
-    - PLAN-AHEAD ONLY (planned but not done yet) → \`status: planned\`. A quick
-      plan-ahead log writes ## Planned ONLY and omits ## Logged. A GENERATED session
-      (Step 5 → GENERATE) instead uses the GENERATED-SESSION layout below and DOES
-      include an empty pre-filled ## Logged table to fill in during/after the session.
-    - LOGGED DIRECTLY / DONE → write BOTH ## Planned (what they set out to do) and
-      ## Logged (what they actually hit); \`status: completed\` (or \`partial\` if
-      they fell short or only did some of it). When they logged with no separate
-      target, mirror the logged work as the plan (or pull a typical target from
-      the activity profile) so ## Planned still reflects the intent.
+  \`status:\`, are decided BY THE CLOCK first, then by phrasing. The single most
+  common mistake is recording a not-yet-done session as completed with fabricated
+  actuals — the time check below exists to prevent exactly that.
+    - FUTURE SESSION (stated time is after time_now $TIME_NOW) → it has NOT happened
+      yet, no matter how it is phrased ("I am doing Apple Fitness at 2:45 pm" when
+      it is 1:30 pm is a PLAN). → \`status: planned\`, write ## Planned ONLY, and do
+      NOT write a ## Logged section or invent any actuals. (A GENERATED session,
+      Step 5 → GENERATE, uses the GENERATED-SESSION layout below and DOES include an
+      empty pre-filled ## Logged table to fill in later — still \`status: planned\`.)
+    - DONE SESSION (stated time is at/past time_now, OR no time but clearly already
+      done) → write BOTH ## Planned (what they set out to do) and ## Logged (what
+      they actually hit); \`status: completed\` (or \`partial\` if they fell short or
+      only did some of it). When they logged with no separate target, mirror the
+      logged work as the plan (or pull a typical target from the activity profile)
+      so ## Planned still reflects the intent.
+    - AMBIGUOUS + NO TIME (can't tell from phrasing or clock whether it is done) →
+      do NOT default to completed. Treat it as \`status: planned\` (## Planned only,
+      no fabricated ## Logged) or ask one quick "done already, or planning it?"
   /end-of-day later flips a \`planned\` entry to \`completed\` (or \`skipped\`) when the
   day closes — so leave \`status: planned\` for anything not yet done.
 

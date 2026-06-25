@@ -859,9 +859,12 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
     Spec types:
 
     "slip_ladder" (the original):
-      slips = given --slips, else max(bad, good_target - good)  (clamped >= 0)
+      slips = given --slips, else bad + max(0, good_target - good)  (clamped >= 0)
       score = ladder[min(slips, len(ladder)-1)]   (rungs are 0–1, e.g. [1,0.6,0.3,0])
       'good_target' is optional (0 = no good-count requirement -> pure bad ladder).
+      The meal-count shortfall (good_target - good) and the per-meal slips (bad)
+      are INDEPENDENT penalties and STACK — a short AND dirty day is worse than
+      one that is only one of the two. (PB-142; they used to compete via max().)
 
     "meal_ratio" (eat-clean): inputs good = clean MEALS, bad = unclean MEALS.
       score = good / (good + bad), rounded to 2 dp. The score depends on the
@@ -1023,7 +1026,11 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
     else:
         gt = _to_int(spec.get("good_target")) or 0
         deficit = max(0, gt - (good or 0)) if gt else 0
-        n = max(bad or 0, deficit)
+        # The meal-count shortfall (too few proper meals) and the per-meal slips
+        # (outside / junk occasions) are INDEPENDENT penalties — a day that is
+        # both short AND dirty is worse than one that is only one of the two — so
+        # they STACK (add), they do not compete via max(). (PB-142)
+        n = (bad or 0) + deficit
     n = max(0, int(n))
     idx = min(n, len(ladder) - 1)
     try:

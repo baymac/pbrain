@@ -48,6 +48,7 @@ setup() {
   command -v python3 >/dev/null 2>&1 || skip "python3 not available"
   export PBRAIN_MIGRATIONS=0 PBRAIN_UPDATE_CHECK=0 PBRAIN_SELF_IMPROVE=off
   load "e2e/fitness-journal.bash"
+  load "e2e/fitness-clock.bash"
 }
 
 @test "fitness × fast → sleep given this session (fresh reading, no provenance)" {
@@ -65,5 +66,17 @@ setup() {
 @test "fitness × cautious → sleep withheld, left blank (no carry, no fabrication)" {
   run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/sleep/cold.json" \
                       "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
+  [ "$status" -eq 0 ]
+}
+
+@test "fitness × fast → future session time logs as planned, no fabricated actuals (PB-117)" {
+  run e2e_run_fitness_clock "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/clock/future-planned.json" \
+                            "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
+  [ "$status" -eq 0 ]
+}
+
+@test "fitness × fast → past session time + done logs as completed, both sections (PB-117)" {
+  run e2e_run_fitness_clock "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/clock/past-completed.json" \
+                            "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }

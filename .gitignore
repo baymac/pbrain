@@ -27,9 +27,13 @@ __pycache__/
 # regenerated on every `bats tests/e2e-pmw.bats`, never committed.
 .e2e_report/
 
-# Local Plane self-host stack (docker-compose + plane.env with secrets);
-# created/managed by /init-plane + /project-manager, never committed.
-plane-app/
+# Tauri deep-link Plane app (lib/plane-app/, PB-148): commit the source, ignore
+# the Rust/Tauri build artifacts and generated schemas. The actual build happens
+# in a copy under ~/.config/pbrain (see init-plane.sh `app`), so these only appear
+# if you `cargo tauri build` in-tree.
+lib/plane-app/src-tauri/target/
+lib/plane-app/node_modules/
+lib/plane-app/src-tauri/gen/
 
 # Serena MCP tool metadata/cache (editor tooling, not project work)
 .serena/

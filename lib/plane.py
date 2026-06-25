@@ -562,6 +562,62 @@ def web_base(cfg):
     return out.rstrip("/")
 
 
+# Deep-link app (PB-148): the Tauri desktop app registers a `plane://` URL scheme,
+# so a markdown link with a plane:// target opens the issue inside the app instead
+# of a browser. We only emit plane:// links when that app is actually installed —
+# otherwise an http link (web_base) is the right, browser-openable fallback.
+_PLANE_APP_PATH = "/Applications/Plane.app"
+
+
+def deep_link_available():
+    """True when the Plane desktop app (which owns the plane:// scheme) is installed.
+
+    macOS-only and cheap: the scheme is registered by Launch Services from the app
+    in /Applications, so its presence there is the reliable signal. The env override
+    PBRAIN_PLANE_DEEPLINK forces the answer (1/0) for tests and for users who want to
+    pin the behavior regardless of install state. Pure (reads env + one stat)."""
+    forced = os.environ.get("PBRAIN_PLANE_DEEPLINK")
+    if forced is not None:
+        return forced.strip() not in ("", "0", "no", "false", "off")
+    if sys.platform != "darwin":
+        return False
+    return os.path.isdir(_PLANE_APP_PATH)
+
+
+def deep_link_base(cfg):
+    """The plane:// base mirroring web_base's path shape: `plane://<workspace>`.
+
+    The app's plane_uri_to_http maps `plane://<ws>/browse/<REF>` onto the same host
+    it loads, so the workspace-prefixed path resolves identically to the http link.
+    Derives the workspace the same way web_base does — from cfg, falling back to the
+    trailing path segment of web_base (which also honours PBRAIN_PLANE_WEB_BASE), so
+    the deep link and the http link always carry the same workspace slug. Returns a
+    bare "plane://" when none is known (callers fall back to web_base)."""
+    ws = (cfg or {}).get("workspace")
+    if not ws:
+        # Recover the slug from the resolved web base, e.g. ".../1800/pb" -> "pb".
+        try:
+            tail = web_base(cfg).rstrip("/").rsplit("/", 1)[-1]
+            if tail and "://" not in tail and ":" not in tail:
+                ws = tail
+        except Exception:
+            ws = None
+    return ("plane://%s" % ws) if ws else "plane://"
+
+
+def link_base(cfg):
+    """The PREFERRED base for a vault-written clickable issue link: the plane:// deep
+    link when the desktop app is installed, else the browser-facing web_base. This is
+    the single seam that makes saved links deep-link-aware — every writer that goes
+    through it inherits the behavior, and nothing changes for users without the app
+    or on non-macOS (web_base http link, exactly as before)."""
+    if deep_link_available():
+        dl = deep_link_base(cfg)
+        if dl:
+            return dl
+    return web_base(cfg)
+
+
 # Chromium browsers we know how to read on macOS: dir + Keychain "Safe Storage" key.
 _CHROMIUM_BROWSERS = {
     "brave": ("BraveSoftware/Brave-Browser", "Brave Safe Storage"),
@@ -3142,6 +3198,19 @@ def cmd_webbase(args):
     return 0
 
 
+def cmd_linkbase(args):
+    """Print the PREFERRED base for vault-written clickable links: the plane:// deep
+    link when the desktop app is installed, else the http web_base. Same empty-line +
+    rc 0 contract as web-base, so shell callers can `$(... link-base)` safely."""
+    try:
+        cfg = load_config()
+    except Exception:
+        print("")
+        return 0
+    print(link_base(cfg))
+    return 0
+
+
 def cmd_ping(args):
     cfg = load_config()
     client = make_client(cfg)
@@ -3783,6 +3852,7 @@ def build_parser():
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)
     sp = sub.add_parser("ping"); sp.add_argument("--project"); sp.set_defaults(func=cmd_ping)
     sp = sub.add_parser("web-base"); sp.set_defaults(func=cmd_webbase)
+    sp = sub.add_parser("link-base"); sp.set_defaults(func=cmd_linkbase)
     sp = sub.add_parser("states"); sp.add_argument("--project")
     sp.add_argument("--projects")            # PB-130: subset for --seed/--migrate
     sp.add_argument("--seed", action="store_true")     # create/reconcile pipeline states

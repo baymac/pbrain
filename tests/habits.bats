@@ -1432,23 +1432,29 @@ EOF
 
 @test "score: good/bad map through the ladder per the profile rule" {
   _write_scored_profile
-  run pbrain_habit_score "Eat clean" 3 0 ""   # 0 slips
+  run pbrain_habit_score "Eat clean" 3 0 ""   # 3 clean, no slip → 0 slips
   [ "$output" = "1" ]
-  run pbrain_habit_score "Eat clean" 2 0 ""   # only 2 clean meals → 1 slip
+  run pbrain_habit_score "Eat clean" 2 0 ""   # only 2 clean meals → 1 (shortfall)
   [ "$output" = "0.6" ]
-  run pbrain_habit_score "Eat clean" 2 1 ""   # 2 clean, 1 junk → 1 slip
-  [ "$output" = "0.6" ]
-  run pbrain_habit_score "Eat clean" 1 2 ""   # 2 slips
-  [ "$output" = "0.4" ]
-  run pbrain_habit_score "Eat clean" 0 3 ""   # 3 slips → floor
+  run pbrain_habit_score "Eat clean" 1 2 ""   # 1 clean (2 short) + 2 junk → 4 → floor
+  [ "$output" = "0" ]
+  run pbrain_habit_score "Eat clean" 0 3 ""   # 3 short + 3 junk → floor
   [ "$output" = "0" ]
 }
 
-@test "score: clean count and junk count combine via max(bad, target-good)" {
+# PB-142: the meal-count shortfall (good_target - good) and the per-meal slips
+# (bad) are INDEPENDENT penalties that STACK (add), not compete via max().
+@test "score: shortfall and junk slips stack, not max" {
   _write_scored_profile
-  run pbrain_habit_score "Eat clean" 3 1 ""   # 3 clean + 1 junk (4 meals) → 1 slip
+  # 2 clean meals (1 short of 3) + 1 junk = 1 + 1 = 2 slips → ladder[2] = 0.4
+  # (the old max() logic scored this 0.6 — the bug this fixes)
+  run pbrain_habit_score "Eat clean" 2 1 ""
+  [ "$output" = "0.4" ]
+  # 3 proper clean meals + 1 extra junk = 0 shortfall + 1 = 1 slip → 0.6
+  run pbrain_habit_score "Eat clean" 3 1 ""
   [ "$output" = "0.6" ]
-  run pbrain_habit_score "Eat clean" 4 0 ""   # 4 clean, no junk → 0 slips
+  # 4 clean meals, no junk → 0 slips → 1 (extra cleans never push below 0)
+  run pbrain_habit_score "Eat clean" 4 0 ""
   [ "$output" = "1" ]
 }
 

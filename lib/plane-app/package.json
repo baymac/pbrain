@@ -1,0 +1,15 @@
+{
+  "name": "plane-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plane desktop app (Tauri shell) with plane:// deep linking",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-deep-link": "^2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

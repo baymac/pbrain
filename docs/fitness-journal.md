@@ -55,10 +55,11 @@ An entry carries up to two sections:
 - **`## Planned`** — what you set out to do (target sets × reps × weight, or distance/duration goals). Present whenever there's a plan.
 - **`## Logged`** — what you actually did. Appears once you've done (or started) the session.
 
-The flow follows your reality:
+The flow follows your reality — and **the clock decides**, not how you phrase it. If you give a session time, it's compared against the current time:
 
-- **Plan ahead, not done yet** → just `## Planned`, `status: planned`.
-- **Logged directly / done** → both sections — the logger explodes your description into the targets you aimed at and the actuals you hit — `status: completed` (or `partial` if you fell short).
+- **Time still ahead (or planning ahead, not done yet)** → just `## Planned`, `status: planned`. Saying "I'm doing Apple Fitness at 2:45" while it's 1:30 logs a plan, **not** a done session with made-up numbers.
+- **Time at/past now and done** → both sections — the logger explodes your description into the targets you aimed at and the actuals you hit — `status: completed` (or `partial` if you fell short).
+- **Ambiguous and no time given** → it defaults to `planned` (or asks) rather than assuming you're done.
 - **At close** → `/end-of-day` flips a still-`planned` entry to `completed` (session happened) or `skipped`, filling `## Logged` from what you report.
 
 The "Train" habit scores planned-vs-actual straight from these two sections.
