@@ -16,10 +16,18 @@ HOW TO WORK
        write verb takes).
      • several      → show a tight shortlist and ask which one. Don't guess on a
        write.
-     • zero         → say so; offer to create it (issue --project … --title …).
+     • zero         → say so; offer to file it through `file "<desc>"` (the triage
+       intake), not a raw create.
 2. MAP the instruction to operations from the CATALOGUE. One instruction is often
    several ops ("bump to high and tag backend" = priority + tag). Handle MULTIPLE
    issues and MULTIPLE ops in one pass — batch with `update` where you can.
+   INTAKE PRECEDENCE — when the instruction is to FILE / CREATE / TRACK / CAPTURE /
+   log / "make an issue for" / "open a ticket for" NEW work from a description, it
+   MUST route through `file "<desc>"` (full path, or `--fast` for infer+one-confirm).
+   `file` is the SOLE intake path for new work — it runs the triage walk (dedupe,
+   type, body, labels, estimate, priority, deadline). Never hand-assemble a new item
+   from lower-level primitives to skip triage. (`file` creates the issue internally;
+   you do not call a separate create verb.)
    An ask to BREAK DOWN / DECOMPOSE / EXPLODE / flesh out ONE issue into sub-issues
    → run `explode <ref>` and follow its Socratic walk, don't guess sub-issues inline.
 3. CONFIRM only when it matters — an irreversible/destructive op (status →
@@ -40,7 +48,6 @@ CATALOGUE — every verb is:  ${PM_SELF} <verb> …
   reparent <tie> --parent <PB-12|none>          move under a parent / un-parent
   cycle <tie> --name "<cycle>"                  add to a cycle (sprint)
   module <tie> --name "<module>"                add to a module (area)
-  issue --project <R> --title "<t>" [--priority p] [--target-date d]   create issue
   project-create --name "<n>" [--shortcut <s>]              create a project
   update --edits '<json [{tie,field,value}]>'   ANY field(s) in ONE batch. fields:
         priority · description · title · target_date/due · start_date · estimate ·
