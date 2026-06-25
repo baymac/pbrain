@@ -279,6 +279,51 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"sleep_bed:"* && "$output" == *"sleep_wake:"* && "$output" == *"sleep_hours:"* ]]
 }
 
+@test "Step 4 instructs to backfill sleep_* instead of leaving blank (PB-110)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # The fix: when this session doesn't capture sleep, carry it forward rather than
+  # silently leave the four fields blank.
+  [[ "$output" == *"MOST RECENT SLEEP"* ]]
+  [[ "$output" == *"CARRY FORWARD"* ]]
+  [[ "$output" == *"do NOT leave them blank when a source exists"* ]]
+}
+
+@test "MOST RECENT SLEEP block carries the newest non-blank session's sleep (PB-110)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  # A prior session that recorded sleep — the backfill source.
+  cat > "$TRACKING/2026-06-20.md" <<EOF
+---
+type: fitness
+date: 2026-06-20
+activity: gym
+sleep_bed: 23:40
+sleep_wake: 07:10
+sleep_quality: 7
+sleep_hours: 7.5
+---
+# Gym
+EOF
+  run FIT
+  [[ "$output" == *"MOST RECENT SLEEP"* ]]
+  [[ "$output" == *"most recent session (2026-06-20)"* ]]
+  [[ "$output" == *"sleep_bed: 23:40"* && "$output" == *"sleep_hours: 7.5"* ]]
+}
+
+@test "MOST RECENT SLEEP falls back to the profile window when no session has sleep (PB-110)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # No prior sessions on record → profile's typical sleep window is the source.
+  [[ "$output" == *"profile typical sleep window"* ]]
+  [[ "$output" == *"sleep_bed: 23:00"* && "$output" == *"sleep_wake: 07:00"* ]]
+}
+
 @test "daily flow opens with a skippable readiness check-in, logger-framed" {
   write_overall_profile
   write_library

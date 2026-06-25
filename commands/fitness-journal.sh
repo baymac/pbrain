@@ -695,6 +695,63 @@ print("\n\n".join(parts) if parts else "(no previous sessions)")
 PYEOF
 )"
 
+# MOST RECENT SLEEP — the backfill source for Step 4. When a session does not
+# capture sleep (the logger-first path skips the check-in), sleep_* must NOT be
+# left blank: /plan-my-day and the Sleep-well habit read those fields. We hand the
+# model the freshest known sleep block so it can carry it forward: scan the last
+# fitness files newest-first for the first non-blank sleep_* frontmatter; if none,
+# fall back to the overall profile's typical sleep window (bed_time/wake_time/hours).
+LAST_KNOWN_SLEEP="$(python3 - "$TRACKING_DIR" "$FITNESS_PROFILE_FILE" <<'PYEOF' 2>/dev/null || true
+import os, glob, re, json, sys
+d, profile_file = sys.argv[1], sys.argv[2]
+
+def fm(text):
+    m = re.match(r"\s*---\s*\n(.*?)\n---", text, re.DOTALL)
+    if not m:
+        return {}
+    out = {}
+    for line in m.group(1).splitlines():
+        mm = re.match(r"\s*([A-Za-z_]+)\s*:\s*(.*?)\s*$", line)
+        if mm:
+            out[mm.group(1)] = mm.group(2).strip()
+    return out
+
+SLEEP_KEYS = ("sleep_bed", "sleep_wake", "sleep_quality", "sleep_hours")
+# Newest fitness file first.
+for f in sorted(glob.glob(os.path.join(d, "*.md")), reverse=True):
+    try:
+        with open(f) as fh:
+            data = fm(fh.read())
+    except Exception:
+        continue
+    vals = {k: data.get(k, "") for k in SLEEP_KEYS}
+    if any(v not in ("", "blank", "—") for v in vals.values()):
+        print(f"source: most recent session ({os.path.basename(f)[:-3]})")
+        for k in SLEEP_KEYS:
+            print(f"{k}: {vals[k] or 'blank'}")
+        sys.exit(0)
+
+# Fallback: the overall fitness profile typical sleep window.
+try:
+    with open(profile_file) as fh:
+        m = re.search(r"```json\s*\n(.*?)```", fh.read(), re.DOTALL)
+    pj = json.loads(m.group(1)) if m else {}
+    sleep = pj.get("sleep", {}) if isinstance(pj, dict) else {}
+except Exception:
+    sleep = {}
+if sleep.get("bed_time") or sleep.get("wake_time") or sleep.get("hours"):
+    print("source: profile typical sleep window")
+    print(f"sleep_bed: {sleep.get('bed_time') or 'blank'}")
+    print(f"sleep_wake: {sleep.get('wake_time') or 'blank'}")
+    print("sleep_quality: blank")
+    print(f"sleep_hours: {sleep.get('hours') or 'blank'}")
+    sys.exit(0)
+
+print("(no prior sleep on record — cold start; leaving sleep_* blank is acceptable)")
+PYEOF
+)"
+[[ "$LAST_KNOWN_SLEEP" =~ [^[:space:]] ]] || LAST_KNOWN_SLEEP="(no prior sleep on record — cold start; leaving sleep_* blank is acceptable)"
+
 # Bundle every activity profile (highest COMMITTED version per slug — an open
 # draft must not shadow the committed version below it).
 ACTIVITY_PROFILES="$(python3 - "$ACT_STORE" <<'PYEOF' 2>/dev/null || true
@@ -814,6 +871,9 @@ $ACTIVITY_KPIS
 === RECENT SESSIONS (last 7) ===
 $RECENT_SESSIONS
 
+=== MOST RECENT SLEEP (backfill source for Step 4) ===
+$LAST_KNOWN_SLEEP
+
 === ACTIVITY PROFILES ($ACT_STORE) ===
 $ACTIVITY_PROFILES
 
@@ -858,6 +918,9 @@ Step 2 — Based on intent:
 
 Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep the
   \`activity:\`/\`focus:\` and \`sleep_*\` frontmatter intact (plan-my-day reads them).
+  If any sleep_* field is BLANK (e.g. an entry written before sleep was captured),
+  backfill it from the MOST RECENT SLEEP block above (carry-forward, then profile
+  window) — same precedence as Step 4 — unless that block says cold start.
   Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
   session is done, \`partial\` if partly done, \`planned\` while still plan-only.
 
@@ -896,6 +959,9 @@ $ACTIVITY_KPIS
 
 === RECENT SESSIONS (last 7) ===
 $RECENT_SESSIONS
+
+=== MOST RECENT SLEEP (backfill source for Step 4) ===
+$LAST_KNOWN_SLEEP
 
 === ACTIVITY PROFILES ($ACT_STORE) ===
 $ACTIVITY_PROFILES
@@ -969,12 +1035,22 @@ Step 3 — PARSE the description into the chosen activity's KPIs, EXPLODING it i
     \`kpis\` for it yet), use the derived defaults now and remember to offer to
     save them in Step 7.
 
-Step 4 — Fold in whatever state they gave (don't re-ask). From bed + wake times
-  INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
-  and write the four sleep_* fields; leave them blank when not given (plan-my-day
-  and the Sleep-well habit read sleep_*). If a flag stands out — short sleep, high
-  soreness on what they're loading, low energy — note it in ONE line and, if it
-  fits, suggest scaling back. Never prescribe and never block; they decide.
+Step 4 — Fold in whatever state they gave (don't re-ask), then ALWAYS populate the
+  four sleep_* fields by this precedence — plan-my-day and the Sleep-well habit read
+  sleep_*, so do NOT leave them blank when a source exists:
+    a) SLEEP CAPTURED THIS SESSION (check-in or volunteered) — from bed + wake INFER
+       sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h) and
+       write all four. This is a fresh reading; no provenance note needed.
+    b) ELSE CARRY FORWARD from the MOST RECENT SLEEP block above (the most recent
+       session's sleep_*): copy its sleep_bed/wake/quality/hours into this entry.
+    c) ELSE the profile's typical sleep window (also surfaced in that block).
+    d) ONLY leave sleep_* blank if that block says cold start (no prior sleep on
+       record) — never silently blank when (b)/(c) had a value.
+  When you backfill from (b) or (c), add ONE line to ## Notes noting sleep was
+  carried forward from {source/date}, not measured today, so it isn't mistaken for a
+  fresh reading. If a flag stands out — short sleep, high soreness on what they're
+  loading, low energy — note it in ONE line and, if it fits, suggest scaling back.
+  Never prescribe and never block; they decide.
 
 Step 5 — GENERATE a plan-ahead session, or stay the logger (logger-first):
   From Step 2's answer, pick ONE case.
