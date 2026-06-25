@@ -190,6 +190,19 @@ pmg_run() {
     fi
   fi
   [[ -n "$queue_json" ]] || queue_json='[]'
+
+  # PB-141: write the computed run queue INTO Plane — move the ordered set to the
+  # Queued state with ascending sort_order so /plan-my-work walks Plane, not the
+  # markdown (which is now a run-log). Only on a real apply with a non-empty queue;
+  # best-effort (a write hiccup must not fail the groom or the report). Idempotent:
+  # enqueue re-ranks the same todo set and never pulls an in-progress issue back.
+  if [[ -n "$apply" && -n "$queue_json" && "$queue_json" != "[]" && "${PBRAIN_GROOM_ENQUEUE:-yes}" == "yes" ]]; then
+    local enqueue_args=(enqueue)
+    [[ -n "$projects" ]] && enqueue_args+=(--projects "$projects")
+    python3 "$py" "${enqueue_args[@]}" >>"$logf" 2>&1 || \
+      printf 'pmg_run: enqueue to Queued state failed (non-fatal)\n' >>"$logf" 2>/dev/null || true
+  fi
+
   if [[ $rc -ne 0 || -z "$json" ]]; then
     return $rc
   fi
@@ -343,13 +356,15 @@ L.append("---")
 L.append("")
 L.append("# Grooming — %s" % date)
 L.append("")
-L.append("_Todo-only triage + the ordered run queue. Backlog is your staging area — "
-         "groom never touches it. Review on waking, then run `/plan-my-work <id>` to "
-         "drive or resume any queued issue._")
+L.append("_Todo-only triage. Backlog is YOUR staging area — groom never touches it. "
+         "PB-141: the live queue is now Plane's **Queued** state (groom ranks todo "
+         "issues into it); this table is a run-log of what was queued. Review on "
+         "waking, then run `/plan-my-work` to drive or resume queued issues._")
 L.append("")
-# The ordered run queue: todo issues in the order pmw should run them (blockers ahead
-# of the issues they block). groom feeds these ids to /plan-my-work one at a time.
-L.append("## Queue — ordered (%d)" % len(queue))
+# PB-141 run-log: the issues groom ranked into Plane's Queued state, in order. The
+# live queue is the Queued state (pmw walks it via `project-manager queued`); this
+# table records the same ranking for human review.
+L.append("## Queue — ordered → Plane Queued state (%d)" % len(queue))
 L.append("")
 def auto_cell(r):
     """The auto:<stage> labels granted to this issue (e.g. 'plan,implement'), shown

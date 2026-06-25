@@ -186,7 +186,7 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Todo default, no dup names" {
+@test "PB-130/PB-141 PIPELINE_STATES: 9 states incl. Queued, correct names+groups, Todo default, no dup names" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
@@ -194,10 +194,14 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 ps = m.PIPELINE_STATES
 names = [s["name"] for s in ps]
 # Todo is KEPT (not renamed to "Triage" — Plane reserves that name for its intake).
-assert names == ["Backlog","Todo","Planning","Building","Testing","Review","Done","Cancelled"], names
+# PB-141: Queued sits between Todo and Planning (groom's ranked run queue).
+assert names == ["Backlog","Todo","Queued","Planning","Building","Testing","Review","Done","Cancelled"], names
 by = {s["name"]: s for s in ps}
 assert by["Backlog"]["group"]=="backlog"
 assert by["Todo"]["group"]=="unstarted"
+# PB-141: Queued shares the unstarted group with Todo (ready-eligible), is NOT default.
+assert by["Queued"]["group"]=="unstarted" and not by["Queued"].get("default")
+assert m.QUEUED_STATE == "Queued"
 for n in ("Planning","Building","Testing","Review"):
     assert by[n]["group"]=="started", n
 assert by["Done"]["group"]=="completed"
@@ -213,6 +217,52 @@ assert orders==sorted(orders) and len(set(orders))==len(orders)
 # every group used is one pbrain knows about (ready contract intact)
 groups=set(s["group"] for s in ps)
 assert groups <= set(("backlog","unstarted","started","completed","cancelled")), groups
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-141 queued_multi keeps only the Queued state sorted by sort_order; enqueue skips in-progress" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# state_name resolves both expanded-object and bare-id forms.
+sbi = {"q": {"name": "Queued", "group": "unstarted"},
+       "t": {"name": "Todo",   "group": "unstarted"}}
+assert m.state_name({"state": {"name": "Queued"}}, sbi) == "Queued"
+assert m.state_name({"state": "q"}, sbi) == "Queued"
+
+# queued_multi filters to Queued and orders by sort_order (lower first).
+rows = [
+  {"tie":"p:1","id":1,"state_name":"Todo","sort_order":None,"priority":"high","due":""},
+  {"tie":"p:2","id":2,"state_name":"Queued","sort_order":2000.0,"priority":"low","due":""},
+  {"tie":"p:3","id":3,"state_name":"Queued","sort_order":1000.0,"priority":"low","due":""},
+]
+m.ready_multi = lambda *a, **k: rows           # stub the source
+got = [r["id"] for r in m.queued_multi({}, None, ["p"])]
+assert got == [3, 2], got                       # only Queued, sort_order asc
+
+# enqueue_ordered: todo rows get Queued + ascending sort_order; in-progress skipped.
+class FakeClient:
+    def __init__(self): self.patches=[]
+    def list_states(self, pid): return [
+        {"id":"q","name":"Queued","group":"unstarted"},
+        {"id":"t","name":"Todo","group":"unstarted","default":True}]
+    def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
+fc = FakeClient()
+ordered = [
+  {"tie":"p:10","status":"todo","priority":"high","due":""},
+  {"tie":"p:11","status":"doing","priority":"high","due":""},   # already in progress
+  {"tie":"p:12","status":"todo","priority":"low","due":""},
+]
+out = m.enqueue_ordered({}, fc, ordered)
+moved = [(iid, body["sort_order"]) for iid, body in fc.patches]
+assert [iid for iid,_ in moved] == ["10","12"], moved   # only todo rows moved
+assert moved[0][1] < moved[1][1], moved                  # ascending rank
+assert all(body["state"]=="q" for _,body in fc.patches)  # → Queued state id
+assert any(r.get("skipped") for r in out)                # doing row reported skipped
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
