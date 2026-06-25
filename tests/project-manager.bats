@@ -229,3 +229,18 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"caller: plan-my-work"* && "$output" == *"EXECUTOR MODE"* \
      && "$output" != *"PLANNING CONTEXT"* ]]
 }
+
+# --- intake precedence: file is the SOLE new-work entry point (PB-112) -------
+@test "the routing catalogue enforces file-as-intake and hides the raw issue create verb" {
+  PM config --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM route file two bugs
+  [ "$status" -eq 0 ]
+  # file IS the documented intake; the precedence rule names it.
+  [[ "$output" == *"INTAKE PRECEDENCE"* ]]
+  [[ "$output" == *'file "<dump>"'* ]]
+  # the raw `issue --project … --title` create line is demoted OUT of the
+  # catalogue surface, so the agent can't pick it as an intake peer of file.
+  [[ "$output" != *"issue --project <R> --title"* ]]
+  # the zero-candidates fallback offers file, not a raw create.
+  [[ "$output" != *"create it (issue --project"* ]]
+}
