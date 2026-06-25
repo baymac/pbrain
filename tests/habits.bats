@@ -2967,6 +2967,31 @@ print('NONE' if not r else '%d|%s'%(r[0],r[1]))" "$PBRAIN_DB_FILE" "$1" "$2"
   [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
 }
 
+@test "fitness-reconcile: --time HH:MM is accepted (retimes chosen, still reconciles)" {
+  _write_fitness_habits
+  _plant_fitness_lib_multi
+  HABITS track --date 2026-06-15 >/dev/null    # Monday → Gym due
+  # PB-111: stated session time should drive the chosen habit's reminder slot.
+  # The actual reschedule hits Apple Reminders (UNAVAILABLE in CI), so we assert
+  # the flag is honoured end-to-end: reconciliation still succeeds + off-activity
+  # is still auto-skipped, i.e. --time doesn't break the path.
+  run HABITS fitness-reconcile --activity "Apple Fitness+ Kickboxing" --time 14:45 --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == "RECONCILED chosen=Apple Fitness"* ]]
+  [ "$(_ev gym 2026-06-15)" = "0|skipped" ]
+}
+
+@test "fitness-reconcile: --at alias works and a malformed time is tolerated" {
+  _write_fitness_habits
+  _plant_fitness_lib_multi
+  HABITS track --date 2026-06-15 >/dev/null
+  # --at is an alias for --time; a malformed value falls back to typical_time
+  # (best-effort, never fatal) — reconciliation must still succeed either way.
+  run HABITS fitness-reconcile --activity "Apple Fitness+ Kickboxing" --at "2:45pm" --date 2026-06-15
+  [ "$status" -eq 0 ]
+  [[ "$output" == "RECONCILED chosen=Apple Fitness"* ]]
+}
+
 # ═════════════════════════════════════════════════════════════════════════
 # autostatus  (Phase 4)
 # ═════════════════════════════════════════════════════════════════════════

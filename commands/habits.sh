@@ -68,7 +68,7 @@ set -euo pipefail
 #   habits.sh reminders-reschedule  --habit <name> --time HH:MM [--date YYYY-MM-DD]  update a pending one-shot's due time
 #   habits.sh reminders-realign-plan [--plan <file>] [--date YYYY-MM-DD]  time-match every linked habit's one-shot to its row in today's plan (ensure→reschedule)
 #   habits.sh reminders-cancel      --habit <name|id> [--date YYYY-MM-DD]  delete a pending one-shot + mark its row cancelled
-#   habits.sh fitness-reconcile     --activity "<name|slug>" [--date YYYY-MM-DD]  align fitness-habit reminders to today's chosen activity (skip the rest)
+#   habits.sh fitness-reconcile     --activity "<name|slug>" [--time HH:MM] [--date YYYY-MM-DD]  align fitness-habit reminders to today's chosen activity (skip the rest); --time/--at retimes to the stated session time
 #   habits.sh autostatus            [--date YYYY-MM-DD]  end-of-day: mark scheduled-but-undone build habits 'missed' (skipped/done left)
 #
 # A build (at_least) habit can be LINKED to Apple Reminders (/remind). The link
@@ -2108,13 +2108,14 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# fitness-reconcile --activity "<name|slug>" [--date YYYY-MM-DD]
+# fitness-reconcile --activity "<name|slug>" [--time HH:MM] [--date YYYY-MM-DD]
 # The deterministic "dumb" path /plan-my-day uses once it knows the day's chosen
 # fitness activity (from today's /fitness-journal `focus:` field). It maps the
 # chosen activity → the matching habit and:
 #   - CHOSEN activity's habit (if linked): ensure its one-shot for <date>
 #     (BYPASSING is_due — the activity can happen off its usual schedule), then
-#     align the reminder to the activity's typical_time.
+#     align the reminder to the user's stated/logged session time when --time/--at
+#     HH:MM is given, else to the activity's typical_time.
 #   - every OTHER fitness habit with an EXPLICIT schedule due today that is NOT
 #     the chosen one: reminders-cancel + mark --status skipped (no reminder +
 #     auto-skip — the "explicitly cancelled" case).
@@ -2129,17 +2130,22 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$SUB" == "fitness-reconcile" ]]; then
   shift || true
-  FR_DATE="$TODAY"; FR_ACT=""
+  FR_DATE="$TODAY"; FR_ACT=""; FR_TIME=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --activity) FR_ACT="${2:-}"; shift 2 2>/dev/null || shift ;;
-      --date)     FR_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+      --activity)  FR_ACT="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --time|--at) FR_TIME="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --date)      FR_DATE="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
   [[ -f "$PROFILE_FILE" ]] || { echo "NO_MATCH ${FR_ACT}"; exit 0; }
   [[ -n "${FR_ACT//[[:space:]]/}" ]] || { echo "NO_MATCH"; exit 0; }
   [[ "$FR_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "ERROR:bad date '$FR_DATE'"; exit 0; }
+  # Optional --time/--at HH:MM (the user's stated/logged session time) overrides
+  # the activity's typical_time when rescheduling the CHOSEN habit's reminder.
+  # Best-effort: a malformed value is ignored (fall back to typical_time), not fatal.
+  [[ "$FR_TIME" =~ ^[0-9]{2}:[0-9]{2}$ ]] || FR_TIME=""
 
   # Resolve the committed fitness-library (the activity registry).
   FR_FITSTORE="$(pbrain_profile_store "${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}" 2>/dev/null || true)"
@@ -2247,8 +2253,11 @@ PYEOF
         # ensure the chosen activity's one-shot (off-schedule bypass), then align.
         bash "$_SCRIPT_DIR/habits.sh" reminders-ensure --habit "$a" --date "$FR_DATE" >/dev/null 2>&1 || true
         FR_ENSURED=1
-        if [[ -n "${c//[[:space:]]/}" ]]; then
-          bash "$_SCRIPT_DIR/habits.sh" reminders-reschedule --habit "$b" --time "$c" --date "$FR_DATE" >/dev/null 2>&1 || true
+        # Align the reminder to the user's stated/logged session time when given
+        # (--time/--at), else fall back to the activity's typical_time ($c).
+        FR_ALIGN="${FR_TIME:-$c}"
+        if [[ -n "${FR_ALIGN//[[:space:]]/}" ]]; then
+          bash "$_SCRIPT_DIR/habits.sh" reminders-reschedule --habit "$b" --time "$FR_ALIGN" --date "$FR_DATE" >/dev/null 2>&1 || true
         fi
         ;;
       SKIP)
