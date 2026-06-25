@@ -121,7 +121,7 @@ pub fn run() {
                 .title("Plane")
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(800.0, 600.0)
-                .center()
+                .maximized(true)
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .initialization_script(RIC_POLYFILL)
                 .build()?;
