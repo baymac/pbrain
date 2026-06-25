@@ -29,6 +29,7 @@ Run `/init-plane` and follow the wizard. The underlying subcommands (also runnab
 | `/init-plane config --api-key <t> --workspace <slug> --project <id>` | Wire pbrain to the instance (base URL auto-detected from `plane.env` — `http://127.0.0.1:1800` after `vhost`, else `http://localhost`). |
 | `/init-plane vhost [flags]` | Move Plane off port 80 to a named vhost (default `http://plane.localhost:1800`) by editing its own `plane.env`. Run by default during setup; `--remove` reverts to `http://localhost`. |
 | `/init-plane github [flags]` | Configure Plane's GitHub integration (two-way issue/PR sync) by writing `GITHUB_*` + `SILO_BASE_URL` into `plane.env`. No flags → print the GitHub-App setup guide; `--remove` strips the keys. See below. |
+| `/init-plane app [flags]` | Package the running Plane instance as a native **macOS** app via Pake and install it to `/Applications`. Idempotent; `--remove` deletes it. See below. |
 | `/init-plane status` | Docker + Plane container + whether pbrain is configured (+ `silo_running`, `github_configured`). |
 
 ## Named vhost on a non-80 port (the default)
@@ -74,6 +75,35 @@ That prints the exact **GitHub App** to create (GitHub → Settings → Develope
 **Two caveats:**
 - The integration runs on Plane's **`silo`** service, part of Plane's **Commercial / "govern" layer** — it isn't bundled in the free Community stack `up` installs. If no `silo` container is running, it likely won't activate on that build.
 - **GitHub has to reach your instance** for OAuth + webhooks, so a `localhost` URL won't work — point `--silo-base-url` at a **public HTTPS URL** (a real domain or a tunnel like cloudflared/ngrok).
+
+## Package as a macOS desktop app (optional)
+
+`/init-plane app` wraps your running Plane instance in a **native macOS app** using [Pake](https://github.com/tw93/Pake) (a Tauri/WebKit shell) and installs it to `/Applications`, so Plane lives in your Dock, Spotlight, and Launchpad like any other app. The build is configured for a clean Plane experience: 1400×900 window, hidden/immersive title bar, dark mode, in-app Find (`Cmd+F`), a global `Cmd+Shift+P` show/hide hotkey, and the Plane logo as the icon.
+
+```bash
+/init-plane app                 # build + install /Applications/Plane.app
+/init-plane app --remove        # quit + delete the app
+```
+
+It's **idempotent** — re-run to rebuild and replace the installed copy. After install the unsigned app's Gatekeeper quarantine flag is cleared so it opens without the "unidentified developer" prompt.
+
+**Prerequisite — Pake.** The command does *not* auto-install Pake (the same guide-don't-install stance as `up` with Docker). If it's missing you'll get `INIT_PLANE_APP_NEED_PAKE`; install it once and re-run:
+
+```bash
+npm install -g pake-cli         # needs Node >= 18; Rust auto-installs on first build
+```
+
+**The `/etc/hosts` caveat (app-specific).** If Plane is on the default `http://plane.localhost:1800` vhost, the app needs a one-time `/etc/hosts` entry or it loads a **blank white screen**:
+
+```bash
+echo "127.0.0.1 plane.localhost" | sudo tee -a /etc/hosts
+```
+
+This does **not** contradict the `vhost` section's "no `/etc/hosts`" note — that note is true for the **browser** and for **pbrain's loopback client**, both of which resolve `*.localhost` to `127.0.0.1` for free (browsers via RFC 6761, pbrain via the numeric `127.0.0.1` URL). The desktop app is the one consumer that's different: its **macOS WebView resolves hostnames through the OS resolver, which has no `*.localhost` shortcut**, so the name has to actually resolve. The command detects an unresolvable host and prints the exact `sudo` line above for you to run — it never runs sudo itself. (Stay on plain `http://localhost`? Then no hosts entry is needed at all.)
+
+The app loads the same vanity URL you use in the browser and **only works while Plane's Docker stack is running**.
+
+Flags: `--name` (default `Plane`), `--url` (override the target URL), `--host` / `--port` (compose a URL without `--url`), `--icon` (PNG URL/path; defaults to the Plane logo), `--no-install` (build the `.app` without copying to `/Applications`), `--remove` (quit + delete the installed app), `--plane-home` (env-file discovery override). **macOS only** — on other platforms it prints `INIT_PLANE_APP_UNSUPPORTED`.
 
 ## Notes
 

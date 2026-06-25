@@ -1,6 +1,6 @@
 ---
 description: Set up a local self-hosted Plane (makeplane) instance and wire pbrain to it. Plane is pbrain's sole project brain (Module → Issue → Sub-issue + a Linear-like UI); pbrain's /plan-my-work and /end-of-day then read ready tasks from Plane and write status back. Guided, idempotent — safe to re-run. Use when the user wants to run Plane locally as pbrain's task tracker (task planning + project progress require Plane).
-argument-hint: (none) | fetch | up | config | vhost | github | status
+argument-hint: (none) | fetch | up | config | vhost | github | app | status
 ---
 > **Note:** `/project-manager` now absorbs this wizard (`probe|fetch|up|config|vhost|status`) plus all Plane ops, and is the preferred entry point once a vault exists. `/init-plane` stays as the vault-free setup path (it needs no Obsidian vault). If the user already has pbrain set up, point them at `/project-manager`.
 
@@ -38,6 +38,10 @@ The flow:
 8. **Verify.** Run `/project-manager test` (should list your project's states) and `/project-manager ready` (your ready issues). If you see `PLANE_ERROR`, relay it — usually a bad token, wrong workspace/project, or Plane not fully started yet — and help fix it; don't loop.
 
 After this, `/plan-my-work` pulls ready issues from Plane into the day's blocks and `/end-of-day` writes their status back.
+
+9. **Package as a desktop app (optional, macOS).** Run `init-plane app` to wrap the running Plane instance in a native macOS app via **Pake** (a Tauri/WKWebView shell) and install it to `/Applications` — 1400×900, hidden title bar, dark mode, in-app Find (`Cmd+F`), a global `Cmd+Shift+P` show/hide hotkey, and the Plane logo as the icon. It's idempotent (re-run to rebuild) and `--remove` deletes it. Two things to surface (the script also prints them):
+   - **Pake is required** but not auto-installed — if `pake: no` in probe, tell the user to run `npm install -g pake-cli` (needs Node ≥18; Rust auto-installs on first build), then re-run.
+   - **The `/etc/hosts` caveat.** If Plane is on the `plane.localhost:1800` vhost, the app needs `127.0.0.1 plane.localhost` in `/etc/hosts`, or it loads a **blank white screen**. This is *specific to the app* and does **not** contradict the vhost step's "no `/etc/hosts`" note: browsers (and pbrain's loopback client) resolve `*.localhost` for free via RFC 6761, but the app's macOS webview resolves through the OS, which has no such shortcut. The command detects an unresolvable host and prints the exact one-line fix (`echo "127.0.0.1 plane.localhost" | sudo tee -a /etc/hosts`) for the user to run — it never runs sudo itself. The app also only works while Plane's Docker containers are up. Flags: `--name` (default `Plane`), `--url`, `--host`, `--port`, `--icon`, `--no-install` (build without copying to `/Applications`), `--remove`, `--plane-home`.
 
 ## GitHub integration (optional, separate subcommand)
 
