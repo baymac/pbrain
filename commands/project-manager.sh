@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run|--ordered)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run|--ordered|--remote-prune)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -207,7 +207,7 @@ SUB="${1:-probe}"
 # The known verbs. ANYTHING ELSE that arrives with args is treated as a
 # natural-language instruction and routed (D2): "bump the auth bug to high and
 # tag it backend" → resolve the issue, map to priority+tag, execute.
-_PM_VERBS=" probe fetch up config vhost status setup use test ping web-base states projects ready queued claim-next enqueue progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
+_PM_VERBS=" probe fetch up config vhost status setup use test ping web-base states projects ready queued claim-next enqueue progress review explode subtree blocked-by spec file create track capture enrich move priority timeline completed doing issue project-create workdir prune-merged find update tag comment assign reparent cycle module labels members cycles modules estimates groom backup host route help -h --help "
 _pm_known_verb() { [[ "$_PM_VERBS" == *" $1 "* ]]; }
 
 if [[ $# -gt 0 ]] && ! _pm_known_verb "$SUB"; then
@@ -468,6 +468,116 @@ PYEOF
     # stdout (no PM_* prefix) so callers can $(...) it; empty + rc 0 when
     # unconfigured, so it never needs the PM_NOT_CONFIGURED gate above.
     python3 "$PLANE" web-base || true
+    ;;
+
+  prune-merged)
+    # PB-141 follow-on: deterministic post-merge worktree GC. Sweeps every pbrain/*
+    # worktree whose branch is content-merged into base AND whose tree is clean, then
+    # removes the worktree + its local branch. Pure git — no Plane, no network (except
+    # an opt-in `remote prune`), so it lives here with web-base/host/backup, OUTSIDE
+    # the PM_NOT_CONFIGURED gate. Squash-merge safe: uses a FILE-SCOPED merged check
+    # (a raw `git diff base..B` or `git cherry` false-positives on squash merges,
+    # because the squash lands the content under a brand-new commit). This is what
+    # /plan-my-work's land stage calls after a merge, AND what an agent clearing PRs
+    # out-of-session should run to GC the worktrees those merges left behind.
+    _parse_args "$@"
+    echo "PM_PRUNE_MERGED"
+
+    # --- resolve the repo root (authoritative, never a dir scan) --------------
+    _pmr_repo="$(_flag repo)"; [[ -n "$_pmr_repo" ]] || _pmr_repo="$PWD"
+    _pmr_root="$(git -C "$_pmr_repo" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -z "$_pmr_root" ]]; then
+      echo "PMR_ERR not-a-git-repo: $_pmr_repo"
+      echo "summary: repo=$_pmr_repo pruned=0 kept=0 skipped=0 (no git repo)"
+      exit 0
+    fi
+
+    # --- resolve base ref: --base → origin/main → main → HEAD ----------------
+    _pmr_base="$(_flag base)"
+    if [[ -z "$_pmr_base" ]]; then
+      if   git -C "$_pmr_root" rev-parse --verify -q origin/main >/dev/null; then _pmr_base="origin/main"
+      elif git -C "$_pmr_root" rev-parse --verify -q main        >/dev/null; then _pmr_base="main"
+      else _pmr_base="HEAD"; fi
+    fi
+    if ! git -C "$_pmr_root" rev-parse --verify -q "$_pmr_base" >/dev/null; then
+      echo "PMR_ERR base-ref-missing: $_pmr_base"
+      echo "summary: repo=$_pmr_root base=$_pmr_base pruned=0 kept=0 skipped=0 (bad base)"
+      exit 0
+    fi
+
+    _pmr_dry=""; _has_bool dry_run && _pmr_dry=1
+    _pmr_main_wt="$_pmr_root"   # primary worktree = removal-safe CWD (never itself pbrain/*)
+    _pmr_pruned=0; _pmr_kept=0; _pmr_skipped=0
+
+    # Decide + act on ONE worktree record. Order of guards matters: the primary
+    # checkout is exempt BEFORE the pbrain/* test (so a pbrain branch checked out in
+    # the main repo is never touched). All git ops run from the primary checkout so
+    # we never stand inside the worktree we remove ("Cannot delete branch checked
+    # out at <wt>"). Removal is worktree FIRST, then `branch -D` (force: our own
+    # file-scoped gate already proved merged; `-d`'s git-native check is squash-blind).
+    _pmr_consider() {
+      local wt="$1" br="$2"
+      [[ -z "$wt" ]] && return 0
+      if [[ "$wt" == "$_pmr_main_wt" ]]; then return 0; fi
+      if [[ "$br" != pbrain/* ]]; then
+        echo "SKIPPED-not-pbrain $wt ${br:-<detached>}"; _pmr_skipped=$((_pmr_skipped+1)); return 0
+      fi
+      # Dirty gate: working tree must be clean.
+      if [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]]; then
+        echo "KEPT-dirty $wt $br"; _pmr_kept=$((_pmr_kept+1)); return 0
+      fi
+      # File-scoped merged gate (squash-safe). mb = fork point of B from base.
+      local mb files remaining
+      mb="$(git -C "$_pmr_root" merge-base "$_pmr_base" "$br" 2>/dev/null || true)"
+      if [[ -z "$mb" ]]; then
+        echo "KEPT-unmerged $wt $br (no merge-base with $_pmr_base)"; _pmr_kept=$((_pmr_kept+1)); return 0
+      fi
+      files="$(git -C "$_pmr_root" diff --name-only "$mb" "$br" 2>/dev/null)"
+      if [[ -n "$files" ]]; then
+        # Do B's own changed files already match base? 0 diff lines = merged.
+        # NOTE: `-- $files` is intentionally unquoted to word-split the newline list
+        # into pathspecs. A changed path containing spaces could mis-split; the
+        # failure direction is SAFE (over-counts -> KEPT, never a wrong delete).
+        # pbrain branch content is code/docs with no space-bearing paths in practice.
+        remaining="$(git -C "$_pmr_root" diff "$br" "$_pmr_base" -- $files 2>/dev/null | wc -l | tr -d ' ')"
+        if [[ "$remaining" != "0" ]]; then
+          echo "KEPT-unmerged $wt $br"; _pmr_kept=$((_pmr_kept+1)); return 0
+        fi
+      fi
+      # MERGED + clean. (files empty -> nothing to land -> also merged.)
+      if [[ -n "$_pmr_dry" ]]; then
+        echo "PRUNED $wt $br (dry-run — would remove)"; _pmr_pruned=$((_pmr_pruned+1)); return 0
+      fi
+      if git -C "$_pmr_main_wt" worktree remove "$wt" 2>/dev/null \
+         || git -C "$_pmr_main_wt" worktree remove --force "$wt" 2>/dev/null; then
+        git -C "$_pmr_main_wt" branch -D "$br" >/dev/null 2>&1 || true
+        echo "PRUNED $wt $br"; _pmr_pruned=$((_pmr_pruned+1))
+      else
+        echo "KEPT-error $wt $br (worktree remove failed)"; _pmr_kept=$((_pmr_kept+1))
+      fi
+    }
+
+    # Parse `git worktree list --porcelain` with a DEFERRED flush: each `worktree`
+    # line flushes the PREVIOUS record; the final record is flushed after the loop.
+    _pmr_wt=""; _pmr_br=""
+    while IFS= read -r line; do
+      case "$line" in
+        "worktree "*) _pmr_consider "$_pmr_wt" "$_pmr_br"; _pmr_wt="${line#worktree }"; _pmr_br="" ;;
+        "branch refs/heads/"*) _pmr_br="${line#branch refs/heads/}" ;;
+        "") : ;;   # record separator — defer flush to the next `worktree` / EOF
+      esac
+    done < <(git -C "$_pmr_root" worktree list --porcelain)
+    _pmr_consider "$_pmr_wt" "$_pmr_br"   # flush the final record
+
+    if [[ $((_pmr_pruned+_pmr_kept+_pmr_skipped)) -eq 0 ]]; then
+      echo "no worktrees to consider"
+    fi
+    # Housekeeping: drop stale admin entries; remote prune is an opt-in network cost.
+    if [[ -z "$_pmr_dry" ]]; then
+      git -C "$_pmr_main_wt" worktree prune >/dev/null 2>&1 || true
+      _has_bool remote_prune && { git -C "$_pmr_main_wt" remote prune origin >/dev/null 2>&1 || true; }
+    fi
+    echo "summary: repo=$_pmr_root base=$_pmr_base pruned=$_pmr_pruned kept=$_pmr_kept skipped=$_pmr_skipped${_pmr_dry:+ (dry-run)}"
     ;;
 
   projects)
