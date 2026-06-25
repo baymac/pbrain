@@ -53,7 +53,7 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `file "<dump>" [--project R] [--fast]` (aliases `create`/`track`/`capture`) | The **generic work-item intake & triage convention** (PB-67). **Read-only** until you file. Explodes a free-text dump into a triage-ready item of ANY type (bug/feature/docs/chore/refactor/improvement, inferred), dedupes against open items. **Full path** (default) = Socratic build-up: type → body → sub-issues → labels → estimate → priority → deadline. **`--fast`** = infer + one confirm. Creates with the type's convention label + a severity-derived priority (bugs). "file this …" / "create an issue for …" route here. |
 | `labels --seed [--projects R,…]` | Seed the convention labels `bug`/`feature`/`chore`/`docs` **and** the custom lifecycle states (PB-130) onto the project(s) (default: all). Idempotent; new projects get both on create (PB-70/PB-130). The states pass needs the Plane **internal** API (session cookie / login); without it, the result carries the exact UI steps to set the pipeline up by hand. |
 | `enrich` / `update --edits '<json>'` | The generic write path: `[{tie,field,value}]`. `field` ∈ description · title · priority · target_date/due · start_date · estimate · assignees(name\|uuid) · tag/untag/labels · state · parent · cycle · module · comment · link · subissue · relation:&lt;type&gt;. One batch shares a creation-guard + cache. |
-| `move <tie> --to <status> [--to-state <PipelineState>]` | Status (`todo\|doing\|done\|blocked\|dropped`). PB-130: `--to-state` targets a named pipeline state (`Planning\|Building\|Testing\|Review`, …) inside that status's group; absent or unknown → the group's default (so non-pipeline projects are unaffected). `/plan-my-work` uses it to advance issues through the lifecycle (plan→Planning, implement→Building, test→Testing, ship/land→Review, merge→Done). |
+| `move <tie> --to <status> [--to-state <PipelineState>]` | Status (`todo\|doing\|done\|blocked\|dropped`). PB-130: `--to-state` targets a named pipeline state (`Planning\|Building\|Testing\|Shipped`, …) inside that status's group; absent or unknown → the group's default (so non-pipeline projects are unaffected). `/plan-my-work` uses it to advance issues through the lifecycle (plan→Planning, implement→Building, test→Testing, ship/land→Shipped, merge→Landed). |
 | `priority <tie> --value <p>` | Priority (`urgent\|high\|medium\|low\|none`). |
 | `timeline <tie> --target-date <d>` | Target date (`YYYY-MM-DD`). |
 | `tag <tie> --add a,b [--remove c] [--set x,y]` | Labels — add (auto-created, capped), remove, or replace the whole set. |
@@ -71,7 +71,7 @@ A **tie** is `<project_id>:<issue_id>` — the handle that flows through the dai
 
 Every pbrain-bootstrapped project replaces Plane's default `Todo` / `In Progress` states with a custom lifecycle pipeline:
 
-**Backlog → Todo → Planning → Building → Testing → Review**, plus **Done** and **Cancelled**.
+**Backlog → Todo → Planning → Building → Testing → Shipped**, plus **Landed** and **Cancelled**.
 
 Each state keeps a Plane **state group** so the `ready` / `READY_GROUPS` contract still resolves pickable work (pbrain resolves work by *group*, not name):
 
@@ -82,8 +82,8 @@ Each state keeps a Plane **state group** so the `ready` / `READY_GROUPS` contrac
 | Planning | `started` | `/plan-my-work` **plan** stage |
 | Building | `started` | **implement** stage |
 | Testing | `started` | **test** stage |
-| Review | `started` | **ship** / **land** stages (PR open) |
-| Done | `completed` | merged |
+| Shipped | `started` | **ship** / **land** stages (PR open) |
+| Landed | `completed` | merged |
 | Cancelled | `cancelled` | dropped |
 
 Seeded on `project-create` and backfilled onto existing projects via `labels --seed` (or `states --seed`). The pipeline **adds** the four work states on top of Plane's defaults and removes only **In Progress** (its issues fold into Building); **Todo is kept** as the default unstarted state — Plane reserves the literal name "Triage" for its intake inbox and rejects creating it, so the pipeline keeps "Todo" rather than rename it. Plane's public token API can't write states, so the seed uses the **internal** API (session cookie / login, the same seam estimates use); when that auth isn't configured the command makes no changes and hands back the exact Plane-UI steps instead.
