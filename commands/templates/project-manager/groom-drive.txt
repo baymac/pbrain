@@ -46,13 +46,11 @@ should auto-run, then set the labels. For each id in `## Queue — ordered`:
      fields — a one-letter or placeholder description ("x", "wip", "todo", "tbd", "?") or a
      vague target-less one-liner ("fix the thing", "make it better") PASSES it but is NOT
      good enough to run. You already have the description/priority/estimate in hand, so judge
-     QUALITY before labeling:
-       • Description — does it say WHAT to change and HOW you'd know it's done? Placeholder /
-         single-word / vague-no-target ⇒ not good enough.
-       • Priority — plausible for the work? A clearly high-impact/blocking issue left at
-         low/none, or a trivial chore at urgent, is wrong ⇒ reset it.
-       • Estimate (only if the project has a scale) — set and roughly plausible for scope?
-         Missing/absurd ⇒ set a sensible one.
+     QUALITY before labeling, against the shared TRIAGE COMPLETENESS BAR — the SAME bar
+     `file` intake uses, so a groomed issue and a hand-filed one come out the same shape:
+
+${TRIAGE_BAR}
+
      If it FAILS any check, ENRICH it now — exactly like a `## Needs review` item
      (`${PM_CMD} enrich`/`priority`/`estimate`/`update`) — then continue to labeling.
      Autonomous mode: decide and apply, don't ask. Interactive: propose, then apply.

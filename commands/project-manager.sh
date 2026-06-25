@@ -701,8 +701,10 @@ PYEOF
     echo ""
     PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
     PM_FAST="$(_has_bool fast && printf yes || printf no)"
-    export PM_SELF PM_FAST
-    envsubst '$PM_SELF $PM_FAST' < "$_SCRIPT_DIR/templates/project-manager/file-walk.txt"
+    # PB-139: the shared triage completeness bar, referenced by both file + groom.
+    TRIAGE_BAR="$(cat "$_SCRIPT_DIR/templates/project-manager/_triage-bar.txt")"
+    export PM_SELF PM_FAST TRIAGE_BAR
+    envsubst '$PM_SELF $PM_FAST $TRIAGE_BAR' < "$_SCRIPT_DIR/templates/project-manager/file-walk.txt"
     ;;
 
   enrich)
@@ -968,8 +970,10 @@ PYEOF
         if [[ -z "${PBRAIN_PMG_HEADLESS:-}" ]]; then
           GROOM_DATA_FILE="$(pmg_data_file "$(pmg_today)")"
           PM_SELF="bash \"$_SCRIPT_DIR/project-manager.sh\""
-          export GROOM_DATA_FILE PM_SELF
-          envsubst '$GROOM_DATA_FILE $PM_SELF' < "$_SCRIPT_DIR/templates/project-manager/groom-drive.txt"
+          # PB-139: the shared triage completeness bar, referenced by both file + groom.
+          TRIAGE_BAR="$(cat "$_SCRIPT_DIR/templates/project-manager/_triage-bar.txt")"
+          export GROOM_DATA_FILE PM_SELF TRIAGE_BAR
+          envsubst '$GROOM_DATA_FILE $PM_SELF $TRIAGE_BAR' < "$_SCRIPT_DIR/templates/project-manager/groom-drive.txt"
         fi
         ;;
       status)

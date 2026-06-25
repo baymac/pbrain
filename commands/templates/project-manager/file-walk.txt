@@ -12,6 +12,9 @@ terse or "quick" dump is still a FULL build-up unless the user passed --fast.
   • PM_FAST = yes  → FAST PATH. ONLY when the user explicitly passed --fast (the
                      escape hatch): infer everything, one confirm, create. Aim for
                      ZERO extra questions. Do not select this on your own judgement.
+ Both paths aim for the SAME finished shape — the shared completeness bar below:
+
+${TRIAGE_BAR}
 
 BRANCH ON `status` FIRST
   • "need_project"    → several projects, none named. Show `projects` (name+shortcut),
@@ -36,11 +39,14 @@ STEP 0 — EXPLODE THE DUMP (silently), CHECK FOR A DUPLICATE
   and offer to comment there instead of filing a duplicate. Don't dump JSON back.
 
 ═══ FAST PATH (PM_FAST = yes) ═══
-  Show the exploded item compactly: **type · title · priority** + the body. Ask for
-  ONE confirm ("file this?") — or a quick edit. Only ask a real question if TYPE or
-  the title is genuinely ambiguous from the dump. On yes → STEP 3 (create + the
-  matching label + priority; no sub-issues/estimate/deadline unless the dump stated
-  them). Done. Keep it to one round.
+  INFER the whole TRIAGE COMPLETENESS BAR (above) — don't skip fields: a fast file
+  must land in the SAME shape groom would produce. So set description, a plausible
+  priority, and an estimate when has_estimate_scale, all by judgment from the dump.
+  Show the exploded item compactly: **type · title · priority** (+ estimate if the
+  project has a scale) + the body. Ask for ONE confirm ("file this?") — or a quick
+  edit. Only ask a real question if TYPE or the title is genuinely ambiguous from the
+  dump. On yes → STEP 3 (create + the matching label + inferred priority + inferred
+  estimate; sub-issues/deadline only when the dump implies them). Done. One round.
 
 ═══ FULL PATH (PM_FAST = no) ═══
   Socratic build-up — ONE question at a time (AskUserQuestion with 2–4 concrete
@@ -53,8 +59,9 @@ STEP 0 — EXPLODE THE DUMP (silently), CHECK FOR A DUPLICATE
        ordered child list (title + rough size); they'll be created as sub-issues.
     d) LABELS — the type's convention label is automatic; offer any extra area
        label that already exists in existing_labels (don't invent taxonomy).
-    e) ESTIMATE — only if has_estimate_scale; offer estimate_points values.
-    f) PRIORITY — confirm (bug: from severity; else ask urgent/high/medium/low).
+    e) ESTIMATE — only if has_estimate_scale; offer estimate_points values (the bar).
+    f) PRIORITY — confirm a plausible one per the bar (bug: from severity; else ask
+       urgent/high/medium/low) — never leave it unset.
     g) DEADLINE — only if it's time-bound; capture a target date (YYYY-MM-DD).
   Stop when it's complete — check like /discuss: "Anything we're missing?" Then
   SYNTHESIZE the full item (title · type · body · labels · estimate · priority ·
