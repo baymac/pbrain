@@ -2,11 +2,16 @@
 INSTRUCTIONS — file a WORK ITEM from a dump (PB-67). PM_FILE above is a JSON object:
 a free-text `dump` the user wants captured as a work item of ANY type, plus the
 resolved project + context. You EXPLODE the dump into a triage-ready item, then
-create it. Read-only until the user says go. Two paths — pick by PM_FAST:
-  • PM_FAST = yes  → FAST PATH. The user is in a hurry: infer everything, one
-                     confirm, create. Aim for ZERO extra questions.
-  • PM_FAST = no   → FULL PATH. Build it up Socratically (one question at a time),
-                     covering sub-issues / labels / estimate / priority / deadline.
+create it. Read-only until the user says go. The path is decided SOLELY by the
+PM_FAST flag below — FULL is the default; FAST is an explicit opt-in. PB-140:
+NEVER infer the path from the user's tone, urgency, or phrasing of the dump. A
+terse or "quick" dump is still a FULL build-up unless the user passed --fast.
+  • PM_FAST = no   → FULL PATH (DEFAULT). Build it up Socratically (one question
+                     at a time), covering sub-issues / labels / estimate /
+                     priority / deadline. This is what you do unless --fast was given.
+  • PM_FAST = yes  → FAST PATH. ONLY when the user explicitly passed --fast (the
+                     escape hatch): infer everything, one confirm, create. Aim for
+                     ZERO extra questions. Do not select this on your own judgement.
 
 BRANCH ON `status` FIRST
   • "need_project"    → several projects, none named. Show `projects` (name+shortcut),
