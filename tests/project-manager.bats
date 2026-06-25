@@ -45,6 +45,29 @@ teardown() { rm -rf "$TMP"; }
   grep -q '"backend": "plane"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
+@test "PB-98: setup refuses to clobber a live api_key with a different one unless --force" {
+  cfgf="$XDG_CONFIG_HOME/pbrain/plane.json"
+  # First-time setup (no existing key) works with no --force.
+  PM setup --base-url https://api.plane.so --api-key REALKEY --workspace ws --project pid >/dev/null
+  grep -q '"api_key": "REALKEY"' "$cfgf"
+  # Re-running with the SAME key (idempotent reconfigure) is allowed without --force.
+  run PM setup --base-url https://api.plane.so --api-key REALKEY --workspace ws --project pid
+  [ "$status" -eq 0 ]
+  grep -q '"api_key": "REALKEY"' "$cfgf"
+  # A DIFFERENT key with no --force is REFUSED and leaves the live config untouched.
+  run PM setup --base-url https://api.plane.so --api-key DUMMYTEST --workspace ws --project pid
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to overwrite"* ]]
+  grep -q '"api_key": "REALKEY"' "$cfgf"        # real key survived the test run
+  [ ! -f "$cfgf.bak" ]                           # no overwrite → no backup written
+  # With --force it overwrites AND snapshots the prior config to .bak.
+  run PM setup --base-url https://api.plane.so --api-key DUMMYTEST --workspace ws --project pid --force
+  [ "$status" -eq 0 ]
+  grep -q '"api_key": "DUMMYTEST"' "$cfgf"
+  [ -f "$cfgf.bak" ]
+  grep -q '"api_key": "REALKEY"' "$cfgf.bak"     # the prior key is recoverable
+}
+
 @test "estimates --import-json caches the scale; estimate field then resolvable" {
   PM setup --base-url https://api.plane.so --api-key SECRET --workspace ws --project pid >/dev/null
   payload='[{"id":"e1","type":"points","last_used":true,"name":"Points","points":[{"id":"u1","value":"1"},{"id":"u3","value":"3"}]}]'
