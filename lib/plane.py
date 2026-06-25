@@ -161,12 +161,24 @@ GATE_LABELS = [{"name": "auto:%s" % g, "color": "#7c3aed"} for g in GATE_NAMES] 
 # resolves to a real label instead of creating one ad-hoc.
 GROOMED_LABEL = {"name": "auto:groomed", "color": "#8b5cf6"}  # violet (marker, not gate)
 
+# The PARKED manual-gate label (PB-152). A human adds `parked` to an issue to say
+# "hands-off pmw modes must NOT touch this without me." It is honoured ONLY by the
+# hands-off SELECTION paths (the Queued state queue + auto-drive: queued_multi /
+# claim_next_queued / enqueue_ordered all skip a parked issue), so groom never
+# enqueues it and `/plan-my-work` auto-drive / top-of-queue never claims it. An
+# EXPLICIT `/plan-my-work PB-X` on a parked issue still runs (a human asked for it by
+# name) — pmw just warns, via the `is_parked` flag exposed in `spec --read`. Like
+# auto:groomed it is a marker, not a pipeline gate, so the gate machinery
+# (GATE_NAMES iteration) ignores it. Seeded so `tag --add parked` resolves to a real
+# label rather than creating one ad-hoc.
+PARKED_LABEL = {"name": "parked", "color": "#f59e0b"}  # amber (manual hold marker)
+
 # All labels pbrain seeds into a project: work-type conventions (PB-70), the
-# plan-approval seam (PB-45), the per-gate auto clearances (PB-94), and the groom
-# quality-vet marker.
+# plan-approval seam (PB-45), the per-gate auto clearances (PB-94), the groom
+# quality-vet marker, and the parked manual-hold marker (PB-152).
 def _seed_label_specs():
     return (CONVENTION_LABELS + [{"name": APPROVED_LABEL, "color": "#9333ea"}]
-            + GATE_LABELS + [GROOMED_LABEL])
+            + GATE_LABELS + [GROOMED_LABEL, PARKED_LABEL])
 
 # Canonical "convention" labels (PB-70). Every project gets these work-item TYPE
 # labels so triage is consistent across the workspace: a `bug` filed via
@@ -1388,13 +1400,19 @@ def issue_labels(issue):
 
 
 def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est_h,
-                   uuid_hours=None, approved_label_ids=None, gate_map=None):
+                   uuid_hours=None, approved_label_ids=None, gate_map=None,
+                   parked_label_ids=None):
     grp = state_group(issue, states_by_id)
     iid = issue.get("id")
     ep = issue.get("estimate_point")
     est_h = uuid_hours[ep] if (ep and uuid_hours and ep in uuid_hours) else default_est_h
+    have_labels = issue_labels(issue)
     approved = bool(approved_label_ids) and any(
-        lid in approved_label_ids for lid in issue_labels(issue))
+        lid in approved_label_ids for lid in have_labels)
+    # PB-152: the manual-hold marker. True → hands-off selection paths (queued_multi /
+    # claim_next_queued / enqueue_ordered) skip this issue; an explicit id run warns.
+    is_parked = bool(parked_label_ids) and any(
+        lid in parked_label_ids for lid in have_labels)
     return {
         "tie": "%s:%s" % (project_id, iid),
         "id": issue.get("sequence_id", iid),
@@ -1411,6 +1429,8 @@ def issue_to_ready(issue, project_id, states_by_id, module_by_issue, default_est
         "priority": issue.get("priority") or "none",
         "is_sub": bool(issue.get("parent")),
         "approved": approved,
+        # PB-152: manual-hold marker — hands-off selection skips a parked issue.
+        "is_parked": is_parked,
         # PB-94: gates this issue is auto-cleared for (empty → all manual).
         "auto_gates": issue_gate_clearances(issue, gate_map),
     }
@@ -1442,6 +1462,20 @@ def approved_label_ids(client, project_id):
     except Exception:
         return set()
     target = _norm(APPROVED_LABEL)
+    return {lab.get("id") for lab in labels
+            if lab.get("id") and _norm(lab.get("name") or "") == target}
+
+
+def parked_label_ids(client, project_id):
+    """IDs of the project's `parked` label(s), matched fuzzily by name (PB-152).
+    Best-effort, mirroring approved_label_ids: returns an empty set if labels can't
+    be listed for ANY reason, so the parked filter degrades to 'nothing parked'
+    rather than erroring the ready path."""
+    try:
+        labels = client.list_labels(project_id)
+    except Exception:
+        return set()
+    target = _norm(PARKED_LABEL["name"])
     return {lab.get("id") for lab in labels
             if lab.get("id") and _norm(lab.get("name") or "") == target}
 
@@ -1754,11 +1788,13 @@ def ready(cfg, client, project_id, include_backlog=False, with_lanes=False,
     uuid_hours = est_uuid_to_hours(cfg, project_id)
     approved_ids = approved_label_ids(client, project_id)  # spec/approval gate (PB-45)
     gate_map = gate_label_map(client, project_id)          # per-gate auto clearances (PB-94)
+    parked_ids = parked_label_ids(client, project_id)      # manual-hold marker (PB-152)
     items = []
     for issue in client.list_work_items(project_id):
         r = issue_to_ready(issue, project_id, states_by_id, module_by_issue,
                            cfg["default_est_h"], uuid_hours,
-                           approved_label_ids=approved_ids, gate_map=gate_map)
+                           approved_label_ids=approved_ids, gate_map=gate_map,
+                           parked_label_ids=parked_ids)
         r["_group"] = state_group(issue, states_by_id)
         items.append(r)
     return filter_ready(items, include_backlog=include_backlog, approved_only=approved_only)
@@ -1896,9 +1932,12 @@ def queued_multi(cfg, client, project_ids):
     order groom wrote (sort_order ascending, ties broken by priority → due → id). This
     is what /plan-my-work walks: Plane is the queue, not the vault markdown. Reuses
     ready_multi (Queued is group=unstarted, so it's already ready-eligible) and keeps
-    only state_name == QUEUED_STATE."""
+    only state_name == QUEUED_STATE. PB-152: a `parked` issue is NEVER in the queue a
+    hands-off mode walks — drop it here (this also covers claim_next_queued, which
+    iterates these rows). The merged stream spans all project_ids, so the queue is
+    cross-project (PB-154)."""
     rows = [r for r in ready_multi(cfg, client, project_ids)
-            if r.get("state_name") == QUEUED_STATE]
+            if r.get("state_name") == QUEUED_STATE and not r.get("is_parked")]
     rows.sort(key=lambda r: (
         r["sort_order"] if isinstance(r.get("sort_order"), (int, float)) else float("inf"),
         PRIORITY_RANK.get(r.get("priority"), 4),
@@ -1973,6 +2012,12 @@ def enqueue_ordered(cfg, client, ordered_rows):
             out.append({"tie": tie, "ok": False, "error": "bad tie"})
             continue
         pid, iid = tie.split(":", 1)
+        # PB-152: a parked issue is a manual hold — groom never enqueues it, so
+        # hands-off pmw modes never see it. (Defensive: the ordered stream is also
+        # parked-aware, but skip here too so a direct enqueue can't queue one.)
+        if r.get("is_parked"):
+            out.append({"tie": tie, "ok": True, "skipped": "parked"})
+            continue
         # Only (re)queue work that hasn't started. status comes from the row's group.
         if r.get("status") not in ("todo",):
             out.append({"tie": tie, "ok": True, "skipped": "already in progress"})
@@ -2484,8 +2529,14 @@ def spec_context(cfg, client, ref, project_ref=None):
     # empty and has_plan always false. issue_description_text falls back to the HTML.
     desc = issue_description_text(issue)
     approved_ids = approved_label_ids(client, pid)
+    issue_label_ids = issue_labels(issue)
     approved = bool(approved_ids) and any(
-        lid in approved_ids for lid in issue_labels(issue))
+        lid in approved_ids for lid in issue_label_ids)
+    # PB-152: the manual-hold marker. Surfaced so an explicit `/plan-my-work PB-X` run
+    # can WARN that the issue is parked (it still runs — a human named it directly);
+    # hands-off modes never reach here because the queue already excludes parked.
+    parked_ids = parked_label_ids(client, pid)
+    is_parked = bool(parked_ids) and any(lid in parked_ids for lid in issue_label_ids)
     # PB-94: per-stage auto-execution clearances carried as auto:<stage> labels, so
     # the executor (spec --read) knows which pipeline stages auto-advance.
     auto_gates = issue_gate_clearances(issue, gate_label_map(client, pid))
@@ -2542,6 +2593,9 @@ def spec_context(cfg, client, ref, project_ref=None):
         "comments_authoritative": True,
         "approved": approved,
         "approved_label": APPROVED_LABEL,
+        # PB-152: manual-hold marker — true → an explicit id run warns; hands-off
+        # modes never reach a parked issue (the queue excludes it upstream).
+        "is_parked": is_parked,
         # PB-94: stages auto-cleared on this issue (empty → all stages manual/park).
         "auto_gates": auto_gates,
         # PB-94: open blockers; non-empty → executor runs these first (manual path).

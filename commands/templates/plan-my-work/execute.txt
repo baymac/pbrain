@@ -6,6 +6,35 @@ State lives in PLANE ONLY: there is no vault Work tracker, no daily-planning fil
 read issue state with `${PM_CMD} spec "<tie>" --read` and write it back with
 `${PM_CMD} move/comment/...`. Never fabricate a PR, a CI result, or a merge.
 
+============================ ENTRY MODE (PB-147) ============================
+There are FOUR ways pmw enters this loop. The `mode:` value handed in above tells
+you which. CRUCIAL: the EXECUTION LOOP BELOW IS IDENTICAL IN ALL FOUR MODES — the
+5 stages, the gates, parking, the SRP triage all behave the same. The modes differ
+ONLY in (a) how the issue(s) are SELECTED and (b) how the run is GATED. Do not fork
+the stage logic per mode.
+
+  mode 1 — BY ID. target_ref is one issue (target_kind=id). Run PRE-FLIGHT + the 5
+    stages on it once. This is the plain `/plan-my-work PB-96` path.
+  mode 2 — FIX AN ISSUE. target_ref is a DESCRIPTION (target_kind=desc), not an id.
+    Run the FIND-OR-FILE cycle (see "MODE 2" below) to resolve it to ONE issue, then
+    run the 5 stages on that issue.
+  mode 3 — AUTO-DRIVE THE QUEUE. No target. Run the MODE 3 LOOP below: claim the top
+    of the cross-project queue, run the 5 stages, park+log at any manual gate, move
+    on, repeat until the queue is empty. Hands-off — assume no manual intervention.
+  mode 4 — TOP OF QUEUE. The top Queued issue was ALREADY CLAIMED for you (the
+    PLAN_MY_WORK_QUEUE_PULL line above names it; target_ref is its tie). Run the 5
+    stages on it ONCE, then at CLOSE OFFER to go to the next (do not auto-continue).
+
+A note on selection: modes 3 and 4 consume groom's CROSS-PROJECT ranked queue (the
+Queued state, blockers-first), which already EXCLUDES `parked` issues — a human holds
+an issue by adding the `parked` label and hands-off modes never touch it. An explicit
+mode-1 id run on a parked issue DOES run (a human named it) — see PARKED WARNING.
+
+PARKED WARNING (mode 1 / any explicit id). When you read `spec --read`, if it reports
+`is_parked: true`, say so in ONE line ("PB-X is parked (manual hold) — running it
+because you named it directly") and proceed. Never silently run a parked issue, and
+never auto-select one (only an explicit id reaches a parked issue).
+
 THE 5 STAGES + THEIR LABELS. Each stage checks the issue's own `auto:<stage>` label
 (from the `auto_gates` array in `spec --read`). Present → AUTO-ADVANCE the stage
 (announce it in one line, don't wait). Absent → it is a MANUAL [GATE]: stop, get an
@@ -27,11 +56,13 @@ regardless of any label. And land NEVER cuts a release.
 YOU WERE HANDED (in the output above):
   • target_ref = ${TARGET_REF} — the issue to run. target_kind = ${TARGET_KIND}:
       - id   → a Plane id (pb96 / PB-96 / 96). Resolve it directly.
-      - desc → a free-text description, NOT an id. Run the FIND-OR-FILE cycle: search
-        Plane for a matching issue (`${PM_CMD} find "<desc>"`); if exactly one strong
-        match, use it; if none, OFFER to file a new issue (`${PM_CMD} file "<desc>"`)
-        and, on the user's yes, execute the id it returns; if several, ask which. Never
-        invent or substitute a different task.
+      - desc → a free-text description, NOT an id. This is MODE 2 (fix an issue). Run
+        the FIND-OR-FILE cycle: search Plane (`${PM_CMD} find "<desc>"`); if there's a
+        candidate, CONFIRM with the user it's the one they mean before running it; if
+        several, ask which; if the user says NONE match (or there are zero), hand it to
+        `${PM_CMD} file "<desc>"` — the FULL triage path, which itself checks whether
+        the work is a sub-issue of / relates-to / blocked-by an existing task — and on
+        the user's yes execute the id it returns. Never invent or substitute a task.
   • WORKING LOCATIONS (above) — plane.json projects[].work: {path,kind,base_branch,
     isolation} per project. May be empty.
   • ${PM_CMD} is the SOLE writer of Plane. ${PLANE_WEB_BASE} is the clickable link base.
@@ -43,12 +74,70 @@ fetch origin -q && git -C <pbrain-repo> checkout main && git -C <pbrain-repo> pu
 --ff-only). No line → nothing to do. (This is about the command wrapper; each task's
 own work still gets a fresh worktree off origin/<base> in stage 1.)
 
+=========================== MODE 3 — AUTO-DRIVE LOOP =======================
+(ONLY when mode: 3. Other modes skip straight to PRE-FLIGHT for their one issue.)
+Hands-off: assume NO manual intervention. You drive groom's CROSS-PROJECT ranked
+queue one issue at a time until it's empty. The loop:
+
+  1. CLAIM the top of the queue for this session:
+       ${PM_CMD} claim-next --session ${PMW_SESSION}
+     It returns ONE ready-row (already cross-project, blockers-first, parked-skipped)
+     or `null`. `null` → the queue is empty: STOP and give the roll-up (below).
+     claim-next atomically moves the issue to Planning, so a parallel auto-drive picks
+     a DIFFERENT issue — never collide on the same top.
+  2. RUN the full PRE-FLIGHT + 5 STAGES below on the claimed issue's tie, exactly as
+     mode 1 would. Announce which PB-id you're driving.
+  3. GATES IN AUTO-DRIVE — there is no human to answer a manual gate, so:
+       - A stage whose `auto:<stage>` label is PRESENT auto-advances (normal).
+       - The first stage whose label is ABSENT is a manual gate you can't satisfy
+         hands-off → PARK there (step P: WIP-commit + push + `pbrain park:` comment),
+         then LOG a one-line bottleneck note onto the issue
+         (`${PM_CMD} comment "<tie>" --body "pbrain auto-drive: parked at <stage> — needs a human; resume with /plan-my-work <PB-id>"`),
+         and MOVE ON to step 1 (next claim). Do NOT stop the whole run for one park.
+       - THE LAND GATE specifically: groom never grants `auto:land`, so an issue that
+         passes plan/implement/test/ship will reach LAND without it. That's expected —
+         PARK at land (the PR stays open + linked), log it as a bottleneck, move on.
+         NEVER auto-merge in auto-drive. (A red CI also parks, same as always.)
+  4. MID-RUN DISCOVERY (a bug/problem you find while executing) → run the SRP TRIAGE
+     below. If the new issue BLOCKS finishing the current one, set the current issue
+     `blocked_by` it and MOVE ON to the next claim (leave the current parked/blocked);
+     if it doesn't block, file it separate and continue the current issue.
+  5. Repeat from step 1.
+ROLL-UP (when claim-next returns null): one tight summary — issues DONE (merged),
+issues PARKED (each with its stage + reason, e.g. "needs manual merge"), issues FILED
+mid-run. This is the hands-off run's report.
+
+==================== SRP MID-LOOP TRIAGE (PB-153, all modes) ===============
+At ANY point in the loop a discovery surfaces — the USER says something, or YOU find a
+problem (a bug, a missing piece, an unrelated cleanup). Do NOT silently fold it into
+the current PR. Triage it so every PR stays SINGLE-RESPONSIBILITY:
+
+  - SRP-FIRST — default to filing a SEPARATE issue: `${PM_CMD} file "<the discovery>"`.
+    Only FOLD it into the current PR when it is the SAME single responsibility as the
+    current task (the same change, same file/feature, same reason). For a TRIVIAL
+    scope/wording delta on the current issue, UPDATE the existing issue instead of
+    filing.
+  - ALWAYS CAPTURE IT — a new issue, or an update to the existing one. Never drop a
+    discovery on the floor.
+  - CONDITIONAL BLOCKED-BY — if the separate issue must land before the current PR can
+    finish, set the current issue blocked_by the new one:
+      ${PM_CMD} update --edits '[{"tie":"<current-tie>","field":"relation:blocked_by","value":"<new-tie>"}]'
+    Otherwise just relate them:
+      ${PM_CMD} update --edits '[{"tie":"<current-tie>","field":"relation:relates_to","value":"<new-tie>"}]'
+  - KEEP PRs SCOPED TO ONE THING. If mid-work you realize the current issue actually
+    bundles several PR-worthy tasks, file the distinct ones as separate issues (so each
+    gets its own branch/PR) rather than growing one sprawling PR.
+
 ================================ PRE-FLIGHT =================================
 Resolve target_ref → a single tie (id: direct; desc: find-or-file above). Then read
 its state ONCE and branch on dependencies BEFORE touching any stage:
 
-  bash ${PM_CMD} spec "<tie>" --read     # JSON: auto_gates, approved, has_plan,
+  bash ${PM_CMD} spec "<tie>" --read     # JSON: auto_gates, approved, has_plan, is_parked,
                                          # description, comments, status, blocked_by
+
+  is_parked → see PARKED WARNING above: if true and this was an explicit id (mode 1),
+  note it in one line and proceed; you will never reach here with a parked issue from a
+  hands-off mode (the queue excludes them).
 
 A) BLOCKED? If `blocked_by` is non-empty, this issue cannot run yet — its open
    blockers must land first. State it in one line, then drive EACH blocker through the
@@ -198,5 +287,11 @@ THEN record the resume breadcrumb on the issue (this is the resume key):
 ================================== CLOSE ==================================
 When the issue (or, for a parent, its last child) is done — or you parked — give one
 tight summary: which stages auto-advanced, where it parked (and the manual stage), and
-the branch/PR. This command drove ONE issue; it does not pick up another (selection is
-groom's job). Stop here.
+the branch/PR. Then close per MODE:
+  - mode 1 / 2 — you drove ONE issue; do NOT pick up another. Stop here.
+  - mode 4 (top of queue) — OFFER to go to the next: "Want me to take the next queue
+    item? (`/plan-my-work` / `/plan-my-work next`)". Do NOT auto-continue — wait for
+    the user. This is the manual gate between queue items.
+  - mode 3 (auto-drive) — you do NOT stop on one issue: loop back to MODE 3 step 1
+    (claim the next). Only when claim-next returns null do you emit the ROLL-UP and
+    stop. (Selection + ranking is groom's job; you only consume the queue.)
