@@ -1275,6 +1275,23 @@ def pick_state_id(states, group, want_name=None):
     return None
 
 
+def resolve_state_id(states, value):
+    """Resolve a state id from a free-text `value` that is EITHER a state name
+    (e.g. "Backlog", "Todo", case-insensitive) OR a pbrain status word
+    (todo|doing|done|blocked|dropped → its group's default). Returns the id, or
+    None if nothing matches. Shared by the create + enrich state-set paths so
+    "put it in Backlog" resolves the same way everywhere (PB-130)."""
+    v = str(value or "").strip()
+    if not v:
+        return None
+    for s in states:
+        if (s.get("name") or "").strip().lower() == v.lower():
+            return s["id"]
+    if v.lower() in STATUS_TO_GROUP:
+        return pick_state_id(states, STATUS_TO_GROUP[v.lower()])
+    return None
+
+
 def issue_labels(issue):
     """The issue's label ids, whether Plane returned them as bare uuids or objects."""
     return [l.get("id") if isinstance(l, dict) else l for l in (issue.get("labels") or [])]
@@ -2571,14 +2588,10 @@ def _apply_edit(cfg, client, pid, iid, field, value, guard, cache):
     # state by name or pbrain status ------------------------------------------
     if f == "state":
         states = _cached(cache, client, pid, "states")
-        v = str(value or "").strip()
-        sid = next((s["id"] for s in states
-                    if (s.get("name") or "").strip().lower() == v.lower()), None)
-        if not sid and v.lower() in STATUS_TO_GROUP:
-            sid = pick_state_id(states, STATUS_TO_GROUP[v.lower()])
+        sid = resolve_state_id(states, value)
         if not sid:
             raise PlaneError("no state matching '%s' (have: %s)"
-                             % (v, ", ".join(s.get("name", "") for s in states)))
+                             % (value, ", ".join(s.get("name", "") for s in states)))
         client.update_work_item(pid, iid, {"state": sid})
         return {"state": sid}
 
@@ -2746,8 +2759,14 @@ def doing_now(cfg, client, project_ids):
     return out
 
 
-def create_issue(cfg, client, project_ref, title, priority=None, target_date=None):
-    """Create a work item in the given project. Returns the created issue dict."""
+def create_issue(cfg, client, project_ref, title, priority=None, target_date=None,
+                 state=None):
+    """Create a work item in the given project. Returns the created issue dict.
+
+    `state` (PB-130) is an optional state NAME or pbrain status word; when given,
+    the new issue is filed directly into that state (e.g. "Backlog") instead of
+    Plane's default unstarted state (Todo). Unknown name → error listing the
+    available states, so a typo fails loudly rather than silently using Todo."""
     pid = resolve_project_ref(cfg, project_ref)
     if not pid:
         raise PlaneError("unknown project: %s" % project_ref)
@@ -2756,6 +2775,13 @@ def create_issue(cfg, client, project_ref, title, priority=None, target_date=Non
         body["priority"] = priority
     if target_date:
         body["target_date"] = target_date
+    if state:
+        states = client.list_states(pid)
+        sid = resolve_state_id(states, state)
+        if not sid:
+            raise PlaneError("no state matching '%s' (have: %s)"
+                             % (state, ", ".join(s.get("name", "") for s in states)))
+        body["state"] = sid
     result = client.create_work_item(pid, body)
     return {"project_id": pid, "project": project_label(cfg, pid), "issue": result}
 
@@ -3386,7 +3412,8 @@ def cmd_issue(args):
     cfg = load_config()
     client = make_client(cfg)
     result = create_issue(cfg, client, args.project, args.title,
-                          priority=args.priority, target_date=args.target_date)
+                          priority=args.priority, target_date=args.target_date,
+                          state=getattr(args, "state", None))
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -3824,6 +3851,9 @@ def build_parser():
     sp.add_argument("--title", required=True)
     sp.add_argument("--priority", default=None, choices=["urgent", "high", "medium", "low", "none"])
     sp.add_argument("--target-date", default=None)
+    sp.add_argument("--state", default=None,
+                    help="file directly into this state (name e.g. Backlog, or a "
+                         "status word); default is the project default (Todo)")
     sp.set_defaults(func=cmd_issue)
 
     sp = sub.add_parser("project-create")

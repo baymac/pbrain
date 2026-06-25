@@ -61,7 +61,7 @@ With **no argument** it runs `probe` and prints the machine state. Drive the wiz
 | `comment <tie> --body <text>` | Add a comment. |
 | `reparent <tie> --parent <PB-12\|none>` | Move under a parent issue, or un-parent. |
 | `cycle <tie> --name <c>` / `module <tie> --name <m>` | Add the issue to a cycle (sprint) or module (area). |
-| `issue --project <ref> --title <t> [--priority p] [--target-date d]` | Create a new issue (`ref` = uuid \| name \| shortcut). Reports the new `sequence_id` + title. |
+| `issue --project <ref> --title <t> [--priority p] [--target-date d] [--state <name>]` | Create a new issue (`ref` = uuid \| name \| shortcut). Reports the new `sequence_id` + title. **`--state`** (PB-130) files it directly into a named state (e.g. `Backlog`) or a status word (`todo`/`doing`/…); default is the project default (**Todo**). So "file X into the backlog" lands it in Backlog instead of Todo. |
 | `project-create --name <n> [--shortcut <s>]` | Create a new Plane project + add it to the registry. |
 | `labels\|members\|cycles\|modules [--project R]` | List a project's labels / members / cycles / modules (the name→uuid tables). |
 

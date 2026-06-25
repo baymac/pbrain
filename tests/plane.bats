@@ -274,6 +274,32 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-130 resolve_state_id: matches by name (ci), by status word, None on miss" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+states=[
+  {"id":"bk","name":"Backlog","group":"backlog"},
+  {"id":"td","name":"Todo","group":"unstarted","default":True},
+  {"id":"bd","name":"Building","group":"started"},
+]
+# by exact name (case-insensitive)
+assert m.resolve_state_id(states,"Backlog")=="bk"
+assert m.resolve_state_id(states,"backlog")=="bk"
+# by pbrain status word → that group's default/lowest
+assert m.resolve_state_id(states,"todo")=="td"      # unstarted default
+assert m.resolve_state_id(states,"doing")=="bd"     # started
+# name takes precedence over status word when both could match
+# (none here), and a miss / empty returns None
+assert m.resolve_state_id(states,"Nonexistent") is None
+assert m.resolve_state_id(states,"") is None
+assert m.resolve_state_id(states,None) is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "PB-130 seed_pipeline_states: creates work states, keeps Todo, removes In Progress after re-point (fake client)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

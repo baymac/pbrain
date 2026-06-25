@@ -597,15 +597,18 @@ PYEOF
     project="${POS[0]:-$(_flag project)}"
     title="$(_flag title)"
     [[ -n "$project" && -n "$title" ]] || {
-      echo "Usage: /project-manager issue --project <ref> --title <title> [--priority p] [--target-date YYYY-MM-DD]" >&2
+      echo "Usage: /project-manager issue --project <ref> --title <title> [--priority p] [--target-date YYYY-MM-DD] [--state <name>]" >&2
       exit 1
     }
     echo "PM_ISSUE"
+    # PB-130: --state files the issue directly into a named state (e.g. Backlog);
+    # default is the project default (Todo).
     python3 "$PLANE" issue \
       --project "$project" \
       --title "$title" \
       ${F_priority:+--priority "$F_priority"} \
-      ${F_target_date:+--target-date "$F_target_date"} || true
+      ${F_target_date:+--target-date "$F_target_date"} \
+      ${F_state:+--state "$F_state"} || true
     ;;
 
   project-create)
