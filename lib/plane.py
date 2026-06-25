@@ -603,6 +603,22 @@ def web_base(cfg):
     return out.rstrip("/")
 
 
+def browse_url(cfg, pid, sequence_id):
+    """PB-134: the canonical, terminal-friendly browse URL for an issue — the SINGLE
+    source of truth so agents never hand-assemble (and mis-shape) issue links.
+
+        web_base(cfg) + "/browse/" + project_short(cfg, pid) + "-" + seq + "/"
+
+    e.g. http://plane.localhost:1800/pb/browse/PB-134/ — the SHORT ref form (not the
+    long .../projects/<uuid>/issues/<uuid> shape) precisely so it fits one terminal
+    line and the whole link is clickable. Returns "" when no web base is resolvable
+    (callers fall back to the bare ref). Pure."""
+    base = web_base(cfg)
+    if not base or sequence_id in (None, ""):
+        return ""
+    return "%s/browse/%s-%s/" % (base, project_short(cfg, pid), sequence_id)
+
+
 # Deep-link app (PB-148): the Tauri desktop app registers a `plane://` URL scheme,
 # so a markdown link with a plane:// target opens the issue inside the app instead
 # of a browser. We only emit plane:// links when that app is actually installed —
@@ -2762,6 +2778,8 @@ def _issue_card(cfg, project_id, issue, identifier=""):
         "state": state,
         "priority": issue.get("priority"),
         "parent": issue.get("parent"),
+        # PB-134: canonical browse link so the agent relays it instead of guessing.
+        "url": browse_url(cfg, project_id, seq),
     }
 
 
@@ -3091,7 +3109,13 @@ def create_issue(cfg, client, project_ref, title, priority=None, target_date=Non
                              % (state, ", ".join(s.get("name", "") for s in states)))
         body["state"] = sid
     result = client.create_work_item(pid, body)
-    return {"project_id": pid, "project": project_label(cfg, pid), "issue": result}
+    seq = result.get("sequence_id")
+    short = project_short(cfg, pid)
+    return {"project_id": pid, "project": project_label(cfg, pid),
+            "project_short": short,
+            "ref": ("%s-%s" % (short, seq)) if seq not in (None, "") else "",
+            "url": browse_url(cfg, pid, seq),
+            "issue": result}
 
 
 def create_project(cfg, client, name, shortcut=None):
@@ -3873,6 +3897,11 @@ def cmd_issue(args):
                           priority=args.priority, target_date=args.target_date,
                           state=getattr(args, "state", None))
     print(json.dumps(result, ensure_ascii=False))
+    # PB-134: print the canonical browse URL bare on its own line so it is
+    # directly clickable in the terminal (terminals only linkify a whole line).
+    url = result.get("url")
+    if url:
+        print(url)
     return 0
 
 
