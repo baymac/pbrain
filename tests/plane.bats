@@ -195,16 +195,16 @@ ps = m.PIPELINE_STATES
 names = [s["name"] for s in ps]
 # Todo is KEPT (not renamed to "Triage" — Plane reserves that name for its intake).
 # PB-141: Queued sits between Todo and Planning (groom's ranked run queue).
-assert names == ["Backlog","Todo","Queued","Planning","Building","Testing","Review","Done","Cancelled"], names
+assert names == ["Backlog","Todo","Queued","Planning","Building","Testing","Shipped","Landed","Cancelled"], names
 by = {s["name"]: s for s in ps}
 assert by["Backlog"]["group"]=="backlog"
 assert by["Todo"]["group"]=="unstarted"
 # PB-141: Queued shares the unstarted group with Todo (ready-eligible), is NOT default.
 assert by["Queued"]["group"]=="unstarted" and not by["Queued"].get("default")
 assert m.QUEUED_STATE == "Queued"
-for n in ("Planning","Building","Testing","Review"):
+for n in ("Planning","Building","Testing","Shipped"):
     assert by[n]["group"]=="started", n
-assert by["Done"]["group"]=="completed"
+assert by["Landed"]["group"]=="completed"
 assert by["Cancelled"]["group"]=="cancelled"
 # exactly one default, and it is Todo (newly-filed lands ready)
 defaults=[s["name"] for s in ps if s.get("default")]
@@ -374,13 +374,13 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 class FakeClient:
     def __init__(self): self.patches=[]
     def list_states(self, pid): return [
-        {"id":"d","name":"Done","group":"completed"},
+        {"id":"d","name":"Landed","group":"completed"},
         {"id":"t","name":"Todo","group":"unstarted"}]
     def list_work_items(self, pid): return [
         {"id":"a","state":"d","completed_at":"2026-06-20T10:00:00Z"},
         {"id":"b","state":"d","completed_at":"2026-06-25T10:00:00Z"},  # newest
         {"id":"c","state":"d","completed_at":""},                       # no date → last
-        {"id":"z","state":"t","completed_at":""},                       # not Done → ignored
+        {"id":"z","state":"t","completed_at":""},                       # not completed → ignored
     ]
     def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
 
@@ -403,7 +403,7 @@ PYEOF
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-assert m.STAGE_TO_STATE=={"plan":"Planning","implement":"Building","test":"Testing","ship":"Review","land":"Review"}, m.STAGE_TO_STATE
+assert m.STAGE_TO_STATE=={"plan":"Planning","implement":"Building","test":"Testing","ship":"Shipped","land":"Shipped"}, m.STAGE_TO_STATE
 # every mapped state name is a real pipeline state in the started group
 by={s["name"]:s for s in m.PIPELINE_STATES}
 for stage,name in m.STAGE_TO_STATE.items():
@@ -424,11 +424,11 @@ pipeline=[
   {"id":"plan","name":"Planning","group":"started","sequence":3},
   {"id":"build","name":"Building","group":"started","sequence":4},
   {"id":"test","name":"Testing","group":"started","sequence":5},
-  {"id":"rev","name":"Review","group":"started","sequence":6},
-  {"id":"done","name":"Done","group":"completed","default":True},
+  {"id":"rev","name":"Shipped","group":"started","sequence":6},
+  {"id":"done","name":"Landed","group":"completed","default":True},
 ]
 assert m.build_status_body("doing",pipeline,to_state="Building")=={"state":"build"}
-assert m.build_status_body("doing",pipeline,to_state="Review")=={"state":"rev"}
+assert m.build_status_body("doing",pipeline,to_state="Shipped")=={"state":"rev"}
 # case-insensitive name match (pick_state_id lowercases)
 assert m.build_status_body("doing",pipeline,to_state="testing")=={"state":"test"}
 # Non-pipeline project (no named states): to_state degrades to the started default.
@@ -543,7 +543,7 @@ c=Fake()
 out=m.seed_pipeline_states(c, "P")
 names=[s["name"] for s in c.states]
 # the 4 work states were created
-assert set(["Planning","Building","Testing","Review"]).issubset(set(names)), names
+assert set(["Planning","Building","Testing","Shipped"]).issubset(set(names)), names
 # Todo kept, In Progress removed
 assert "Todo" in names and "In Progress" not in names, names
 assert "In Progress" in out["removed"], out
@@ -558,6 +558,61 @@ class NoAuth(Fake):
     def _has_internal_auth(self): return False
 na=NoAuth(); o=m.seed_pipeline_states(na,"P")
 assert o.get("manual_steps") and "In Progress" in [s["name"] for s in na.states]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-XXX rename_pipeline_states: Review→Shipped, Done→Landed in place (id kept), idempotent" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# Sanity: the rename map is the two states we expect.
+assert m.STATE_RENAMES == {"Review":"Shipped","Done":"Landed"}, m.STATE_RENAMES
+
+class Fake:
+    """A project still on the OLD names (Review/Done)."""
+    def __init__(self):
+        self.states=[
+          {"id":"td","name":"Todo","group":"unstarted"},
+          {"id":"rev","name":"Review","group":"started"},
+          {"id":"dn","name":"Done","group":"completed"},
+        ]
+        self.patches=[]
+    def list_states(self,pid): return [dict(s) for s in self.states]
+    def update_state(self,pid,sid,name=None,**kw):
+        self.patches.append((sid,name))
+        for s in self.states:
+            if s["id"]==sid and name is not None: s["name"]=name
+        return {}
+
+fc=Fake()
+out=m.rename_pipeline_states(fc,"P")
+# Renamed both, in place — the SAME ids were patched (no create/delete).
+assert sorted(out["renamed"])==["Done→Landed","Review→Shipped"], out
+assert set(fc.patches)=={("rev","Shipped"),("dn","Landed")}, fc.patches
+names={s["name"] for s in fc.states}
+assert names=={"Todo","Shipped","Landed"}, names
+# groups are untouched by the rename
+g={s["name"]:s["group"] for s in fc.states}
+assert g["Shipped"]=="started" and g["Landed"]=="completed", g
+
+# Idempotent: a second run renames nothing (already on the new names) and records
+# them as already-done; no further PATCHes.
+fc.patches=[]
+out2=m.rename_pipeline_states(fc,"P")
+assert out2["renamed"]==[], out2
+assert sorted(out2["already"])==["Landed","Shipped"], out2
+assert fc.patches==[], fc.patches
+
+# A project that never had Review/Done is a clean no-op (no renamed, no already).
+class Bare:
+    def list_states(self,pid): return [{"id":"x","name":"Todo","group":"unstarted"}]
+    def update_state(self,pid,sid,**kw): raise AssertionError("should not write")
+out3=m.rename_pipeline_states(Bare(),"P")
+assert out3["renamed"]==[] and out3["already"]==[] and not out3["error"], out3
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
@@ -1017,7 +1072,7 @@ class C:
     def __init__(self): self.writes=[]
     def list_labels(self,pid): return [{"id":"b","name":"bug"},{"id":"f","name":"feature"}]
     def list_states(self,pid): return [{"id":"s1","name":"Todo","group":"unstarted"},
-                                       {"id":"sd","name":"Done","group":"completed"}]
+                                       {"id":"sd","name":"Landed","group":"completed"}]
     def list_projects(self): return [{"id":"P","identifier":"PB"}]
     def list_work_items(self,pid):
         return [{"sequence_id":98,"name":"open item","labels":[],"state":"s1"},

@@ -167,10 +167,10 @@ happened + the artifacts (plan link, files changed, TEST RESULTS, PR url, park n
 At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
 
 PB-130 — PIPELINE STATE PER STAGE. On projects bootstrapped with pbrain's custom
-state model (Backlog → Todo → Planning → Building → Testing → Review + Done +
+state model (Backlog → Todo → Planning → Building → Testing → Shipped + Landed +
 Cancelled), advance the issue into the STAGE's state as you ENTER each stage, with
 `--to-state`: plan → Planning, implement → Building, test → Testing, ship & land →
-Review, then Done on merge (stage 6). The form is
+Shipped, then Landed on merge (stage 6). The form is
 `${PM_CMD} move "<tie>" --to doing --to-state <PipelineState>` (the `--to doing`
 keeps the started-group status; `--to-state` picks the named state inside it). On a
 project WITHOUT the pipeline states, `--to-state` degrades to the started group's
@@ -224,7 +224,7 @@ default — harmless — so always pass it; you don't need to detect the state m
    announce + proceed; absent → [GATE]; no go → PARK.
 
 4. SHIP  (auto:ship)
-   Move the issue into the Review state: `${PM_CMD} move "<tie>" --to doing --to-state Review`.
+   Move the issue into the Shipped state: `${PM_CMD} move "<tie>" --to doing --to-state Shipped`.
    Probe `command -v gh`.
      - gh present → push the branch, then `gh pr create --fill --base <base_branch>`.
        Put the PR url in the issue: `${PM_CMD} comment "<tie>" --body "PR: <url>"`.

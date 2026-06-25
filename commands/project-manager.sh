@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--dry-run|--ordered|--remote-prune)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--rename|--dry-run|--ordered|--remote-prune)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -452,13 +452,16 @@ PYEOF
     _parse_args "$@"
     # PB-130: `states` lists a project's states; `states --seed` creates/reconciles
     # the custom pipeline; `states --migrate` also re-points existing issues onto it.
-    # Both default to the whole registry; --projects R,... narrows the set.
+    # PB-XXX: `states --rename` renames the pipeline states in place per STATE_RENAMES
+    # (Review→Shipped, Done→Landed) — the 0014 effectful migration. All default to the
+    # whole registry; --projects R,... narrows the set; --dry-run is read-only.
     echo "PM_STATES"
     python3 "$PLANE" states \
       ${F_project:+--project "$F_project"} \
       ${F_projects:+--projects "$F_projects"} \
       $(_has_bool seed && echo --seed) \
       $(_has_bool migrate && echo --migrate) \
+      $(_has_bool rename && echo --rename) \
       $(_has_bool dry_run && echo --dry-run) || true
     ;;
 
@@ -711,7 +714,7 @@ PYEOF
     [[ -n "$tie" && -n "$to" ]] || { echo "Usage: /project-manager move <tie> --to <status> [--to-state <PipelineState>]" >&2; exit 1; }
     echo "PM_MOVE"
     # PB-130: --to-state targets a named pipeline state (Planning/Building/Testing/
-    # Review) within the status's group; absent → the group's default (back-compat).
+    # Shipped) within the status's group; absent → the group's default (back-compat).
     to_state="$(_flag to_state)"
     python3 "$PLANE" move --tie "$tie" --status "$to" \
       ${to_state:+--to-state "$to_state"} \

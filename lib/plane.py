@@ -68,16 +68,16 @@ STATUS_TO_GROUP = {
 }
 
 # PB-130: the custom lifecycle pipeline pbrain seeds into every project. The
-# working pipeline is Backlog → Todo → Planning → Building → Testing → Review, with
-# Done + Cancelled retained. It ADDS the four work states (Planning/Building/Testing/
-# Review) on top of Plane's defaults and removes only "In Progress" (its issues fold
+# working pipeline is Backlog → Todo → Planning → Building → Testing → Shipped, with
+# Landed + Cancelled retained. It ADDS the four work states (Planning/Building/Testing/
+# Shipped) on top of Plane's defaults and removes only "In Progress" (its issues fold
 # into Building); "Todo" is KEPT as the default unstarted "not yet planned" state.
 # (We keep Todo rather than rename it to "Triage" because Plane reserves the literal
 # name "Triage" for its built-in intake inbox and rejects creating/renaming a state
 # to it on most projects — "name already taken".) Each state carries the GROUP that
 # keeps the ready/READY_GROUPS contract intact (names are cosmetic; pbrain resolves
 # work by group): Backlog→backlog (the user's staging area, not "ready"); Todo + the
-# four work states→unstarted/started (all ready); Done→completed; Cancelled→cancelled.
+# four work states→unstarted/started (all ready); Landed→completed; Cancelled→cancelled.
 # Todo is the project DEFAULT, so a newly-filed issue lands ready. `order` drives the
 # Plane `sequence` so the board reads top-to-bottom in pipeline order. Plane's public
 # token API can't write states (read-only), so seeding goes through the internal API
@@ -95,8 +95,8 @@ PIPELINE_STATES = [
     {"name": "Planning", "group": "started",   "color": "#8b5cf6", "default": False, "order": 3},
     {"name": "Building", "group": "started",   "color": "#3b82f6", "default": False, "order": 4},
     {"name": "Testing",  "group": "started",   "color": "#06b6d4", "default": False, "order": 5},
-    {"name": "Review",   "group": "started",   "color": "#ec4899", "default": False, "order": 6},
-    {"name": "Done",     "group": "completed",  "color": "#16a34a", "default": False, "order": 7},
+    {"name": "Shipped",  "group": "started",   "color": "#ec4899", "default": False, "order": 6},
+    {"name": "Landed",   "group": "completed",  "color": "#16a34a", "default": False, "order": 7},
     {"name": "Cancelled", "group": "cancelled", "color": "#6b7280", "default": False, "order": 8},
 ]
 # The state name groom moves ranked todo issues into, and that /plan-my-work walks.
@@ -111,16 +111,23 @@ DEFAULT_STATES_TO_REMOVE = {
 
 # PB-130: which pipeline state each PB-94 auto-exec stage moves the issue into.
 # Used by /plan-my-work's execute loop (via `move --to-state`). plan→Planning,
-# implement→Building, test→Testing, ship & land→Review, then Done on merge (handled
-# by the existing `move --status done` path). Group fallback keeps non-pipeline
-# projects working: an absent named state degrades to the group's default state.
+# implement→Building, test→Testing, ship & land→Shipped, then Landed on merge (handled
+# by the existing `move --status done` path → the completed group). Group fallback keeps
+# non-pipeline projects working: an absent named state degrades to the group's default.
 STAGE_TO_STATE = {
     "plan":      "Planning",
     "implement": "Building",
     "test":      "Testing",
-    "ship":      "Review",
-    "land":      "Review",
+    "ship":      "Shipped",
+    "land":      "Shipped",
 }
+
+# The pipeline-state renames (PB-XXX: Review→Shipped, Done→Landed) — OLD→NEW. The
+# 0014 effectful migration consumes this to PATCH the live state names in place (the
+# state id is preserved, so issues stay put — no re-pointing). Groups are unchanged:
+# Shipped stays `started`, Landed stays `completed`, so all group-based logic (move,
+# completion, queue exit) is untouched. Keep this in sync with PIPELINE_STATES.
+STATE_RENAMES = {"Review": "Shipped", "Done": "Landed"}
 PRIORITY_RANK = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, "": 4, None: 4}
 
 # The spec/approval gate (PB-45). An issue is "plan-approved" when it carries a
@@ -2036,7 +2043,7 @@ def enqueue_ordered(cfg, client, ordered_rows):
 
 
 def rank_done_by_completion(cfg, client, project_ids):
-    """PB-146: order each project's Done column newest-completed-first. Plane's board
+    """PB-146: order each project's Landed column newest-completed-first. Plane's board
     sorts a column by sort_order ascending, so we stamp the most-recently-completed
     issue with the SMALLEST sort_order. Touches only sort_order (no state change) on
     completed-group issues; issues without a completed_at sink to the bottom. Idempotent
@@ -3150,10 +3157,48 @@ def _pipeline_states_manual_steps():
     ]
 
 
+def rename_pipeline_states(client, project_id):
+    """PB-XXX: rename the pipeline states per STATE_RENAMES (Review→Shipped,
+    Done→Landed) on one project, IN PLACE via update_state (the state id is
+    preserved, so every issue currently on it stays put — no re-pointing). Matches
+    the OLD name case-insensitively; if the old name is absent (already renamed, or
+    a project that never had it) that entry is a vacuous no-op, so the whole thing
+    is idempotent. Groups are NOT touched — Shipped stays started, Landed stays
+    completed — so all group-based logic is unaffected. Needs the internal API
+    (public token is read-only for states); a PlaneError on read surfaces as `error`.
+    Returns {"renamed":[...], "already":[...], "error": "..."}."""
+    out = {"renamed": [], "already": [], "error": ""}
+    try:
+        existing = client.list_states(project_id)
+    except PlaneError as e:
+        out["error"] = str(e)
+        return out
+    by_norm = {_norm(s.get("name")): s for s in existing}
+    have_new = {_norm(v) for v in STATE_RENAMES.values()}
+    for old_name, new_name in STATE_RENAMES.items():
+        match = by_norm.get(_norm(old_name))
+        if match is None:
+            # Old name not present. If the NEW name already exists, it's a prior
+            # rename (record as already-done); otherwise this project simply never
+            # carried that state — either way, nothing to do.
+            if _norm(new_name) in by_norm:
+                out["already"].append(new_name)
+            continue
+        sid = match.get("id")
+        if not sid:
+            continue
+        try:
+            client.update_state(project_id, sid, name=new_name)
+            out["renamed"].append("%s→%s" % (old_name, new_name))
+        except PlaneError as e:
+            out["error"] += ("; " if out["error"] else "") + ("%s: %s" % (old_name, e))
+    return out
+
+
 def seed_pipeline_states(client, project_id):
     """PB-130: bring `project_id` onto pbrain's custom lifecycle pipeline
-    (PIPELINE_STATES) — Backlog → Todo → Planning → Building → Testing → Review
-    + Done + Cancelled. Adds the four work states on top of Plane's defaults and
+    (PIPELINE_STATES) — Backlog → Todo → Planning → Building → Testing → Shipped
+    + Landed + Cancelled. Adds the four work states on top of Plane's defaults and
     removes only "In Progress"; "Todo" is KEPT as the default unstarted state.
 
     Idempotent, like seed_convention_labels: a missing pipeline state is created in
@@ -3210,8 +3255,9 @@ def seed_pipeline_states(client, project_id):
             if bool(match.get("default")) != bool(spec.get("default")):
                 patch["default"] = bool(spec.get("default"))
             # Normalise sequence so the board reads top-to-bottom in pipeline order.
-            # Pre-existing states (Backlog/Todo/Done/Cancelled) otherwise keep Plane's
-            # original sequence and float out of order relative to the created ones.
+            # Pre-existing states (Backlog/Todo/Landed/Cancelled — the latter two are
+            # Plane's native Done/Cancelled, with Done renamed to Landed by PB-XXX)
+            # otherwise keep Plane's original sequence and float out of order.
             try:
                 if int(match.get("sequence") or 0) != seq:
                     patch["sequence"] = seq
@@ -3492,7 +3538,7 @@ def migrate_pipeline_states(client, project_id):
     for it in items:
         sid = state_group_id(it)
         # Already on a canonical pipeline state, or on a terminal/backlog state we
-        # keep (Done/Cancelled/Backlog are pipeline states) → leave it.
+        # keep (Landed/Cancelled/Backlog are pipeline states) → leave it.
         if sid in pipeline_ids:
             continue
         st = states_by_id.get(sid)
@@ -3518,12 +3564,17 @@ def cmd_states(args):
     #   --migrate  : --seed PLUS sweep every straggler issue onto a pipeline
     #                state (group-mapped). This is what the 0012 effectful
     #                migration runs across the whole registry.
-    # --projects R,... targets a subset; default for seed/migrate is the whole
-    # registry (so "migrate all projects" is one call).
+    #   --rename   : (PB-XXX) rename the pipeline states per STATE_RENAMES
+    #                (Review→Shipped, Done→Landed) IN PLACE — the 0014 effectful
+    #                migration. --dry-run reports which projects still carry an old
+    #                name (so the migration can gate applicability without writing).
+    # --projects R,... targets a subset; default for all three is the whole
+    # registry (so "rename/migrate all projects" is one call).
     do_seed = getattr(args, "seed", False)
     do_migrate = getattr(args, "migrate", False)
+    do_rename = getattr(args, "rename", False)
     dry_run = getattr(args, "dry_run", False)
-    if do_seed or do_migrate:
+    if do_seed or do_migrate or do_rename:
         if getattr(args, "projects", None):
             refs = [r.strip() for r in args.projects.split(",") if r.strip()]
             pids = []
@@ -3537,6 +3588,23 @@ def cmd_states(args):
         report = {}
         for pid in pids:
             label = project_label(cfg, pid)
+            if do_rename:
+                if dry_run:
+                    # Read-only: report which OLD names are still present, so the
+                    # 0014 migration can decide applicability without writing.
+                    try:
+                        cur = client.list_states(pid)
+                    except PlaneError as e:
+                        report[label] = {"error": str(e), "old_present": []}
+                        continue
+                    names = {_norm(s.get("name")) for s in cur}
+                    old_present = [old for old in STATE_RENAMES
+                                   if _norm(old) in names]
+                    report[label] = {"old_present": old_present,
+                                     "states": [s.get("name") for s in cur]}
+                else:
+                    report[label] = rename_pipeline_states(client, pid)
+                continue
             if dry_run:
                 # Read-only: report which legacy defaults are still present, so the
                 # 0012 migration can decide applicability without writing.
@@ -3559,11 +3627,19 @@ def cmd_states(args):
             else:
                 report[label] = (migrate_pipeline_states(client, pid) if do_migrate
                                  else seed_pipeline_states(client, pid))
-        print(json.dumps({"action": ("dry-run" if dry_run
-                                     else ("migrate" if do_migrate else "seed")),
-                          "projects": report,
-                          "pipeline": [s["name"] for s in PIPELINE_STATES]},
-                         ensure_ascii=False))
+        if dry_run:
+            action = "dry-run"
+        elif do_rename:
+            action = "rename"
+        elif do_migrate:
+            action = "migrate"
+        else:
+            action = "seed"
+        out_obj = {"action": action, "projects": report,
+                   "pipeline": [s["name"] for s in PIPELINE_STATES]}
+        if do_rename:
+            out_obj["renames"] = STATE_RENAMES
+        print(json.dumps(out_obj, ensure_ascii=False))
         return 0
     pid = args.project or cfg.get("project")
     print(json.dumps(client.list_states(pid), ensure_ascii=False))
@@ -3629,7 +3705,7 @@ def cmd_enqueue(args):
     """PB-141: groom writes the computed run queue into Plane — move the ordered set
     into the Queued state with ascending sort_order. Input is the ordered ready
     stream (ready --ordered); we re-read it here so groom stays a thin caller.
-    PB-146: also rank each project's Done column newest-completed-first (--no-done
+    PB-146: also rank each project's Landed column newest-completed-first (--no-done
     skips it)."""
     cfg = load_config()
     client = make_client(cfg)
@@ -4136,7 +4212,8 @@ def build_parser():
     sp.add_argument("--projects")            # PB-130: subset for --seed/--migrate
     sp.add_argument("--seed", action="store_true")     # create/reconcile pipeline states
     sp.add_argument("--migrate", action="store_true")  # seed + re-point existing issues
-    sp.add_argument("--dry-run", action="store_true")  # report legacy-state presence, no writes
+    sp.add_argument("--rename", action="store_true")   # PB-XXX: rename states per STATE_RENAMES (0014)
+    sp.add_argument("--dry-run", action="store_true")  # report legacy/old-name presence, no writes
     sp.set_defaults(func=cmd_states)
 
     sp = sub.add_parser("ready")
@@ -4168,7 +4245,7 @@ def build_parser():
     sp.add_argument("--project")
     sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
     sp.add_argument("--no-done", action="store_true",
-                    help="PB-146: skip ranking the Done column by completed_at")
+                    help="PB-146: skip ranking the Landed column by completed_at")
     sp.set_defaults(func=cmd_enqueue)
 
     sp = sub.add_parser("resolve"); sp.add_argument("--ties", required=True); sp.set_defaults(func=cmd_resolve)
