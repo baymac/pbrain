@@ -186,6 +186,21 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *"Traceback"* ]]
 }
 
+@test "PB-140 file intake defaults to FULL; FAST only on explicit --fast, never inferred from tone" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  # No --fast → PM_FAST=no, and the template must state FULL is the default and
+  # forbid inferring the path from the user's tone/urgency.
+  run PM file "quick: add a dark mode toggle asap" --project pid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_FAST = no"* ]]
+  [[ "$output" == *"FULL PATH (DEFAULT)"* ]]
+  [[ "$output" == *"NEVER infer the path"* ]]
+  # --fast → PM_FAST=yes (the explicit escape hatch).
+  run PM file "add a dark mode toggle" --project pid --fast
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PM_FAST = yes"* ]]
+}
+
 @test "an unknown first token routes to the NL router (not an error)" {
   # With the router, free text is an instruction, not an error: configured →
   # PM_ROUTE with the words echoed back.
