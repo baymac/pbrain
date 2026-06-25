@@ -187,7 +187,7 @@ POS=()
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--rename|--dry-run|--ordered|--remote-prune)
+      --sync|--include-backlog|--with-lanes|--no-tls|--remove|--from-browser|--create|--replace|--yes|--clear|--read|--require-approved|--apply|--autonomous|--seed|--migrate|--rename|--dry-run|--ordered|--remote-prune|--force|--fast)
         local bkey="${1#--}"; bkey="${bkey//-/_}"
         eval "B_${bkey}=1"; shift ;;
       --*)
@@ -430,11 +430,14 @@ PYEOF
   setup)
     echo "PM_SETUP"
     _parse_args "$@"
+    # PB-98: --force lets setup overwrite a live api_key (a .bak is written first);
+    # without it, setup refuses to clobber a different existing key.
     python3 "$PLANE" setup \
       ${F_base_url:+--base-url "$F_base_url"} \
       ${F_api_key:+--api-key "$F_api_key"} \
       ${F_workspace:+--workspace "$F_workspace"} \
-      ${F_project:+--project "$F_project"}
+      ${F_project:+--project "$F_project"} \
+      $(_has_bool force && printf -- '--force')
     ;;
 
   use)

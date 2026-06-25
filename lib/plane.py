@@ -898,6 +898,23 @@ def save_config(cfg):
     return p
 
 
+def _backup_config_file():
+    """PB-98: snapshot the current plane.json next to itself before a destructive
+    overwrite, so a clobbered api_key is recoverable. Best-effort + 0600; a backup
+    hiccup must not block the (already-confirmed) reconfigure."""
+    p = config_path()
+    if not os.path.exists(p):
+        return None
+    bak = p + ".bak"
+    try:
+        fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as out, open(p) as src:
+            out.write(src.read())
+        return bak
+    except OSError:
+        return None
+
+
 def require(cfg, *keys):
     missing = [k for k in keys if not cfg.get(k)]
     if missing:
@@ -3407,6 +3424,19 @@ def project_ids_from_arg(cfg, projects_arg):
 # ---------------------------------------------------------------------------
 def cmd_setup(args):
     cfg = load_config()
+    # PB-98: protect a live config from a test/dummy overwrite. An agent that runs
+    # setup/config with throwaway credentials would otherwise clobber the real
+    # api_key with no backup. Refuse to replace an existing key with a DIFFERENT
+    # non-empty one unless --force is given; back up before any overwrite.
+    existing_key = cfg.get("api_key")
+    incoming_key = getattr(args, "api_key", None)
+    if (existing_key and incoming_key and incoming_key != existing_key
+            and not getattr(args, "force", False)):
+        raise PlaneError(
+            "refusing to overwrite the configured Plane api_key with a different "
+            "one (this protects your live config from a test/dummy run). The "
+            "existing config is untouched. Pass --force to overwrite (a timestamped "
+            ".bak of the current config will be written first).")
     for k in ("base_url", "api_key", "workspace", "project"):
         v = getattr(args, k.replace("-", "_"))
         if v:
@@ -3438,6 +3468,10 @@ def cmd_setup(args):
     cfg["default_est_h"] = cfg.get("default_est_h", 2.0)
     # Setting up Plane means you want pbrain's daily loop to use it.
     cfg.setdefault("backend", "plane")
+    # PB-98: when --force overwrites a live api_key with a different one, snapshot
+    # the prior config first so the mistake is recoverable.
+    if (existing_key and incoming_key and incoming_key != existing_key):
+        _backup_config_file()
     p = save_config(cfg)
     print("PLANE_CONFIGURED %s backend=%s" % (p, cfg["backend"]))
     if cfg.get("internal_password_source") == "keychain":
@@ -4202,6 +4236,9 @@ def build_parser():
                     help="store the internal password in plane.json (0600) instead of the macOS Keychain")
     sp.add_argument("--internal-cookie-source", choices=["browser", "none"],
                     help="'browser' = scrape the local browser cookie (localhost); 'none' = use email/password (remote/VPS)")
+    sp.add_argument("--force", action="store_true",
+                    help="PB-98: overwrite an existing, different api_key (a .bak is written first). "
+                         "Without it, setup refuses to clobber a live key — protects against test/dummy runs.")
     sp.set_defaults(func=cmd_setup)
 
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)
