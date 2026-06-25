@@ -163,7 +163,7 @@
 
   <div class="arr">↓ write the queue INTO Plane <span class="ref">(PB-141)</span></div>
   <div class="node good"><div class="t"><code>enqueue</code> → move ranked todo issues into the <b>Queued</b> state + <code>sort_order</code> · rank <b>Done</b> by completed_at <span class="ref">(PB-146)</span></div>
-    <div class="d">only on <code>--apply</code> (gate <code>PBRAIN_GROOM_ENQUEUE</code>) · idempotent · Backlog never touched · in-progress issues left alone · <b>Plane is now the queue</b>; <code>/plan-my-work</code> walks the Queued state (<code>project-manager queued</code>) · Done column ordered newest-completed-first</div></div>
+    <div class="d">only on <code>--apply</code> (gate <code>PBRAIN_GROOM_ENQUEUE</code>) · idempotent · Backlog never touched · in-progress issues left alone · <b>Plane is now the queue</b>; <code>/plan-my-work</code> (no id) atomically CLAIMS the top of the Queued state (<code>claim-next</code>) so two parallel sessions walk it sequentially · Done column ordered newest-completed-first</div></div>
 
   <div class="arr">↓ write the grooming-data file <span class="ref">(now a run-log)</span></div>
   <div class="node proc"><div class="t">render once → <b>staging</b> <code>~/.config/pbrain/pm-groom/&lt;date&gt;.data.md</code> (always)</div>

@@ -268,6 +268,57 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-141 claim_next_queued: two sessions claim DIFFERENT issues sequentially (no collision)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+SID = {"Todo":"t","Queued":"q","Planning":"pl"}
+STATES = [{"id":"t","name":"Todo","group":"unstarted","default":True},
+          {"id":"q","name":"Queued","group":"unstarted"},
+          {"id":"pl","name":"Planning","group":"started"}]
+
+class Shared:
+    """One in-memory store shared by both 'sessions' (like the live Plane)."""
+    def __init__(self):
+        self.issues = {
+            "A": {"id":"A","name":"A","state":"q","sort_order":1000.0,"priority":"high","parent":None},
+            "B": {"id":"B","name":"B","state":"q","sort_order":2000.0,"priority":"low","parent":None},
+        }
+    def list_states(self, pid): return list(STATES)
+    def list_work_items(self, pid): return [dict(v) for v in self.issues.values()]
+    def list_labels(self, pid): return []
+    def list_modules(self, pid): return []
+    def update_work_item(self, pid, iid, body): self.issues[iid].update(body)
+    def get_work_item(self, pid, iid): return dict(self.issues[iid])
+
+cfg = {"default_est_h": 2.0}
+sh = Shared()
+# Two sessions claim in turn (sequential calls model the common case + the verify
+# guarantees safety even if interleaved). Distinct session tokens → distinct sentinels.
+c1 = m.claim_next_queued(cfg, sh, ["p"], "1001")
+c2 = m.claim_next_queued(cfg, sh, ["p"], "2002")
+got = sorted([c1["tie"].split(":")[-1], c2["tie"].split(":")[-1]])
+assert got == ["A","B"], got                       # they took DIFFERENT issues
+# both claimed issues are now OUT of the queue (in Planning)
+assert sh.issues["A"]["state"]=="pl" and sh.issues["B"]["state"]=="pl"
+# queue is now empty → a third claim returns None (nothing left)
+assert m.claim_next_queued(cfg, sh, ["p"], "3003") is None
+
+# Same-instant race: both sessions see A as top and both PATCH it; last write wins.
+# Re-run with a store where only A is queued; the LOSER must fall through to None
+# (not double-own A).
+sh2 = Shared(); del sh2.issues["B"]                 # only A in the queue
+winner = m.claim_next_queued(cfg, sh2, ["p"], "5005")
+assert winner is not None and winner["tie"].endswith("A")
+# A is claimed; a second claimer now finds the queue empty → None (no double-claim)
+assert m.claim_next_queued(cfg, sh2, ["p"], "6006") is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "PB-146 rank_done_by_completion: Done column ranked newest-completed-first (smallest sort_order)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util

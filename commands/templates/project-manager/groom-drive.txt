@@ -1,11 +1,14 @@
---- INSTRUCTIONS — groom: drive the ordered queue (PB-94). The mechanical scan above
-already ran (todo-only triage) and wrote the grooming-data artifact to the vault at
-$GROOM_DATA_FILE, including a `## Queue — ordered` table: the todo issues in the order
-to run them (blockers ahead of the issues they block). groom is a DUMB ORCHESTRATOR —
-it does NO code/git/PR work itself. It just feeds each queued id to `/plan-my-work`,
-which owns the whole execution loop. This block only appears when an agent is present
-(the headless nightly LaunchAgent skips it and just writes the queue for you to drive
-on waking).
+--- INSTRUCTIONS — groom: drive the ordered queue (PB-94/PB-141). The mechanical scan
+above already ran (todo-only triage) and wrote BOTH: (a) the ranked todo issues INTO
+Plane's **Queued** state — the live queue (PB-141); and (b) a `## Queue — ordered`
+run-log in the vault at $GROOM_DATA_FILE (a human mirror, no longer the source).
+groom is a DUMB ORCHESTRATOR — it does NO code/git/PR work itself. To drive the queue,
+just run `/plan-my-work` with NO id: it atomically CLAIMS the top of the Queued state
+and executes it; run it again for the next. (Two parallel `/plan-my-work` sessions
+each claim a different issue — they walk the queue sequentially, no collision.) You
+can still pass an explicit id to jump the queue. This block only appears when an agent
+is present (the headless nightly LaunchAgent skips it and just writes the Queued state
+for you to drive on waking).
 
 BACKLOG IS UNTOUCHED. groom only ever looks at `todo` — backlog is the user's staging
 area. An issue runs only once the user has moved it to todo; you never promote backlog

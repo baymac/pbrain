@@ -1908,6 +1908,53 @@ def queued_multi(cfg, client, project_ids):
     return rows
 
 
+def claim_next_queued(cfg, client, project_ids, session_token):
+    """PB-141 concurrency: atomically CLAIM the top of the Queued state for THIS
+    session, so two `/plan-my-work` drivers walking the queue in parallel pick
+    DIFFERENT issues sequentially instead of colliding on the same top.
+
+    Claim+verify protocol (Plane has no compare-and-set, so we use last-write-wins
+    on a per-session sentinel):
+      1. read the queue (queued_multi); walk candidates top-down.
+      2. CLAIM: PATCH the candidate to the Planning state AND stamp its sort_order
+         with a session-unique sentinel, in ONE call. This also moves it OUT of the
+         Queued (unstarted) group, so other sessions' queue reads stop seeing it.
+      3. VERIFY: re-read the issue. If it's no longer unstarted AND its sort_order
+         equals OUR sentinel, this session owns it (our PATCH was the last write).
+         Otherwise another session won the race — skip to the next candidate.
+    Returns the claimed ready-row (with project_id) or None when the queue is empty
+    / every candidate was taken. Best-effort; a transient error skips that candidate.
+
+    `session_token` must be unique per caller (the shell passes $$ + epoch); it maps
+    to a distinct negative sentinel so two simultaneous claimers never collide on the
+    sentinel value itself."""
+    try:
+        sentinel = -1.0 - (abs(int(session_token)) % 1_000_000_000)
+    except (TypeError, ValueError):
+        sentinel = -1.0 - (abs(hash(session_token)) % 1_000_000_000)
+    for row in queued_multi(cfg, client, project_ids):
+        tie = row.get("tie", "")
+        if ":" not in tie:
+            continue
+        pid, iid = tie.split(":", 1)
+        try:
+            states = client.list_states(pid)
+            body = build_status_body("doing", states, to_state="Planning")
+            body["sort_order"] = sentinel
+            client.update_work_item(pid, iid, body)          # CLAIM
+            fresh = client.get_work_item(pid, iid)            # VERIFY
+        except PlaneError:
+            continue
+        sbi = {s["id"]: s for s in states}
+        still_queued = GROUP_TO_STATUS.get(state_group(fresh, sbi)) == "todo"
+        mine = (not still_queued) and fresh.get("sort_order") == sentinel
+        if mine:
+            row["claimed"] = True
+            return row
+        # Lost the race for this one (another session's write stuck) — try the next.
+    return None
+
+
 def enqueue_ordered(cfg, client, ordered_rows):
     """PB-141: write the computed run queue INTO Plane. Move each row (in the given
     order) to the Queued state and stamp an ascending sort_order so the board and
@@ -3508,6 +3555,22 @@ def cmd_queued(args):
     return 0
 
 
+def cmd_claim_next(args):
+    """PB-141: atomically claim the top of the Queued state for this session (so
+    parallel /plan-my-work drivers pick different issues). Prints the claimed row
+    as JSON, or `null` when the queue is empty. --session is a per-caller token."""
+    cfg = load_config()
+    client = make_client(cfg)
+    ids = (project_ids_from_arg(cfg, args.projects) if getattr(args, "projects", None)
+           else [args.project or cfg.get("project")])
+    ids = [i for i in ids if i]
+    if not ids:
+        raise PlaneError("no project id — pass --project/--projects or set it in setup")
+    row = claim_next_queued(cfg, client, ids, getattr(args, "session", "") or "0")
+    print(json.dumps(row, ensure_ascii=False))
+    return 0
+
+
 def cmd_enqueue(args):
     """PB-141: groom writes the computed run queue into Plane — move the ordered set
     into the Queued state with ascending sort_order. Input is the ordered ready
@@ -4040,6 +4103,12 @@ def build_parser():
     sp.add_argument("--project")
     sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
     sp.set_defaults(func=cmd_queued)
+
+    sp = sub.add_parser("claim-next")
+    sp.add_argument("--project")
+    sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
+    sp.add_argument("--session", help="per-caller token (e.g. pid+epoch) for the atomic claim")
+    sp.set_defaults(func=cmd_claim_next)
 
     sp = sub.add_parser("enqueue")
     sp.add_argument("--project")

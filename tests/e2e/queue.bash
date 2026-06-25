@@ -77,6 +77,7 @@ class FakePlaneHTTP:
     def list_work_items(self, pid):   return [dict(v) for v in self.issues.values()]
     def list_labels(self, pid):       return []      # no approval/gate labels in this fixture
     def list_modules(self, pid):      return []      # no lanes
+    def get_work_item(self, pid, iid): return dict(self.issues[iid])   # claim+verify re-read
     def update_work_item(self, pid, iid, body):
         self.issues[iid].update(body)
         self.journal.append({"PATCH": iid, "body": body})
@@ -192,6 +193,24 @@ record("06 completing advances out of the queue",
        ok6,
        ["queue before: ['Q1','Q2']", "queue after completing Q1: %s" % order_after],
        [j for j in fc.journal if j["PATCH"] == "Q1"][-1:])
+
+# ── STEP 6b: two parallel sessions claim DIFFERENT issues (no collision) ───────
+fc = FakePlaneHTTP([
+    issue("P1", "Queued", priority="high", sort_order=1000.0),
+    issue("P2", "Queued", priority="low",  sort_order=2000.0),
+])
+s1 = m.claim_next_queued(CFG, fc, [PID], "1001")     # session 1
+s2 = m.claim_next_queued(CFG, fc, [PID], "2002")     # session 2
+picked = sorted([s1["tie"].split(":")[-1], s2["tie"].split(":")[-1]])
+both_planning = fc.issues["P1"]["state"] == SID["Planning"] and fc.issues["P2"]["state"] == SID["Planning"]
+ok6b = picked == ["P1", "P2"] and both_planning
+record("06b two sessions claim different issues",
+       "parallel /plan-my-work sessions claim DIFFERENT queued issues (atomic claim)",
+       ok6b,
+       ["session1 claimed: %s" % (s1["tie"].split(":")[-1]),
+        "session2 claimed: %s" % (s2["tie"].split(":")[-1]),
+        "both moved out of Queued → Planning: %s" % both_planning],
+       fc.journal)
 
 # ── STEP 7 (PB-146): Done column ranked newest-completed-first ─────────────────
 fc = FakePlaneHTTP([

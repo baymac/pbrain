@@ -149,9 +149,9 @@ A standalone engine-level e2e for the Queued-state queue model. Unlike the
 persona scenarios above, it drives the REAL queue engine in `lib/plane.py`
 (`enqueue_ordered`, `queued_multi`, `rank_done_by_completion`, the Queued state +
 `sort_order`) through a full lifecycle, faking only the network boundary with an
-in-memory `PlaneClient` stand-in. Seven steps, one per lifecycle transition:
+in-memory `PlaneClient` stand-in. Eight steps, one per lifecycle transition:
 intake→Todo, enqueue ranks Todo→Queued, in-progress never re-queued, Backlog
-untouched, pmw reads the queue in order, completing advances out, Done ranked
+untouched, pmw reads the queue in order, completing advances out, two parallel sessions claim different issues, Done ranked
 newest-first. Emits an HTML report via the same `report.py` (showing the Plane
 write-journal per step).
 

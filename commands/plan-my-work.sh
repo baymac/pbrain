@@ -148,18 +148,55 @@ elif [[ $# -gt 0 ]]; then
   TARGET_REF="$*"
 fi
 
-# No id → ask for one. pmw never selects tasks (that's groom's job).
+# No id → walk the QUEUE (PB-141). Groom ranks todo issues into Plane's Queued
+# state; with no explicit id, pmw drives the TOP of that queue. This is how you
+# "walk the queue": run /plan-my-work with no arg repeatedly and it takes the next
+# Queued issue each time (completing one advances it out, so the top moves down).
+# pmw still doesn't INVENT or reorder work — it only consumes groom's ranked queue.
 if [[ -z "${TARGET_REF// }" ]]; then
-  echo "PLAN_MY_WORK_NEEDS_ID"
-  echo "today: $TODAY"
-  echo "project_manager_cmd: $PM_CMD"
-  echo ""
-  echo "/plan-my-work runs ONE issue at a time and needs the issue id to run."
-  echo "Ask the user which issue to execute (a Plane id like PB-96), or which work"
-  echo "to do (a description — it will be searched/filed via ${PM_CMD}). It does NOT"
-  echo "pick tasks itself: task selection + ordering is groom's job"
-  echo "(/project-manager groom feeds ids here one at a time)."
-  exit 0
+  # ATOMIC CLAIM (PB-141): claim-next moves the top Queued issue into Planning +
+  # stamps a per-session sentinel, then verifies THIS session won — so two parallel
+  # /plan-my-work drivers walking the queue pick DIFFERENT issues sequentially
+  # instead of colliding on the same top. The session token is pid+epoch (unique).
+  PMW_SESSION="$$$(date +%s 2>/dev/null || echo 0)"
+  CLAIM_JSON="$(eval "$PM_CMD claim-next --session $PMW_SESSION" 2>/dev/null | grep -E '^(\{|null)' | tail -1 || true)"
+  QUEUE_TOP="$(QJSON="$CLAIM_JSON" python3 - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    top = json.loads(os.environ.get("QJSON") or "null")
+except Exception:
+    top = None
+if top:
+    print("%s\t%s\t%s" % (top.get("id", ""), top.get("tie", ""), top.get("title", "")))
+PY
+)"
+  if [[ -n "$QUEUE_TOP" ]]; then
+    q_id="$(printf '%s' "$QUEUE_TOP" | cut -f1)"
+    q_tie="$(printf '%s' "$QUEUE_TOP" | cut -f2)"
+    q_title="$(printf '%s' "$QUEUE_TOP" | cut -f3)"
+    # Drive the tie (unambiguous); execute.txt treats it as an id target. The issue
+    # is ALREADY in Planning (claimed) — execute.txt re-reads state and continues.
+    TARGET_REF="$q_tie"
+    PMW_TARGET_KIND="id"
+    echo "PLAN_MY_WORK_QUEUE_PULL"
+    echo "claimed the top of the Queued state (groom's ranked queue) for this session:"
+    echo "  PB-${q_id#PB-}  ${q_title}"
+    echo "(no id given — walking the queue. The issue is now claimed (→ Planning) so a"
+    echo " parallel /plan-my-work session takes the NEXT one. Run again for the next.)"
+    echo ""
+  else
+    # Empty queue (or Plane unreachable) → ask, as before. pmw never invents work.
+    echo "PLAN_MY_WORK_NEEDS_ID"
+    echo "today: $TODAY"
+    echo "project_manager_cmd: $PM_CMD"
+    echo ""
+    echo "The Queued state is empty — there's nothing groomed to walk. Either run"
+    echo "/project-manager groom to (re)build the queue, or tell me which issue to"
+    echo "execute (a Plane id like PB-96) or what work to do (a description — it will"
+    echo "be searched/filed via ${PM_CMD}). pmw does NOT pick or reorder tasks itself"
+    echo "(selection + ranking is groom's job; pmw just walks the Queued state)."
+    exit 0
+  fi
 fi
 
 # TARGET_KIND (PB-96) — what the target IS, so execute.txt resolves it correctly:
