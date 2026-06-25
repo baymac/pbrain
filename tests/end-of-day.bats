@@ -152,3 +152,30 @@ EOD() { bash "$SH" "$@"; }
   [[ "$output" == *"cancelled in Plane"* ]]
   [[ "$output" == *"Plane is authoritative"* ]]
 }
+
+# ── Scoreboard markdown shape ────────────────────────────────────────────────
+
+@test "Scoreboard: a blank line separates **Habits (scored)** from its table (GFM tables need it)" {
+  # A markdown table must be preceded by a blank line, else the renderer folds
+  # the bold label + rows into one paragraph and the table shows as raw text.
+  # Regression guard for the Scoreboard "Habits (scored)" block in the template.
+  run EOD --date 2026-06-01
+  [ "$status" -eq 0 ]
+  # the label and the table header must both be present
+  [[ "$output" == *"**Habits (scored)**"* ]]
+  [[ "$output" == *"| Habit | Score | Priority | Basis |"* ]]
+  # walk the emitted lines: the line AFTER "**Habits (scored)**" must be blank
+  # (not the table header glued directly onto the label).
+  local found_label="" prev=""
+  while IFS= read -r line; do
+    if [ "$prev" = "**Habits (scored)**" ]; then
+      found_label=1
+      [ -z "$line" ] || {
+        echo "FAIL: line after '**Habits (scored)**' is not blank: '$line'" >&2
+        return 1
+      }
+    fi
+    prev="${line#"${line%%[![:space:]]*}"}"   # left-trimmed line for the label compare
+  done <<< "$output"
+  [ -n "$found_label" ] || { echo "FAIL: '**Habits (scored)**' label not found in output" >&2; return 1; }
+}
