@@ -211,6 +211,20 @@ def strip_html(html):
     return re.sub(r"[ \t]+\n", "\n", text).strip()
 
 
+def issue_description_text(issue):
+    """Plain-text description for an issue, robust to Plane's PATCH quirk (PB-143).
+
+    Plane returns ``description_stripped=null`` right after a ``description_html``-
+    only PATCH (it does not regenerate the stripped text server-side), so reading
+    that field alone makes a freshly-written description/plan look empty. Fall back
+    to stripping ``description_html`` — the same fallback the review thin-check uses.
+    Pure."""
+    stripped = (issue.get("description_stripped") or "").strip()
+    if stripped:
+        return stripped
+    return strip_html(issue.get("description_html") or "")
+
+
 class PlaneError(Exception):
     pass
 
@@ -2308,7 +2322,10 @@ def spec_context(cfg, client, ref, project_ref=None):
         issue = client.get_work_item(pid, iid)
     except PlaneError as e:
         return {"status": "error", "error": str(e), "candidates": cards}
-    desc = (issue.get("description_stripped") or "").strip()
+    # PB-143: Plane returns description_stripped=null after a description_html-only
+    # PATCH, so reading only the stripped field makes a freshly-written plan look
+    # empty and has_plan always false. issue_description_text falls back to the HTML.
+    desc = issue_description_text(issue)
     approved_ids = approved_label_ids(client, pid)
     approved = bool(approved_ids) and any(
         lid in approved_ids for lid in issue_labels(issue))
