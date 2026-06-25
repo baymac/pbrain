@@ -300,6 +300,7 @@ reflection — in this exact shape:
   *(omit any domain with nothing logged — never invent a number)*
 
   **Habits (scored)**
+
   | Habit | Score | Priority | Basis |
   |-------|-------|----------|-------|
   | {name — from HABIT_SCORES read-back (Step 4e)} | {the 0–1 score verbatim from HABIT_SCORES, e.g. 0.8; — if null} | {priority} | {terse basis, e.g. "4 clean / 1 unclean", "bed 23:40 vs 23:30 · 7.2h", "2h10 work / 35m social", "8/12 tasks"} |
