@@ -80,7 +80,7 @@ That prints the exact **GitHub App** to create (GitHub → Settings → Develope
 
 ## Package as a macOS desktop app (optional) — with deep linking
 
-`/init-plane app` wraps your running Plane instance in a **native macOS app** — a small [Tauri v2](https://tauri.app) shell whose source ships with pbrain at `lib/plane-app/` — and installs it to `/Applications`, so Plane lives in your Dock, Spotlight, and Launchpad like any other app. The window is 1400×900 with an overlay title bar, in-app Find (`Cmd+F`), and the Plane logo as the icon.
+`/init-plane app` wraps your running Plane instance in a **native macOS app** — a small [Tauri v2](https://tauri.app) shell whose source ships with pbrain at `lib/plane-app/` — and installs it to `/Applications`, so Plane lives in your Dock, Spotlight, and Launchpad like any other app. The window opens maximized (filling the screen, not macOS fullscreen; 1400×900 restore size) with an overlay title bar, in-app Find (`Cmd+F`), and the Plane logo as the icon.
 
 The headline feature is **deep linking**: the app registers a `plane://` URL scheme, so a link like `plane://pb/browse/PB-110` opens that exact issue *inside the app* instead of a browser tab. (This replaces an earlier Pake-based build, which couldn't deep-link because Pake ignores any URL passed to it on launch.)
 

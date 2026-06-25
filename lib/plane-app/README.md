@@ -63,5 +63,5 @@ open -a Plane
 - First run shows Plane's **login** screen (fresh webview, no session). After you
   sign in, deep links land on the requested issue.
 - The app only works while the Plane Docker containers are running.
-- Bundle id: `com.plane.desktop`. Window: 1400×900, centered, overlay title bar.
+- Bundle id: `com.plane.desktop`. Window: opens **maximized** (fills the screen, not macOS fullscreen), 1400×900 restore size, overlay title bar.
 - The `Cmd+Shift+P` global hotkey from the old Pake build is **not** ported.
