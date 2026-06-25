@@ -118,6 +118,16 @@ fi
 # NOT surfaced or fired here: /remind reminders live on Apple Calendar, and
 # /remind-blocking overlays are time-sensitive and self-contained in their own
 # poller — neither should pollute the end-of-day reflection.)
+# PB-126: pull reminder-completed habits FIRST. A habit the user ticked off in
+# Apple Reminders (a linked one-shot) isn't a habit mark yet — without this PULL
+# the rollup/autostatus below would stamp it "missed". reminders-sync reconciles
+# both directions (reminder→habit and habit→reminder) and, with --sweep at day's
+# close, clears stale one-shots. Best-effort: no Reminders access / no linked
+# habits → it no-ops, so this never blocks the reflection.
+_eod_habits_cmd="$(pbrain_habits_cmd 2>/dev/null || true)"
+if [[ -n "$_eod_habits_cmd" && -x "$_eod_habits_cmd" ]]; then
+  bash "$_eod_habits_cmd" reminders-sync --date "$TODAY" --sweep >/dev/null 2>&1 || true
+fi
 # Sync recent habit-tracking md into the DB so the rollup reflects today's marks.
 pbrain_habits_sync_range 7 || true
 HABITS_ROLLUP="$(pbrain_habits_rollup "$TODAY" || true)"

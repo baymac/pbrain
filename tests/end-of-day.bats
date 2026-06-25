@@ -179,3 +179,16 @@ EOD() { bash "$SH" "$@"; }
   done <<< "$output"
   [ -n "$found_label" ] || { echo "FAIL: '**Habits (scored)**' label not found in output" >&2; return 1; }
 }
+
+@test "PB-126: end-of-day pulls reminder-completed habits (reminders-sync) BEFORE the habit sync/rollup" {
+  # Ordering guarantee: a habit ticked in Apple Reminders must be reconciled into
+  # a habit mark before pbrain_habits_sync_range / the rollup runs, else autostatus
+  # stamps it missed. Assert against the script source so the ordering can't silently
+  # regress (the call is output-suppressed + best-effort, so it isn't visible in stdout).
+  rs="$(grep -n 'reminders-sync' "$SH" | head -1 | cut -d: -f1)"
+  sr="$(grep -n 'pbrain_habits_sync_range' "$SH" | head -1 | cut -d: -f1)"
+  [ -n "$rs" ]                 # the reminders-sync pull exists
+  [ -n "$sr" ]                 # the habit sync exists
+  [ "$rs" -lt "$sr" ]          # and the pull runs FIRST
+  grep -q 'reminders-sync --date "$TODAY" --sweep' "$SH"   # sweeps stale one-shots at day close
+}
