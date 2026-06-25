@@ -693,18 +693,11 @@ PYEOF
       "$APP_SRC/" "$BUILD_DIR/"
 
     # Template the resolved URL into the single PLANE_BASE that drives BOTH the
-    # window start URL and the plane:// deep-link target. The committed default is
-    # http://localhost:1800 in two spots; rewrite both in the build copy only.
-    CONF="$BUILD_DIR/src-tauri/tauri.conf.json"
+    # window start URL and the plane:// deep-link target. The window is built in
+    # Rust (so it can carry the requestIdleCallback init-script polyfill), so
+    # PLANE_BASE in lib.rs is the sole start-URL source — there is no window URL in
+    # tauri.conf.json to template.
     LIBRS="$BUILD_DIR/src-tauri/src/lib.rs"
-    # tauri.conf.json window url: "http://localhost:1800/" -> "<APP_URL>/"
-    python3 - "$CONF" "$APP_URL" <<'PYEOF'
-import sys
-path, base = sys.argv[1], sys.argv[2].rstrip('/')
-s = open(path).read()
-s = s.replace('"http://localhost:1800/"', '"%s/"' % base)
-open(path, 'w').write(s)
-PYEOF
     # lib.rs PLANE_BASE const (marked with __PLANE_BASE__): swap the bare base.
     python3 - "$LIBRS" "$APP_URL" <<'PYEOF'
 import sys

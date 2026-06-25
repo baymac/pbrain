@@ -115,6 +115,8 @@ This does **not** contradict the `vhost` section's "no `/etc/hosts`" note — th
 
 The app's start URL **and** its `plane://` deep-link target are both templated from the resolved Plane URL at build time, so a custom `--url`/`--host`/`--port` (or a VPS host) carries through to both. The app **only works while Plane's Docker stack is running**, and the first launch shows Plane's login screen — after you sign in, deep links land on the requested issue.
 
+**The Board-layout polyfill (WKWebView).** Apple's WebView (the engine the app embeds) doesn't implement `window.requestIdleCallback`. Plane's **Board / spreadsheet layout** calls it to measure row heights, so inside the app the board threw a `TypeError` and rendered blank while **List** layout worked — the classic "works in the browser, blank in the app" split (Chrome/Firefox ship the API). The app ships a standard `setTimeout`-based polyfill, injected at document-start before any Plane code runs, so the board renders normally. Nothing to configure — it's baked into every build.
+
 Flags: `--name` (default `Plane`), `--url` (override the target URL), `--host` / `--port` (compose a URL without `--url`), `--icon` (PNG URL/path; defaults to the Plane logo), `--no-install` (build the `.app` without copying to `/Applications`), `--remove` (quit + delete the installed app), `--plane-home` (env-file discovery override). **macOS only** — on other platforms it prints `INIT_PLANE_APP_UNSUPPORTED`.
 
 ## Notes
