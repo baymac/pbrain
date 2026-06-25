@@ -675,6 +675,17 @@ PYFAKE
     && grep -q "PBRAIN_PMG_HEADLESS" "$plist"
 }
 
+@test "PB-114 groom enable with no --time defaults to 06:00 (Hour=6, Minute=0)" {
+  run PM groom enable --projects A,B
+  [ "$status" -eq 0 ] && [[ "$output" == *PM_GROOM_ENABLE* ]]
+  plist="$HOME/Library/LaunchAgents/com.pbrain.pm-groom.plist"
+  [ -f "$plist" ]
+  grep -q "<integer>6</integer>" "$plist"
+  grep -q "<integer>0</integer>" "$plist"
+  # the old default must be gone
+  ! grep -q "<integer>40</integer>" "$plist"
+}
+
 @test "groom enable points the LaunchAgent at pbrain-groom.app when the binary is built" {
   # Force the app path on, and stub a pre-built binary so no swiftc is needed.
   unset PBRAIN_GROOM_NO_APP
