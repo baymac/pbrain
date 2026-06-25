@@ -35,6 +35,20 @@ done
 _SCRIPT_DIR="$(cd -P -- "$(dirname -- "$_PB_SRC")" && pwd -P)"
 unset _PB_SRC _PB_LINK
 
+# --- explicit MODE selectors (PB-147) ---------------------------------------
+# The 4 execution modes are normally INFERRED (id→1, desc→2, no-arg→4), but a user
+# can name a hands-off mode explicitly. These selector words are consumed here so the
+# rest of the dispatcher / NL normalizer never sees them:
+#   auto | --auto | autodrive | drive   → MODE 3 (auto-drive the whole queue)
+#   top | next | --top | --next         → MODE 4 (claim the single top of queue)
+# The execution LOOP is identical across all modes; only selection + gating differ.
+PMW_MODE=""
+case "${1:-}" in
+  auto|--auto|autodrive|drive)   PMW_MODE="3"; shift ;;
+  top|next|--top|--next)         PMW_MODE="4"; shift ;;
+esac
+export PMW_MODE
+
 # --- natural-language "do work" routing (PB-96) -----------------------------
 # Normalize a plain-words work request into the canonical `task execute <target>`
 # form so it flows through the EXACT execute path (no duplicated logic). The
@@ -47,7 +61,7 @@ unset _PB_SRC _PB_LINK
 # and the no-arg form are left untouched. Re-dispatch is deterministic and lives
 # in the .sh (agent-agnostic) so Codex and Claude behave identically.
 PMW_TARGET_KIND=""
-if [[ "${1:-}" != "task" && $# -gt 0 ]]; then
+if [[ -z "$PMW_MODE" && "${1:-}" != "task" && $# -gt 0 ]]; then
   _PMW_REROUTE="$(python3 - "$@" <<'PY'
 import re, sys
 args = [a for a in sys.argv[1:] if a.strip()]
@@ -132,6 +146,41 @@ if ! pbrain_plane_configured; then
   exit 0
 fi
 
+# --- MODE 3: auto-drive the whole queue (PB-147/PB-150) ---------------------
+# Hands-off. The .sh does NOT loop (the execution loop is agent-driven — it writes
+# code/PRs and can't run in pure shell). Instead it hands the agent a session token
+# + context and the MODE 3 instructions in execute.txt run the loop:
+#   claim-next → run the 5-stage loop → at the land gate without auto:land PARK +
+#   log the bottleneck + move on → repeat until claim-next returns null.
+# The queue claim-next consumes is CROSS-PROJECT (groom's merged ranked queue) and
+# already skips `parked` issues (PB-152/PB-154).
+if [[ "$PMW_MODE" == "3" ]]; then
+  PMW_SESSION="$$$(date +%s 2>/dev/null || echo 0)"
+  WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
+  REGISTRY_JSON="$(pbrain_projects_registry_json 2>/dev/null || echo '[]')"
+  echo "PLAN_MY_WORK_AUTODRIVE"
+  echo "mode: 3"
+  echo "action: autodrive"
+  echo "today: $TODAY"
+  echo "now_time: $NOW_TIME"
+  echo "session: $PMW_SESSION"
+  echo "project_manager_cmd: ${PM_CMD}"
+  echo "habits_cmd: ${HABITS_CMD:-(unavailable)}"
+  echo "plane_web_base: $PLANE_WEB_BASE"
+  pbrain_selfhost_staleness_line || true
+  echo ""
+  echo "=== WORKING LOCATIONS (plane.json projects[].work) ==="
+  echo "$WORKING_LOCATIONS_JSON"
+  echo ""
+  echo "=== PROJECT REGISTRY ==="
+  echo "$REGISTRY_JSON"
+  echo ""
+  TARGET_REF=""; TARGET_KIND="autodrive"
+  export TODAY NOW_TIME TARGET_REF TARGET_KIND WORKING_LOCATIONS_JSON REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE PMW_MODE PMW_SESSION
+  envsubst '$TODAY $NOW_TIME $TARGET_REF $TARGET_KIND $PM_CMD $HABITS_CMD $PLANE_WEB_BASE $PMW_MODE $PMW_SESSION' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
+  exit 0
+fi
+
 # --- the single subcommand: run the loop on ONE issue id --------------------
 # Accept both `/plan-my-work <id>` (rewritten to `task execute <id>` above when it
 # was a bare ref/verb) and the explicit `task execute <id>` back-compat form.
@@ -178,7 +227,9 @@ PY
     # is ALREADY in Planning (claimed) — execute.txt re-reads state and continues.
     TARGET_REF="$q_tie"
     PMW_TARGET_KIND="id"
+    PMW_MODE="4"   # no-arg / top / next = MODE 4 (claim the single top of queue)
     echo "PLAN_MY_WORK_QUEUE_PULL"
+    echo "mode: 4"
     echo "claimed the top of the Queued state (groom's ranked queue) for this session:"
     echo "  PB-${q_id#PB-}  ${q_title}"
     echo "(no id given — walking the queue. The issue is now claimed (→ Planning) so a"
@@ -214,7 +265,16 @@ fi
 WORKING_LOCATIONS_JSON="$(pbrain_projects_workdirs_json 2>/dev/null || echo '{}')"
 REGISTRY_JSON="$(pbrain_projects_registry_json 2>/dev/null || echo '[]')"
 
+# MODE (PB-147) — when not already set by an explicit selector or the queue walk,
+# infer from the target kind: an id-shaped target is MODE 1 (by id); a free-text
+# description is MODE 2 (fix-an-issue / find-or-file). The execution loop is the
+# SAME for all modes; execute.txt only varies the SELECTION + GATING prose.
+if [[ -z "$PMW_MODE" ]]; then
+  if [[ "$TARGET_KIND" == "id" ]]; then PMW_MODE="1"; else PMW_MODE="2"; fi
+fi
+
 echo "PLAN_MY_WORK_EXECUTE"
+echo "mode: ${PMW_MODE}"
 echo "action: execute"
 echo "today: $TODAY"
 echo "now_time: $NOW_TIME"
@@ -234,6 +294,6 @@ echo ""
 echo "=== PROJECT REGISTRY ==="
 echo "$REGISTRY_JSON"
 echo ""
-export TODAY NOW_TIME TARGET_REF TARGET_KIND WORKING_LOCATIONS_JSON REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE
-envsubst '$TODAY $NOW_TIME $TARGET_REF $TARGET_KIND $PM_CMD $HABITS_CMD $PLANE_WEB_BASE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
+export TODAY NOW_TIME TARGET_REF TARGET_KIND WORKING_LOCATIONS_JSON REGISTRY_JSON PM_CMD HABITS_CMD PLANE_WEB_BASE PMW_MODE
+envsubst '$TODAY $NOW_TIME $TARGET_REF $TARGET_KIND $PM_CMD $HABITS_CMD $PLANE_WEB_BASE $PMW_MODE' < "$_SCRIPT_DIR/templates/plan-my-work/execute.txt"
 exit 0

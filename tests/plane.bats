@@ -268,6 +268,52 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-152 parked label: seeded, and skipped by queued_multi + enqueue (ready keeps it)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+# 1) parked is in the seed set (so labels --seed / project-create create it).
+names = {l["name"] for l in m._seed_label_specs()}
+assert "parked" in names, names
+
+# 2) queued_multi DROPS a parked row but keeps an unparked one.
+rows = [
+  {"tie":"p:2","id":2,"state_name":"Queued","sort_order":1000.0,"priority":"low","due":"","is_parked":False},
+  {"tie":"p:3","id":3,"state_name":"Queued","sort_order":2000.0,"priority":"low","due":"","is_parked":True},
+]
+m.ready_multi = lambda *a, **k: rows
+got = [r["id"] for r in m.queued_multi({}, None, ["p"])]
+assert got == [2], got                              # parked id 3 excluded
+
+# 3) enqueue_ordered skips a parked todo row (reported skipped:"parked", never moved).
+class FakeClient:
+    def __init__(self): self.patches=[]
+    def list_states(self, pid): return [
+        {"id":"q","name":"Queued","group":"unstarted"},
+        {"id":"t","name":"Todo","group":"unstarted","default":True}]
+    def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
+fc = FakeClient()
+ordered = [
+  {"tie":"p:10","status":"todo","priority":"high","due":"","is_parked":False},
+  {"tie":"p:11","status":"todo","priority":"high","due":"","is_parked":True},   # parked hold
+]
+out = m.enqueue_ordered({}, fc, ordered)
+assert [iid for iid,_ in fc.patches] == ["10"], fc.patches          # parked not queued
+assert any(r.get("skipped")=="parked" for r in out), out
+
+# 4) issue_to_ready sets is_parked from the parked label ids.
+issue = {"id":"i9","labels":["LP"],"state":{"group":"unstarted"}}
+r = m.issue_to_ready(issue, "p", {}, {}, 1.0, parked_label_ids={"LP"})
+assert r["is_parked"] is True, r
+r2 = m.issue_to_ready(issue, "p", {}, {}, 1.0, parked_label_ids={"OTHER"})
+assert r2["is_parked"] is False, r2
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "PB-141 claim_next_queued: two sessions claim DIFFERENT issues sequentially (no collision)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
