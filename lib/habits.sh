@@ -743,12 +743,14 @@ except Exception:
     def cat_order(v): return 1000 if not cat_norm(v) else 100
 
 # The dated tracking file is SPLIT into one table per part (category), each under
-# a `## <Part>` heading. Within a section the table is the plain 6-column shape
-# below — the heading carries the part. Grouping + section order are DERIVED from
+# a `## <Part>` heading. Within a section the table is the 7-column shape
+# below (the Times column, PB-138, carries a limit habit's lapse clock-times;
+# blank for build habits) — the heading carries the part. Grouping + section
+# order are DERIVED from
 # the profile on every render (finalize_rows), never trusted from the file, so
 # editing a habit's category re-sections the file on the next sync/refresh.
-HEADER = "| Habit | Criteria | Progress | Done | Count | Note |"
-SEP    = "|-------|----------|----------|------|-------|------|"
+HEADER = "| Habit | Criteria | Progress | Done | Count | Times | Note |"
+SEP    = "|-------|----------|----------|------|-------|-------|------|"
 # The Done column carries a per-day STATE token, not just a checkbox:
 #   done    → x / yes / ✓ / …   (a real completion; count>=1)
 #   skipped → skip / skipped / ⊘ (deliberately cancelled today — an off day)
@@ -837,6 +839,20 @@ def _parse_hhmm(s):
         return int(parts[0]) * 60 + int(parts[1])
     except (TypeError, ValueError, IndexError):
         return None
+
+def _merge_times(existing, new):
+    """PB-138: fold new clock time(s) into a limit habit's Times cell.
+    Comma-separated, de-duplicated, sorted by time-of-day. `existing` is the
+    current cell text ("14:30, 21:15"); `new` is a list of HH:MM strings.
+    Unparsable tokens are kept but sorted last (stable), so user free-form
+    time text is never silently dropped."""
+    out = []
+    for t in [x.strip() for x in str(existing).split(",")] + list(new):
+        t = t.strip()
+        if t and t not in out:
+            out.append(t)
+    out.sort(key=lambda t: (_parse_hhmm(t) is None, _parse_hhmm(t) or 0, t))
+    return ", ".join(out)
 
 def _to_float(s):
     try:
@@ -1168,15 +1184,18 @@ def parse_table(text):
             rows.append({"name": col(cells, "habit"), "part": col(cells, "part"),
                          "criteria": col(cells, "criteria"), "progress": col(cells, "progress"),
                          "done": col(cells, "done"), "count": col(cells, "count"),
-                         "note": col(cells, "note")})
+                         "times": col(cells, "times"), "note": col(cells, "note")})
             j += 1
         last_end = j
     post = "\n".join(lines[last_end:])
     return pre, rows, post
 
 def row_line(r):
-    return ("| %s | %s | %s | %s | %s | %s |"
-            % (r["name"], r["criteria"], r["progress"], r["done"], r["count"], r["note"]))
+    # PB-138: Times column carries comma-separated clock times for LIMIT-habit
+    # lapses; build habits leave it blank. .get keeps old parsed/seed rows safe.
+    return ("| %s | %s | %s | %s | %s | %s | %s |"
+            % (r["name"], r["criteria"], r["progress"], r["done"], r["count"],
+               r.get("times", ""), r["note"]))
 
 def finalize_rows(rows, by_name):
     # Derive each row's Part + sort index from the profile (the source of truth),
@@ -1217,7 +1236,7 @@ def render(pre, rows, post):
 
 def new_rows(habits, con, date):
     return [{"name": h["name"], "criteria": criteria_str(h), "progress": db_progress(con, h, date),
-             "done": "", "count": "", "note": ""} for h in habits]
+             "done": "", "count": "", "times": "", "note": ""} for h in habits]
 
 def mirror_rows(con, rows, date, by_name, now):
     # Mirror a parsed table's MARKED rows into the DB for <date>: the DB must
@@ -1325,6 +1344,7 @@ elif op == "mark":
     focus_json   = sys.argv[18] if len(sys.argv) > 18 else ""  # focus_ratio
     done_json    = sys.argv[19] if len(sys.argv) > 19 else ""  # checklist
     status       = sys.argv[20] if len(sys.argv) > 20 else ""  # done|skipped|missed
+    times_in     = sys.argv[21] if len(sys.argv) > 21 else ""  # PB-138: explicit HH:MM[,HH:MM] for limit habits
     status = (status or "").strip().lower()
     if status not in ("done", "skipped", "missed"):
         status = "done"
@@ -1382,6 +1402,18 @@ elif op == "mark":
                                   finalize_rows(new_rows(_act, con, date), _hbn), ""))
     pre, rows, post = parse_table(open(f).read())
     token = STATUS_TOKEN.get(status, "x")
+    # PB-138: limit habits (at_most) record the clock time(s) of each lapse.
+    # Explicit user-stated times win; otherwise infer from the log moment (now).
+    # Only on a real occurrence (status done); a skip/miss records no time.
+    is_limit = (h["direction"] == "at_most")
+    new_times = []
+    if is_limit and status == "done":
+        explicit = [t.strip() for t in times_in.split(",") if t.strip()]
+        if explicit:
+            new_times = explicit
+        else:
+            # `now` is "YYYY-MM-DD HH:MM"; take the HH:MM clock part.
+            new_times = [now.split()[1]] if len(now.split()) > 1 else []
     if status != "done":
         # skipped / missed: a recorded non-completion — no count/amount.
         cval = ""
@@ -1407,6 +1439,11 @@ elif op == "mark":
             r["done"] = token
             # On a skip/miss, clear any stale count from an earlier done mark.
             r["count"] = cval if cval else ("" if status != "done" else r["count"])
+            if is_limit:
+                if status != "done":
+                    r["times"] = ""   # a recorded non-lapse carries no time
+                elif new_times:
+                    r["times"] = _merge_times(r.get("times", ""), new_times)
             if note.strip():
                 r["note"] = note.strip()
             found = True
@@ -1414,7 +1451,9 @@ elif op == "mark":
     if not found:
         rows.append({"name": h["name"], "criteria": criteria_str(h),
                      "progress": db_progress(con, h, date), "done": token,
-                     "count": cval, "note": note.strip()})
+                     "count": cval,
+                     "times": (_merge_times("", new_times) if (is_limit and new_times) else ""),
+                     "note": note.strip()})
     # Mirror today's marks into the DB and recompute every row's Progress so the
     # file shows live numbers the instant a habit is marked (not a stale snapshot
     # from when the tracker was created).
@@ -1560,7 +1599,9 @@ pbrain_habit_track_init() {
 # habit (one with a unit + target) the amount is what's recorded. Scored habits
 # take classification inputs instead: good/bad/slips (slip_ladder, meal_ratio)
 # or actual_time/actual_hours (deviation) — the score lands in amount.
-pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json] [done_json] [status]
+pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [slips] [actual_time] [actual_hours] [items_json] [session_json] [focus_json] [done_json] [status] [times]
+  # PB-138: trailing [times] = explicit "HH:MM" or "HH:MM,HH:MM" for LIMIT habits;
+  # empty -> the time(s) are inferred from the log moment (now). Ignored for build habits.
   local date file
   date="${1:-$(date +%Y-%m-%d)}"
   [[ -f "$(pbrain_habits_profile_file)" ]] || return 0
@@ -1568,7 +1609,7 @@ pbrain_habit_mark() {  # <date> <name> [count] [note] [amount] [good] [bad] [sli
   mkdir -p "$(dirname "$file")" 2>/dev/null || true
   _pbrain_habit_track_py mark "$(pbrain_habits_profile_file)" "$PBRAIN_DB_FILE" "$file" \
     "$date" "${2:-}" "${3:-1}" "${4:-}" "${5:-}" "$(date '+%Y-%m-%d %H:%M')" \
-    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}" "${13:-}" "${14:-}" "${15:-}"
+    "${6:-}" "${7:-}" "${8:-}" "${9:-}" "${10:-}" "${11:-}" "${12:-}" "${13:-}" "${14:-}" "${15:-}" "${16:-}"
 }
 
 # Compute (without writing) a scored habit's score from its profile rule + raw

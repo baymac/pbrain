@@ -102,22 +102,25 @@ Each day has its own file: `life/habit-tracking/<date>.md`. It's generated from 
 ```
 ## Fitness activity
 
-| Habit | Criteria | Progress | Done | Count | Note |
-|-------|----------|----------|------|-------|------|
-| Gym   | weekdays | 1/3 wk   | x    |       |      |
+| Habit | Criteria | Progress | Done | Count | Times | Note |
+|-------|----------|----------|------|-------|-------|------|
+| Gym   | weekdays | 1/3 wk   | x    |       |       |      |
 
 ## Wellness
 
-| Habit | Criteria   | Progress | Done | Count | Note |
-|-------|------------|----------|------|-------|------|
-| Water | daily ≥4 L | 2.5/4 L  | x    | 2.5   |      |
+| Habit | Criteria   | Progress | Done | Count | Times | Note |
+|-------|------------|----------|------|-------|-------|------|
+| Water | daily ≥4 L | 2.5/4 L  | x    | 2.5   |       |      |
 
 ## Cleanliness
 
-| Habit          | Criteria | Progress | Done | Count | Note |
-|----------------|----------|----------|------|-------|------|
-| Brush at night | daily    | 5/7 wk   | x    |       |      |
+| Habit          | Criteria      | Progress | Done | Count | Times        | Note          |
+|----------------|---------------|----------|------|-------|--------------|---------------|
+| Brush at night | daily         | 5/7 wk   | x    |       |              |               |
+| Late snacking  | daily (limit) | 2/0 day  | x    | 2     | 22:40, 23:50 | stress eating |
 ```
+
+**The `Times` column** is for **limit** habits (`at_most`): each lapse records its clock time, comma-separated for multiple lapses in a day, and your thoughts fold into that row's **Note**. The time comes from what you say (e.g. "snacked at 10pm") or, if you don't say, the moment you log it. Build habits leave `Times` blank. This is automatic for every limit habit — no profile flag. To set explicit times when marking, pass `--time "HH:MM"` (or `--time "14:30,21:15"`).
 
 The sectioning is derived from your profile on every refresh — editing a habit's category moves it to the right section on the next sync. Old single-table files (with or without a Part column) are still read fine and get re-sectioned the next time they're written.
 
