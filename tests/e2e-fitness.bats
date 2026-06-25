@@ -50,20 +50,20 @@ setup() {
   load "e2e/fitness-journal.bash"
 }
 
-@test "fitness × fast → sleep captured this session (fresh reading, no provenance)" {
-  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-sleep-captured.json" \
-                      "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+@test "fitness × fast → sleep given this session (fresh reading, no provenance)" {
+  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/sleep/captured.json" \
+                      "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
-@test "fitness × cautious → sleep carried forward on confirm (provenance noted)" {
-  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-sleep-carry.json" \
-                      "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+@test "fitness × fast → sleep withheld, left blank (no carry, no fabrication)" {
+  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/sleep/cold.json" \
+                      "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
-@test "fitness × fast → cold start leaves sleep blank (never fabricates the profile window)" {
-  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-sleep-cold.json" \
-                      "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+@test "fitness × cautious → sleep withheld, left blank (no carry, no fabrication)" {
+  run e2e_run_fitness "$REPO_ROOT" "$E2E_DIR/scenarios/fitness-journal/sleep/cold.json" \
+                      "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }

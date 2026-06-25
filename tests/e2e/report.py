@@ -56,13 +56,22 @@ def main(argv):
     out = os.path.join(report_dir, "e2e-%s.html" % stamp)
 
     total = len(runs)
-    passed = sum(1 for r in runs if r.get("passed"))
-    failed = total - passed
+    skipped = sum(1 for r in runs if r.get("skipped"))
+    passed = sum(1 for r in runs if r.get("passed") and not r.get("skipped"))
+    failed = total - passed - skipped
+
+    def _state(r):
+        if r.get("skipped"):
+            return ("skip", "SKIP")
+        return ("ok", "PASS") if r.get("passed") else ("bad", "FAIL")
+
+    # A "live" run is one whose transcript shows the two-real-model conversation.
+    def _live_badge(r):
+        return " <span class='badge live'>LIVE</span>" if "skill model ↔ persona model" in r.get("transcript", "") else ""
 
     rows = []
     for r in runs:
-        cls = "ok" if r.get("passed") else "bad"
-        mark = "PASS" if r.get("passed") else "FAIL"
+        cls, mark = _state(r)
         rows.append(
             '<tr class="{cls}"><td>{s}</td><td>{p}</td><td>{e}</td>'
             '<td class="m">{m}</td></tr>'.format(
@@ -72,22 +81,22 @@ def main(argv):
 
     blocks = []
     for r in runs:
-        cls = "ok" if r.get("passed") else "bad"
+        cls, mark = _state(r)
         fails = r.get("failures", [])
         seams = r.get("seams", [])
         fails_html = ("<ul class='fail'>" + "".join("<li>%s</li>" % _esc(f) for f in fails) + "</ul>") if fails else "<p class='none'>none</p>"
         seams_html = ("<ul class='seam'>" + "".join("<li>%s</li>" % _esc(s) for s in seams) + "</ul>") if seams else "<p class='none'>none</p>"
         blocks.append(
             "<details class='{cls}'><summary><b>{s}</b> × <b>{p}</b> — "
-            "<span class='badge {cls}'>{m}</span> <span class='exp'>expect: {e}</span></summary>"
+            "<span class='badge {cls}'>{m}</span>{live} <span class='exp'>expect: {e}</span></summary>"
             "<h4>Persona ↔ command chat</h4><pre class='tr'>{tr}</pre>"
             "{track}"
             "<h4>Failed assertions</h4>{fh}"
             "<h4>Seams (not verified by harness)</h4>{sh}"
             "</details>".format(
                 cls=cls, s=_esc(r.get("display") or r.get("scenario")),
-                p=_esc(r.get("persona")),
-                m=("PASS" if r.get("passed") else "FAIL"), e=_esc(r.get("expect")),
+                p=_esc(r.get("persona")), live=_live_badge(r),
+                m=mark, e=_esc(r.get("expect")),
                 tr=_esc(r.get("transcript", "")),
                 track=_tracking_html(r),
                 fh=fails_html, sh=seams_html))
@@ -116,6 +125,11 @@ summary{{cursor:pointer;font-size:14px}}
 .badge{{padding:1px 8px;border-radius:10px;font-size:12px;font-weight:700}}
 .badge.ok{{background:rgba(26,127,55,.2);color:var(--ok)}}
 .badge.bad{{background:rgba(207,34,46,.2);color:var(--bad)}}
+.badge.skip{{background:rgba(210,153,34,.2);color:#d29922}}
+.badge.live{{background:rgba(56,139,253,.2);color:#58a6ff}}
+.summary .skip{{color:#d29922}}
+tr.skip td.m{{color:#d29922}}
+details.skip{{border-color:#d29922}}
 .exp{{color:var(--mut);font-size:12px}}
 h4{{margin:14px 0 4px;color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.04em}}
 pre{{background:#010409;border:1px solid var(--bd);border-radius:6px;padding:12px;overflow:auto;white-space:pre-wrap;word-break:break-word}}
@@ -125,20 +139,20 @@ ul.fail li{{color:var(--bad)}} ul.seam li{{color:#d29922}}
 footer{{padding:16px 24px;color:var(--mut);border-top:1px solid var(--bd);font-size:12px}}
 </style></head><body>
 <header>
-<h1>pbrain · /plan-my-work execute loop — e2e report</h1>
-<div class=sub>generated {stamp} · standalone (no external assets) · {total} runs (scenario × persona)</div>
-<div class=summary><span class=ok>● {passed} passed</span><span class=bad>● {failed} failed</span></div>
+<h1>pbrain · e2e report</h1>
+<div class=sub>generated {stamp} · standalone (no external assets) · {total} runs (scenario × persona) · <span class=badge style="background:rgba(56,139,253,.2);color:#58a6ff">LIVE</span> = real two-model conversation</div>
+<div class=summary><span class=ok>● {passed} passed</span><span class=bad>● {failed} failed</span><span class=skip>● {skipped} skipped</span></div>
 </header>
 <main>
 <table><thead><tr><th>scenario</th><th>persona</th><th>expect</th><th>result</th></tr></thead>
 <tbody>{rows}</tbody></table>
 {blocks}
 </main>
-<footer>Faked: Plane I/O (fake_plane.py), and gh/CI/merge (scripted, shown as SEAM lines).
-Real: project-manager.sh, git worktree/branch/commit, PBRAIN_DB_FILE, PBRAIN_VAULT, persona prefs.
-Invariants checked: stop-at-first-gap gating · park is durable+resumable · CI-red hard-stops land even with auto:land · no release cut · vault stays empty.</footer>
+<footer>Real: the command script under test, PBRAIN_VAULT, persona prefs + per-persona fixtures, and (LIVE runs) two real claude model calls + the file the skill actually wrote.
+Faked/scripted (non-LIVE): pmw's Plane I/O (fake_plane.py) and gh/CI/merge (SEAM lines); the agent's file write is replayed.
+SKIP = a live run the claude CLI could not perform (never a synthetic pass).</footer>
 </body></html>""".format(
-        stamp=_esc(stamp), total=total, passed=passed, failed=failed,
+        stamp=_esc(stamp), total=total, passed=passed, failed=failed, skipped=skipped,
         rows="".join(rows), blocks="".join(blocks))
 
     with open(out, "w") as fh:

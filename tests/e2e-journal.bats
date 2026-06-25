@@ -50,19 +50,19 @@ setup() {
 }
 
 @test "journal × cautious → factual log, no follow-up, fresh file written" {
-  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal-factual.json" \
-                      "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal/core/journal-factual.json" \
+                      "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "journal × fast → reflective entry, exactly one follow-up" {
-  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal-reflective.json" \
-                      "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal/core/journal-reflective.json" \
+                      "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "journal × cautious → resume appends under ## Log, preserves curated sections" {
-  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal-resume.json" \
-                      "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run_journal "$REPO_ROOT" "$E2E_DIR/scenarios/journal/core/journal-resume.json" \
+                      "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }

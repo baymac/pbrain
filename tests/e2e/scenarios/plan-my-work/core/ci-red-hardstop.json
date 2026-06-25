@@ -1,0 +1,33 @@
+{
+"_doc": "auto:land present (typed-confirm waived) BUT CI is red. INVARIANT: red CI hard-stops the merge regardless of auto:land. Asserts move\u2192done was NEVER called. Terminal: park:land.",
+"id_slug": "pb903-cired",
+"base_branch": "main",
+"web_base": "http://plane.localhost:1800/pb",
+"gh_present": "yes",
+"test_result": "green",
+"ci_result": "red",
+"expect": "park:land",
+"issue": {
+"tie": "proj-uuid:issue-uuid-903",
+"id": "PB-903",
+"title": "auto:land but CI red",
+"approved": true,
+"has_plan": true,
+"auto_gates": [
+"plan",
+"implement",
+"test",
+"ship",
+"land"
+],
+"blocked_by": [],
+"comments": [],
+"state": "Todo",
+"project": "pb"
+},
+"personas": [
+"fast"
+],
+"command": "plan-my-work",
+"feature": "core"
+}

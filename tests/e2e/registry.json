@@ -1,0 +1,28 @@
+{
+  "_doc": "Registry of commands the e2e framework can drive. Each command maps to an engine driver (sourced .bash exposing e2e_run_<fn>), the tracking_kind its artifact uses, and the personas it runs against by default. run.sh discovers scenarios under scenarios/<command>/<feature>/ and dispatches each (scenario x persona) to the engine. persona_mode in a scenario ('scripted'|'live') selects how the human side is played; 'live' uses the two-real-model engine (live.bash) regardless of the command's default driver.",
+  "commands": {
+    "plan-my-work": {
+      "engine": "harness.bash",
+      "run_fn": "e2e_run",
+      "tracking_kind": "plane-journal",
+      "default_personas": ["fast", "cautious"],
+      "default_mode": "scripted"
+    },
+    "journal": {
+      "engine": "journal.bash",
+      "run_fn": "e2e_run_journal",
+      "tracking_kind": "vault-file",
+      "default_personas": ["fast", "cautious"],
+      "default_mode": "scripted"
+    },
+    "fitness-journal": {
+      "engine": "fitness-journal.bash",
+      "run_fn": "e2e_run_fitness",
+      "live_engine": "live.bash",
+      "live_run_fn": "e2e_run_fitness_live",
+      "tracking_kind": "vault-file",
+      "default_personas": ["fast", "cautious"],
+      "default_mode": "scripted"
+    }
+  }
+}

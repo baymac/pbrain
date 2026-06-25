@@ -279,26 +279,29 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"sleep_bed:"* && "$output" == *"sleep_wake:"* && "$output" == *"sleep_hours:"* ]]
 }
 
-@test "Step 4 asks for sleep and never fabricates it (PB-110, revised)" {
+@test "Step 4 asks for sleep and is given-or-blank, never carried or fabricated (PB-110)" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  # Revised contract: sleep is mandatory to ASK, carry-forward only on confirm, and
-  # a fabricated reading (profile window / assumed time) is forbidden.
-  [[ "$output" == *"MOST RECENT SLEEP"* ]]
-  [[ "$output" == *"CARRY FORWARD"* ]]
+  # Final contract: sleep is mandatory to ASK, written only from what the user gives
+  # this session, else BLANK. No carry-forward, no profile window, no inference.
   [[ "$output" == *"mandatory to surface"* ]]
-  [[ "$output" == *"fabricated reading is false data"* ]]
-  # The old "fill from a source so it's never blank" phrasing must be gone.
-  [[ "$output" != *"do NOT leave them blank when a source exists"* ]]
+  [[ "$output" == *"SLEEP GIVEN THIS SESSION"* ]]
+  [[ "$output" == *"leave all four sleep_* BLANK"* ]]
+  [[ "$output" == *"false data"* ]]
+  # Carry-forward must be GONE from the instructions entirely.
+  [[ "$output" != *"CARRY FORWARD"* ]]
+  [[ "$output" != *"carried forward"* ]]
+  [[ "$output" != *"MOST RECENT SLEEP"* ]]
 }
 
-@test "MOST RECENT SLEEP block carries the newest non-blank session's sleep (PB-110)" {
+@test "a prior session's sleep is NOT pulled into today's context (PB-110, no carry)" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
-  # A prior session that recorded sleep — the backfill source.
+  # A prior session that recorded sleep — under the old contract this was the
+  # carry-forward source; under the final contract it must NOT surface at all.
   cat > "$TRACKING/2026-06-20.md" <<EOF
 ---
 type: fitness
@@ -312,24 +315,28 @@ sleep_hours: 7.5
 # Gym
 EOF
   run FIT
-  [[ "$output" == *"MOST RECENT SLEEP (confirm-and-carry source for Step 4)"* ]]
-  [[ "$output" == *"most recent session (2026-06-20)"* ]]
-  [[ "$output" == *"sleep_bed: 23:40"* && "$output" == *"sleep_hours: 7.5"* ]]
+  # No carry-forward mechanism: the dedicated sleep-source block is gone entirely,
+  # so the prior night is never presented AS today's sleep source. (The raw file
+  # still appears verbatim in the RECENT SESSIONS dump — that's context, not a
+  # sleep source — so we assert on the source machinery, not the substring.)
+  [[ "$output" != *"MOST RECENT SLEEP"* ]]
+  [[ "$output" != *"most recent session (2026-06-20)"* ]]
+  [[ "$output" != *"CARRY FORWARD"* ]]
+  [[ "$output" != *"carried forward"* ]]
 }
 
-@test "MOST RECENT SLEEP never fabricates from the profile window (PB-110, revised)" {
+@test "the profile typical window is never offered as a sleep source (PB-110)" {
   write_overall_profile
   write_library
   write_gym_activity_profile "$DOW"
   run FIT
-  # No prior session has sleep → cold start. The profile window (23:00/07:00) must
-  # NOT be surfaced as a sleep source; the model is told to ask and not invent.
-  [[ "$output" == *"no prior sleep on record — ask the user; do not invent"* ]]
+  # write_overall_profile sets the window to 23:00/07:00 — it must never appear as a
+  # sleep value, and the instructions must forbid using it.
   [[ "$output" != *"profile typical sleep window"* ]]
-  # write_overall_profile sets the window to 23:00/07:00 — neither may appear as a
-  # synthetic sleep_* default in the MOST RECENT SLEEP block.
   [[ "$output" != *"sleep_bed: 23:00"* ]]
   [[ "$output" != *"sleep_wake: 07:00"* ]]
+  # The instructions explicitly forbid copying the profile's typical window.
+  [[ "$output" == *"profile's typical sleep window"* ]]
 }
 
 @test "daily flow opens with a skippable readiness check-in, logger-framed" {
@@ -352,7 +359,7 @@ EOF
   [[ "$output" == *"sleep is the one mandatory field"* ]]
   [[ "$output" == *"ALWAYS ask"* ]]
   [[ "$output" == *"still confirm the one sleep line"* ]]
-  [[ "$output" == *"a fabricated reading is false data; a blank field is honest"* ]]
+  [[ "$output" == *"a value the user did not give is false data"* ]]
 }
 
 @test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {

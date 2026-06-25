@@ -1,0 +1,34 @@
+{
+"_doc": "approved=true + all auto:* labels \u2192 loop runs plan\u2192land unattended, no re-draft, squash-merge gated on CI-green. Terminal: done.",
+"id_slug": "pb900-approved",
+"base_branch": "main",
+"web_base": "http://plane.localhost:1800/pb",
+"gh_present": "yes",
+"test_result": "green",
+"ci_result": "green",
+"expect": "done",
+"issue": {
+"tie": "proj-uuid:issue-uuid-900",
+"id": "PB-900",
+"title": "Approved fast-path issue",
+"approved": true,
+"has_plan": true,
+"auto_gates": [
+"plan",
+"implement",
+"test",
+"ship",
+"land"
+],
+"blocked_by": [],
+"comments": [],
+"state": "Todo",
+"project": "pb"
+},
+"personas": [
+"fast",
+"cautious"
+],
+"command": "plan-my-work",
+"feature": "core"
+}

@@ -695,48 +695,10 @@ print("\n\n".join(parts) if parts else "(no previous sessions)")
 PYEOF
 )"
 
-# MOST RECENT SLEEP — the confirm-and-carry source for Step 4. Sleep is mandatory
-# to ASK (Step 1), but it is never written silently and never fabricated. The only
-# carry-forward source is a REAL prior session: scan the last fitness files
-# newest-first for the first non-blank sleep_* frontmatter, and hand the model that
-# block so it can OFFER it as a default to confirm/correct. There is deliberately no
-# profile-typical-window fallback — a plausible-but-untrue reading is false data.
-# When no real prior session has sleep, emit a cold-start marker telling the model
-# to ask the user and leave the fields blank if they skip — never invent a value.
-LAST_KNOWN_SLEEP="$(python3 - "$TRACKING_DIR" <<'PYEOF' 2>/dev/null || true
-import os, glob, re, sys
-d = sys.argv[1]
-
-def fm(text):
-    m = re.match(r"\s*---\s*\n(.*?)\n---", text, re.DOTALL)
-    if not m:
-        return {}
-    out = {}
-    for line in m.group(1).splitlines():
-        mm = re.match(r"\s*([A-Za-z_]+)\s*:\s*(.*?)\s*$", line)
-        if mm:
-            out[mm.group(1)] = mm.group(2).strip()
-    return out
-
-SLEEP_KEYS = ("sleep_bed", "sleep_wake", "sleep_quality", "sleep_hours")
-# Newest fitness file first.
-for f in sorted(glob.glob(os.path.join(d, "*.md")), reverse=True):
-    try:
-        with open(f) as fh:
-            data = fm(fh.read())
-    except Exception:
-        continue
-    vals = {k: data.get(k, "") for k in SLEEP_KEYS}
-    if any(v not in ("", "blank", "—") for v in vals.values()):
-        print(f"source: most recent session ({os.path.basename(f)[:-3]})")
-        for k in SLEEP_KEYS:
-            print(f"{k}: {vals[k] or 'blank'}")
-        sys.exit(0)
-
-print("(no prior sleep on record — ask the user; do not invent. If they skip, leave sleep_* blank.)")
-PYEOF
-)"
-[[ "$LAST_KNOWN_SLEEP" =~ [^[:space:]] ]] || LAST_KNOWN_SLEEP="(no prior sleep on record — ask the user; do not invent. If they skip, leave sleep_* blank.)"
+# Sleep is given-or-blank: it is mandatory to ASK (Step 1), written only from what
+# the user gives THIS session, and otherwise left blank. There is deliberately no
+# carry-forward from prior sessions and no profile-window fallback — a value the
+# user did not give is an assumption, and an assumed sleep reading is false data.
 
 # Bundle every activity profile (highest COMMITTED version per slug — an open
 # draft must not shadow the committed version below it).
@@ -857,9 +819,6 @@ $ACTIVITY_KPIS
 === RECENT SESSIONS (last 7) ===
 $RECENT_SESSIONS
 
-=== MOST RECENT SLEEP (confirm-and-carry source for Step 4) ===
-$LAST_KNOWN_SLEEP
-
 === ACTIVITY PROFILES ($ACT_STORE) ===
 $ACTIVITY_PROFILES
 
@@ -904,11 +863,10 @@ Step 2 — Based on intent:
 
 Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep the
   \`activity:\`/\`focus:\` and \`sleep_*\` frontmatter intact (plan-my-day reads them).
-  If any sleep_* field is BLANK (e.g. an entry written before sleep was captured),
-  you MAY carry it forward ONLY from a real prior session named in the MOST RECENT
-  SLEEP block above (with the same ## Notes provenance line) — and confirm it with
-  the user first if they are present. Do NOT copy the profile's typical window or
-  invent a value; if there is no real prior session, leave the field BLANK.
+  If any sleep_* field is BLANK, leave it BLANK unless the user gives the value
+  now. Do NOT carry it forward from a prior entry, do NOT copy the profile's typical
+  window, do NOT invent a value — a sleep reading the user did not give is false
+  data, and a blank field is the honest state.
   Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
   session is done, \`partial\` if partly done, \`planned\` while still plan-only.
 
@@ -948,9 +906,6 @@ $ACTIVITY_KPIS
 === RECENT SESSIONS (last 7) ===
 $RECENT_SESSIONS
 
-=== MOST RECENT SLEEP (confirm-and-carry source for Step 4) ===
-$LAST_KNOWN_SLEEP
-
 === ACTIVITY PROFILES ($ACT_STORE) ===
 $ACTIVITY_PROFILES
 
@@ -967,9 +922,9 @@ and date. NEVER compute or guess the day of the week yourself — copy day_of_we
 
 Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above says to
   skip the check-in, SKIP the rest of this step — BUT sleep is the one mandatory
-  field, so still ask the ONE sleep line (item 3) before moving to Step 2, prefilled
-  from MOST RECENT SLEEP as below. Otherwise present the whole batch as one quick
-  batch — the user may answer some, all, or none:
+  field, so still ask the ONE sleep line (item 3) before moving to Step 2. Otherwise
+  present the whole batch as one quick batch — the user may answer some, all, or
+  none:
   "Quick check-in (or say 'skip'):"
   1. Energy level? (1–10)
   2. Soreness, pain, or injury? Which muscles (1–10), flag anything acute or a
@@ -977,19 +932,17 @@ Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above say
      profiles' notes, e.g. "(Last few days: lower back 3/10 on the chest day,
      right knee 6/10 after football last night)".
   3. Sleep (ALWAYS ask — this is mandatory to surface, never silently filled):
-     what time to bed, what time awake, and quality 1–10? PREFILL the default from
-     the MOST RECENT SLEEP block: when it names a real prior session, offer it for
-     confirmation — "Same as last night — bed {sleep_bed}, up {sleep_wake}
-     ({sleep_hours}h)? Or different?" — and only WRITE it once the user confirms
-     (Step 4b). When the block says cold start (no prior session), ask plainly with
-     no default. Do NOT offer or assume the profile's typical window or any made-up
-     time — a fabricated reading is false data; a blank field is honest.
+     what time to bed, what time awake, and quality 1–10? Ask plainly, with NO
+     prefilled default. Write ONLY what the user gives this session. Do NOT carry a
+     value forward from a prior entry, do NOT offer the profile's typical window,
+     do NOT assume any time — a value the user did not give is false data; a blank
+     field is honest.
   4. Stress? (low / medium / high)
   5. Bodyweight today? (kg — skip if you don't have it)
   This is a LOGGER, not an interrogation — never block. Ask the sleep line ONCE; if
   the user skips or ignores it, leave sleep_* blank (Step 4c) — do not nag, do not
-  invent. If the user just states what they DID or are PLANNING, confirm the one
-  sleep line and otherwise go straight to logging.
+  invent. If the user just states what they DID or are PLANNING, ask the one sleep
+  line and otherwise go straight to logging.
   IF THE USER SAYS "SKIP" (or ignores it): drop the rest — but still ask the one
   sleep line — move to Step 2, then ask
   ONCE — "Want me to skip this check-in from now on?" On a yes, fold this standing
@@ -1038,21 +991,18 @@ Step 3 — PARSE the description into the chosen activity's KPIs, EXPLODING it i
 
 Step 4 — Fold in whatever state they gave, then set the four sleep_* fields by this
   precedence. plan-my-day and the Sleep-well habit read sleep_*, but a WRONG value is
-  worse than a blank one — so NEVER write a sleep value the user did not give or
-  confirm, and NEVER invent one:
-    a) SLEEP CAPTURED THIS SESSION (asked in Step 1, or volunteered) — from bed +
-       wake INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 →
-       7.5h) and write all four. This is a fresh reading; no provenance note needed.
-    b) ELSE CARRY FORWARD — only if the MOST RECENT SLEEP block names a real prior
-       session AND the user CONFIRMED it in Step 1 (accepted the "same as last
-       night?" default). Copy that session's sleep_bed/wake/quality/hours and add ONE
-       ## Notes line that sleep was carried forward from {date}, not measured today,
-       so it isn't mistaken for a fresh reading. If the user did NOT confirm it, do
-       NOT write it — fall to (c).
-    c) ELSE leave sleep_* BLANK. This covers cold start (no prior session) and the
-       case where the user skipped the sleep question. Do NOT copy the profile's
-       typical sleep window, do NOT assume a usual bedtime, do NOT infer a plausible
-       value — a fabricated reading is false data. Blank is the correct, honest state.
+  worse than a blank one — so NEVER write a sleep value the user did not give, and
+  NEVER invent or carry one:
+    a) SLEEP GIVEN THIS SESSION (asked in Step 1, or volunteered) — from bed + wake
+       INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
+       and write all four. This is a fresh reading; no provenance note needed.
+    b) ELSE leave all four sleep_* BLANK. This covers any case where the user did
+       not give sleep this session — they skipped the question, or there's nothing
+       on record. Do NOT carry a value forward from a prior entry, do NOT copy the
+       profile's typical sleep window, do NOT assume a usual bedtime, do NOT infer a
+       plausible value. A value the user did not give is false data; a blank field
+       is the correct, honest state. The skill wants the data and asks for it — but
+       if the user withholds it, that is fine, and the field stays blank.
   If a flag stands out — short sleep, high soreness on what they're loading, low
   energy — note it in ONE line and, if it fits, suggest scaling back. Never prescribe
   and never block; they decide.
