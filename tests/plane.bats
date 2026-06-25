@@ -300,6 +300,29 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-143 issue_description_text: falls back to stripped HTML when description_stripped is null" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# Plane's PATCH quirk: description_html set, description_stripped null/missing.
+html = "<h2>Implementation Plan</h2><p>Do the <strong>thing</strong>.</p>"
+issue = {"description_html": html, "description_stripped": None}
+txt = m.issue_description_text(issue)
+assert "Implementation Plan" in txt, txt          # marker survives → has_plan works
+assert "Do the thing" in txt, txt                 # body text recovered
+assert m.PLAN_MARKER.lower() in txt.lower()        # the exact has_plan predicate
+# Prefer the server-stripped form when present (no double work).
+assert m.issue_description_text(
+    {"description_html": html, "description_stripped": "PRE"}) == "PRE"
+# Genuinely empty stays empty.
+assert m.issue_description_text({"description_html": "", "description_stripped": ""}) == ""
+assert m.issue_description_text({}) == ""
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "PB-130 seed_pipeline_states: creates work states, keeps Todo, removes In Progress after re-point (fake client)" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
