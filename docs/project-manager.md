@@ -71,14 +71,14 @@ A **tie** is `<project_id>:<issue_id>` — the handle that flows through the dai
 
 Every pbrain-bootstrapped project replaces Plane's default `Todo` / `In Progress` states with a custom lifecycle pipeline:
 
-**Backlog → Triage → Planning → Building → Testing → Review**, plus **Done** and **Cancelled**.
+**Backlog → Todo → Planning → Building → Testing → Review**, plus **Done** and **Cancelled**.
 
 Each state keeps a Plane **state group** so the `ready` / `READY_GROUPS` contract still resolves pickable work (pbrain resolves work by *group*, not name):
 
 | State | Group | Role |
 |---|---|---|
 | Backlog | `backlog` | the user's staging area — **not** "ready" |
-| Triage | `unstarted` | filed, not yet planned — the project **default** (newly-filed issues land here, ready) |
+| Todo | `unstarted` | filed, not yet planned — the project **default** (newly-filed issues land here, ready) |
 | Planning | `started` | `/plan-my-work` **plan** stage |
 | Building | `started` | **implement** stage |
 | Testing | `started` | **test** stage |
@@ -86,7 +86,9 @@ Each state keeps a Plane **state group** so the `ready` / `READY_GROUPS` contrac
 | Done | `completed` | merged |
 | Cancelled | `cancelled` | dropped |
 
-Seeded on `project-create` and backfilled onto existing projects via `labels --seed`. Plane's public token API can't write states, so the seed uses the **internal** API (session cookie / login, the same seam estimates use); when that auth isn't configured the command makes no changes and hands back the exact Plane-UI steps instead. Existing issues are **not** auto-migrated (a separate follow-up) — only the two superseded defaults are removed, after any issue on them is re-pointed (Todo→Triage, In Progress→Building). Supersedes PB-118's triage→todo-vs-backlog ambiguity for new projects.
+Seeded on `project-create` and backfilled onto existing projects via `labels --seed` (or `states --seed`). The pipeline **adds** the four work states on top of Plane's defaults and removes only **In Progress** (its issues fold into Building); **Todo is kept** as the default unstarted state — Plane reserves the literal name "Triage" for its intake inbox and rejects creating it, so the pipeline keeps "Todo" rather than rename it. Plane's public token API can't write states, so the seed uses the **internal** API (session cookie / login, the same seam estimates use); when that auth isn't configured the command makes no changes and hands back the exact Plane-UI steps instead.
+
+To **migrate existing issues** too (not just states), run `states --migrate` (default scope: the whole registry) — it seeds the states and re-points every straggler issue onto a pipeline state (unstarted→Todo, started→Building). This is exactly what the effectful migration `0012_plane_pipeline_states` runs (see the migration note in CLAUDE.md). `states --migrate --dry-run` reports what each project still needs without writing.
 
 ## Backups (PB-17)
 

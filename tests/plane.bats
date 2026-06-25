@@ -186,24 +186,27 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
-@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Triage default, no dup names" {
+@test "PB-130 PIPELINE_STATES: 8 states, correct names+groups, Todo default, no dup names" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 ps = m.PIPELINE_STATES
 names = [s["name"] for s in ps]
-assert names == ["Backlog","Triage","Planning","Building","Testing","Review","Done","Cancelled"], names
+# Todo is KEPT (not renamed to "Triage" — Plane reserves that name for its intake).
+assert names == ["Backlog","Todo","Planning","Building","Testing","Review","Done","Cancelled"], names
 by = {s["name"]: s for s in ps}
 assert by["Backlog"]["group"]=="backlog"
-assert by["Triage"]["group"]=="unstarted"
+assert by["Todo"]["group"]=="unstarted"
 for n in ("Planning","Building","Testing","Review"):
     assert by[n]["group"]=="started", n
 assert by["Done"]["group"]=="completed"
 assert by["Cancelled"]["group"]=="cancelled"
-# exactly one default, and it is Triage (newly-filed lands ready)
+# exactly one default, and it is Todo (newly-filed lands ready)
 defaults=[s["name"] for s in ps if s.get("default")]
-assert defaults==["Triage"], defaults
+assert defaults==["Todo"], defaults
+# only In Progress is removed; Todo is kept (not in the removal map)
+assert "in progress" in m.DEFAULT_STATES_TO_REMOVE and "todo" not in m.DEFAULT_STATES_TO_REMOVE
 # orders are unique and ascending → distinct sequences when seeded
 orders=[s["order"] for s in ps]
 assert orders==sorted(orders) and len(set(orders))==len(orders)
@@ -266,6 +269,66 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 assert m.state_group_id({"state":{"id":"abc","name":"Building"}})=="abc"
 assert m.state_group_id({"state":"xyz"})=="xyz"
 assert m.state_group_id({})  is None
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
+@test "PB-130 seed_pipeline_states: creates work states, keeps Todo, removes In Progress after re-point (fake client)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class Fake:
+    """In-memory Plane: default 5 states + 2 issues (one on In Progress)."""
+    def __init__(self):
+        self.states=[
+          {"id":"bk","name":"Backlog","group":"backlog","default":False},
+          {"id":"td","name":"Todo","group":"unstarted","default":True},
+          {"id":"ip","name":"In Progress","group":"started","default":False},
+          {"id":"dn","name":"Done","group":"completed","default":False},
+          {"id":"cx","name":"Cancelled","group":"cancelled","default":False},
+        ]
+        self.items=[{"id":"i1","state":"td"},{"id":"i2","state":"ip"}]
+        self._n=0
+    def _has_internal_auth(self): return True
+    def list_states(self,pid): return [dict(s) for s in self.states]
+    def list_work_items(self,pid): return [dict(it) for it in self.items]
+    def create_state(self,pid,name,group,color=None,default=False,sequence=None):
+        self._n+=1; sid="new%d"%self._n
+        self.states.append({"id":sid,"name":name,"group":group,"default":default})
+        return {"id":sid}
+    def update_state(self,pid,sid,**kw):
+        for s in self.states:
+            if s["id"]==sid: s.update({k:v for k,v in kw.items() if v is not None})
+        return {}
+    def delete_state(self,pid,sid):
+        self.states=[s for s in self.states if s["id"]!=sid]; return {}
+    def update_work_item(self,pid,iid,body):
+        for it in self.items:
+            if it["id"]==iid: it["state"]=body.get("state",it["state"])
+        return {}
+
+c=Fake()
+out=m.seed_pipeline_states(c, "P")
+names=[s["name"] for s in c.states]
+# the 4 work states were created
+assert set(["Planning","Building","Testing","Review"]).issubset(set(names)), names
+# Todo kept, In Progress removed
+assert "Todo" in names and "In Progress" not in names, names
+assert "In Progress" in out["removed"], out
+# the issue that was on In Progress got re-pointed to Building
+building_id=next(s["id"] for s in c.states if s["name"]=="Building")
+assert any(it["id"]=="i2" and it["state"]==building_id for it in c.items), c.items
+# idempotent: a second seed makes no further removals/creates
+out2=m.seed_pipeline_states(c, "P")
+assert out2["created"]==[] and out2["removed"]==[], out2
+# no internal auth → manual steps, no writes
+class NoAuth(Fake):
+    def _has_internal_auth(self): return False
+na=NoAuth(); o=m.seed_pipeline_states(na,"P")
+assert o.get("manual_steps") and "In Progress" in [s["name"] for s in na.states]
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]

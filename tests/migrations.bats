@@ -109,6 +109,61 @@ EOF
   [ ! -f "$LEDGER/0003_test.done" ]
 }
 
+# PB-130: the EFFECTFUL kind — applies only when opted in, else stays pending.
+@test "applicable EFFECTFUL migration is deferred (pending) without opt-in" {
+  make_fake_src
+  cat > "$FAKE_SRC/0004_eff.sh" <<EOF
+MIGRATION_KIND=effectful
+migration_applicable() { return 0; }
+migration_apply() { touch "$TMP/eff-applied"; }
+EOF
+  run pbrain_run_migrations               # no opt-in
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PBRAIN_MIGRATION_PENDING 0004_eff"* ]]
+  [ ! -f "$TMP/eff-applied" ]             # not applied
+  [ ! -f "$LEDGER/0004_eff.done" ]        # not recorded — stays pending
+}
+
+@test "EFFECTFUL migration applies with PBRAIN_MIGRATIONS_EFFECTFUL=1" {
+  make_fake_src
+  cat > "$FAKE_SRC/0004_eff.sh" <<EOF
+MIGRATION_KIND=effectful
+migration_applicable() { [[ ! -f "$TMP/eff-applied" ]]; }
+migration_apply() { touch "$TMP/eff-applied"; echo "effect done"; }
+EOF
+  PBRAIN_MIGRATIONS_EFFECTFUL=1 run pbrain_run_migrations
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"effect done"* ]]
+  [[ "$output" == *"PBRAIN_MIGRATED 0004_eff"* ]]
+  [ -f "$TMP/eff-applied" ]
+  [ -f "$LEDGER/0004_eff.done" ]
+}
+
+@test "EFFECTFUL migration applies with run --effectful flag" {
+  make_fake_src
+  cat > "$FAKE_SRC/0004_eff.sh" <<EOF
+MIGRATION_KIND=effectful
+migration_applicable() { [[ ! -f "$TMP/eff-applied" ]]; }
+migration_apply() { touch "$TMP/eff-applied"; }
+EOF
+  run pbrain_run_migrations --effectful
+  [ "$status" -eq 0 ]
+  [ -f "$TMP/eff-applied" ]
+  [ -f "$LEDGER/0004_eff.done" ]
+}
+
+@test "inapplicable EFFECTFUL migration is recorded vacuously (even without opt-in)" {
+  make_fake_src
+  cat > "$FAKE_SRC/0004_eff.sh" <<'EOF'
+MIGRATION_KIND=effectful
+migration_applicable() { return 1; }
+migration_apply() { return 0; }
+EOF
+  run pbrain_run_migrations               # no opt-in, but nothing to do
+  [ "$status" -eq 0 ]
+  [ -f "$LEDGER/0004_eff.done" ]          # vacuous record, like auto/staged
+}
+
 @test "migrations run in id order" {
   make_fake_src
   cat > "$FAKE_SRC/0002_b.sh" <<EOF

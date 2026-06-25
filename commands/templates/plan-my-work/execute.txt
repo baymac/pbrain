@@ -78,7 +78,7 @@ happened + the artifacts (plan link, files changed, TEST RESULTS, PR url, park n
 At the very start, mark it in-progress: `${PM_CMD} move "<tie>" --to doing`.
 
 PB-130 — PIPELINE STATE PER STAGE. On projects bootstrapped with pbrain's custom
-state model (Backlog → Triage → Planning → Building → Testing → Review + Done +
+state model (Backlog → Todo → Planning → Building → Testing → Review + Done +
 Cancelled), advance the issue into the STAGE's state as you ENTER each stage, with
 `--to-state`: plan → Planning, implement → Building, test → Testing, ship & land →
 Review, then Done on merge (stage 6). The form is

@@ -67,22 +67,25 @@ STATUS_TO_GROUP = {
     "dropped": "cancelled",
 }
 
-# PB-130: the custom lifecycle pipeline pbrain seeds into every project, replacing
-# Plane's defaults (Todo / In Progress). The working pipeline is
-# Backlog → Triage → Planning → Building → Testing → Review, with Done + Cancelled
-# retained. Each state carries the GROUP that keeps the ready/READY_GROUPS contract
-# intact (names are cosmetic; pbrain resolves work by group): Backlog→backlog (the
-# user's staging area, not "ready"); Triage + the four work states→unstarted/started
-# (all ready); Done→completed; Cancelled→cancelled. Triage is the project DEFAULT, so
-# a newly-filed issue lands ready (matching today's Todo-as-default and superseding
-# PB-118's triage→todo-vs-backlog ambiguity for new projects). `order` drives the
+# PB-130: the custom lifecycle pipeline pbrain seeds into every project. The
+# working pipeline is Backlog → Todo → Planning → Building → Testing → Review, with
+# Done + Cancelled retained. It ADDS the four work states (Planning/Building/Testing/
+# Review) on top of Plane's defaults and removes only "In Progress" (its issues fold
+# into Building); "Todo" is KEPT as the default unstarted "not yet planned" state.
+# (We keep Todo rather than rename it to "Triage" because Plane reserves the literal
+# name "Triage" for its built-in intake inbox and rejects creating/renaming a state
+# to it on most projects — "name already taken".) Each state carries the GROUP that
+# keeps the ready/READY_GROUPS contract intact (names are cosmetic; pbrain resolves
+# work by group): Backlog→backlog (the user's staging area, not "ready"); Todo + the
+# four work states→unstarted/started (all ready); Done→completed; Cancelled→cancelled.
+# Todo is the project DEFAULT, so a newly-filed issue lands ready. `order` drives the
 # Plane `sequence` so the board reads top-to-bottom in pipeline order. Plane's public
 # token API can't write states (read-only), so seeding goes through the internal API
 # (PlaneClient.create_state/update_state/delete_state); a UI-steps fallback covers the
 # no-internal-auth case.
 PIPELINE_STATES = [
     {"name": "Backlog",  "group": "backlog",   "color": "#d1d5db", "default": False, "order": 0},
-    {"name": "Triage",   "group": "unstarted", "color": "#f59e0b", "default": True,  "order": 1},
+    {"name": "Todo",     "group": "unstarted", "color": "#f59e0b", "default": True,  "order": 1},
     {"name": "Planning", "group": "started",   "color": "#8b5cf6", "default": False, "order": 2},
     {"name": "Building", "group": "started",   "color": "#3b82f6", "default": False, "order": 3},
     {"name": "Testing",  "group": "started",   "color": "#06b6d4", "default": False, "order": 4},
@@ -91,11 +94,10 @@ PIPELINE_STATES = [
     {"name": "Cancelled", "group": "cancelled", "color": "#6b7280", "default": False, "order": 7},
 ]
 
-# The two Plane defaults this pipeline supersedes. Seeding removes them once the
-# replacement states exist and any issue on them has been re-pointed to the
-# group-equivalent pipeline state (Todo→Triage, In Progress→Building).
+# Plane defaults this pipeline supersedes. Only "In Progress" is removed (Todo is
+# kept as the default unstarted state); its issues are re-pointed to Building first
+# so Plane doesn't refuse the delete for a non-empty state.
 DEFAULT_STATES_TO_REMOVE = {
-    "todo": "Triage",          # Plane "Todo" (unstarted) → Triage
     "in progress": "Building",  # Plane "In Progress" (started) → Building
 }
 
@@ -1161,7 +1163,13 @@ class PlaneClient:
                         if self._on_cookie_refreshed:
                             self._on_cookie_refreshed(fresh)
                         return self._internal_request(method, path, body=body, _retry=False)
-            raise PlaneError("Plane internal API %s %s -> HTTP %s" % (method, path, e.code))
+            detail = ""
+            try:
+                detail = e.read().decode()[:300]
+            except Exception:
+                pass
+            raise PlaneError("Plane internal API %s %s -> HTTP %s%s"
+                             % (method, path, e.code, (": " + detail) if detail else ""))
         except urllib.error.URLError as e:
             raise PlaneError("Plane internal API unreachable (%s): %s" % (url, e))
 
@@ -2826,34 +2834,38 @@ def _pipeline_states_manual_steps():
     return [
         "Open the project in Plane → Settings → States.",
         "Create these states in order, each in the listed group: " + ", ".join(rows) + ".",
-        "Set 'Triage' as the project's default state.",
-        "Delete the default 'Todo' and 'In Progress' states "
-        "(re-point any issues on them to 'Triage' / 'Building' first).",
+        "Keep 'Todo' as the default unstarted state (do not rename it).",
+        "Delete the default 'In Progress' state "
+        "(re-point any issues on it to 'Building' first).",
     ]
 
 
 def seed_pipeline_states(client, project_id):
     """PB-130: bring `project_id` onto pbrain's custom lifecycle pipeline
-    (PIPELINE_STATES) — Backlog → Triage → Planning → Building → Testing → Review
-    + Done + Cancelled — replacing Plane's default Todo / In Progress.
+    (PIPELINE_STATES) — Backlog → Todo → Planning → Building → Testing → Review
+    + Done + Cancelled. Adds the four work states on top of Plane's defaults and
+    removes only "In Progress"; "Todo" is KEPT as the default unstarted state.
 
     Idempotent, like seed_convention_labels: a missing pipeline state is created in
     its canonical group/color/sequence; an existing one (matched by normalised name)
-    is PATCHed only if its group, color, default flag, or sequence drifted. The two
-    Plane defaults this supersedes (Todo, In Progress) are removed ONLY after the
-    replacement states exist and any issue sitting on a doomed default has been
-    re-pointed to the group-equivalent pipeline state (Todo→Triage, In Progress→
-    Building) — so Plane never refuses the delete for a non-empty / default state.
-    If Plane still refuses (e.g. an issue we couldn't re-point), the old state is
-    kept and the refusal reported rather than failing the seed.
+    is PATCHed only if its group, color, or default flag drifted. "In Progress" is
+    removed ONLY after the replacement states exist and any issue sitting on it has
+    been re-pointed to Building — so Plane never refuses the delete for a non-empty
+    state. If Plane still refuses, the old state is kept and the refusal reported
+    rather than failing the seed.
+
+    (We keep "Todo" rather than introduce a "Triage" state because Plane reserves
+    the literal name "Triage" for its intake inbox and rejects creating it on most
+    projects — "name already taken".)
 
     State writes require the internal API; with no internal auth the function makes
     no changes and returns {"manual_steps": [...]} (the exact UI steps) so the caller
     can hand them back (AC #5). Never raises — seeding is best-effort and reported.
 
-    Returns {"created":[...], "existing":[...], "updated":[...], "removed":[...],
-    "repointed":[...], "error":<str?>, "manual_steps":<list?>}."""
-    out = {"created": [], "existing": [], "updated": [], "removed": [], "repointed": []}
+    Returns {"created":[...], "existing":[...], "updated":[...], "renamed":[...],
+    "removed":[...], "repointed":[...], "error":<str?>, "manual_steps":<list?>}."""
+    out = {"created": [], "existing": [], "updated": [], "renamed": [],
+           "removed": [], "repointed": []}
 
     if not (getattr(client, "_has_internal_auth", lambda: False)()):
         out["manual_steps"] = _pipeline_states_manual_steps()
@@ -2868,7 +2880,9 @@ def seed_pipeline_states(client, project_id):
         return out
     by_norm = {_norm(s.get("name")): s for s in existing}
 
-    # 1. Create-or-reconcile each pipeline state.
+    # 1. Create-or-reconcile each pipeline state. "Todo" already exists on a fresh
+    #    Plane project (it's the default unstarted state we KEEP), so it reconciles
+    #    through the existing-match path; the four work states are created.
     name_to_id = {}  # canonical name (lower) → state id, for the re-point step
     for spec in PIPELINE_STATES:
         name = spec["name"]
@@ -2937,7 +2951,7 @@ def seed_pipeline_states(client, project_id):
                 except PlaneError:
                     pass
         # A doomed state can't be the project default at delete time; if it is,
-        # the default has already moved to Triage in step 1, so just delete.
+        # In Progress is never the default (Todo is), so just delete after re-point.
         try:
             client.delete_state(project_id, doomed["id"])
             out["removed"].append(doomed.get("name"))
@@ -3106,9 +3120,120 @@ def cmd_ping(args):
     return 0
 
 
+def migrate_pipeline_states(client, project_id):
+    """PB-130: bring one EXISTING project fully onto the pipeline — seed the
+    states (seed_pipeline_states) AND re-point every issue still sitting on a
+    removed/legacy default onto its group-equivalent pipeline state. The seed
+    already re-points issues off the two doomed defaults as it deletes them;
+    this also sweeps any issue whose state is GONE (e.g. removed in a prior run)
+    or still on a non-pipeline started/unstarted state, mapping by group:
+    unstarted→Todo, started→Building (idempotent — an issue already on a
+    pipeline state is left alone). Best-effort; never raises.
+
+    Returns the seed report plus {"swept":[...]} for the extra re-points."""
+    out = seed_pipeline_states(client, project_id)
+    if out.get("manual_steps"):
+        # No internal auth → states weren't created; nothing to sweep onto.
+        out["swept"] = []
+        return out
+    try:
+        states = client.list_states(project_id)
+    except PlaneError as e:
+        out.setdefault("error", "")
+        out["error"] += ("; " if out.get("error") else "") + str(e)
+        out["swept"] = []
+        return out
+    states_by_id = {s["id"]: s for s in states}
+    pipeline_ids = {s["id"] for s in states
+                    if _norm(s.get("name")) in {_norm(p["name"]) for p in PIPELINE_STATES}}
+    # group → target pipeline state id (for sweeping stragglers)
+    def _state_id(name):
+        for s in states:
+            if _norm(s.get("name")) == _norm(name):
+                return s["id"]
+        return None
+    group_target = {"unstarted": _state_id("Todo"), "started": _state_id("Building")}
+    swept = []
+    try:
+        items = client.list_work_items(project_id)
+    except PlaneError:
+        items = []
+    for it in items:
+        sid = state_group_id(it)
+        # Already on a canonical pipeline state, or on a terminal/backlog state we
+        # keep (Done/Cancelled/Backlog are pipeline states) → leave it.
+        if sid in pipeline_ids:
+            continue
+        st = states_by_id.get(sid)
+        grp = (st.get("group") if st else None)
+        target = group_target.get(grp)
+        if not target:
+            continue  # no sensible group mapping (e.g. already completed/cancelled)
+        try:
+            client.update_work_item(project_id, it.get("id"), {"state": target})
+            swept.append(it.get("sequence_id", it.get("id")))
+        except PlaneError:
+            pass
+    out["swept"] = swept
+    return out
+
+
 def cmd_states(args):
     cfg = load_config()
     client = make_client(cfg)
+    # PB-130: --seed / --migrate operate across one or more projects.
+    #   --seed     : create/reconcile the pipeline states (+ remove the two
+    #                superseded defaults, re-pointing their issues).
+    #   --migrate  : --seed PLUS sweep every straggler issue onto a pipeline
+    #                state (group-mapped). This is what the 0012 effectful
+    #                migration runs across the whole registry.
+    # --projects R,... targets a subset; default for seed/migrate is the whole
+    # registry (so "migrate all projects" is one call).
+    do_seed = getattr(args, "seed", False)
+    do_migrate = getattr(args, "migrate", False)
+    dry_run = getattr(args, "dry_run", False)
+    if do_seed or do_migrate:
+        if getattr(args, "projects", None):
+            refs = [r.strip() for r in args.projects.split(",") if r.strip()]
+            pids = []
+            for r in refs:
+                p = resolve_project_ref(cfg, r)
+                if not p:
+                    raise PlaneError("unknown project: %s" % r)
+                pids.append(p)
+        else:
+            pids = [p["id"] for p in normalize_registry(cfg)]
+        report = {}
+        for pid in pids:
+            label = project_label(cfg, pid)
+            if dry_run:
+                # Read-only: report which legacy defaults are still present, so the
+                # 0012 migration can decide applicability without writing.
+                try:
+                    cur = client.list_states(pid)
+                except PlaneError as e:
+                    report[label] = {"error": str(e), "legacy_present": []}
+                    continue
+                names = {_norm(s.get("name")) for s in cur}
+                # "legacy_present" = states this migration will REMOVE (In Progress).
+                # Todo is kept, so it is NOT legacy.
+                legacy = [disp for key, disp in (("in progress", "In Progress"),)
+                          if _norm(key) in names]
+                # Also applicable if any pipeline work-state is still missing.
+                missing = [p["name"] for p in PIPELINE_STATES
+                           if _norm(p["name"]) not in names]
+                report[label] = {"legacy_present": legacy,
+                                 "missing": missing,
+                                 "states": [s.get("name") for s in cur]}
+            else:
+                report[label] = (migrate_pipeline_states(client, pid) if do_migrate
+                                 else seed_pipeline_states(client, pid))
+        print(json.dumps({"action": ("dry-run" if dry_run
+                                     else ("migrate" if do_migrate else "seed")),
+                          "projects": report,
+                          "pipeline": [s["name"] for s in PIPELINE_STATES]},
+                         ensure_ascii=False))
+        return 0
     pid = args.project or cfg.get("project")
     print(json.dumps(client.list_states(pid), ensure_ascii=False))
     return 0
@@ -3623,7 +3748,12 @@ def build_parser():
     sp = sub.add_parser("use"); sp.add_argument("backend"); sp.set_defaults(func=cmd_use)
     sp = sub.add_parser("ping"); sp.add_argument("--project"); sp.set_defaults(func=cmd_ping)
     sp = sub.add_parser("web-base"); sp.set_defaults(func=cmd_webbase)
-    sp = sub.add_parser("states"); sp.add_argument("--project"); sp.set_defaults(func=cmd_states)
+    sp = sub.add_parser("states"); sp.add_argument("--project")
+    sp.add_argument("--projects")            # PB-130: subset for --seed/--migrate
+    sp.add_argument("--seed", action="store_true")     # create/reconcile pipeline states
+    sp.add_argument("--migrate", action="store_true")  # seed + re-point existing issues
+    sp.add_argument("--dry-run", action="store_true")  # report legacy-state presence, no writes
+    sp.set_defaults(func=cmd_states)
 
     sp = sub.add_parser("ready")
     sp.add_argument("--project")
