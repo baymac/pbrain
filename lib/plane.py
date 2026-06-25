@@ -2899,6 +2899,14 @@ def seed_pipeline_states(client, project_id):
                 patch["color"] = spec.get("color")
             if bool(match.get("default")) != bool(spec.get("default")):
                 patch["default"] = bool(spec.get("default"))
+            # Normalise sequence so the board reads top-to-bottom in pipeline order.
+            # Pre-existing states (Backlog/Todo/Done/Cancelled) otherwise keep Plane's
+            # original sequence and float out of order relative to the created ones.
+            try:
+                if int(match.get("sequence") or 0) != seq:
+                    patch["sequence"] = seq
+            except (TypeError, ValueError):
+                patch["sequence"] = seq
             if patch and sid:
                 try:
                     client.update_state(project_id, sid, **patch)
