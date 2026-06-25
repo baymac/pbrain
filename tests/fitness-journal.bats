@@ -387,6 +387,18 @@ EOF
   [[ "$output" == *"date_human: $human"* && "$output" == *"NEVER compute or guess the day of the week"* ]]
 }
 
+@test "session emits an authoritative time_now and the clock disambiguates planned vs completed (PB-117)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # time_now is present as HH:MM and the clock-based contract is spelled out
+  [[ "$output" =~ time_now:\ [0-2][0-9]:[0-5][0-9] ]]
+  [[ "$output" == *"compare it against time_now"* ]]
+  [[ "$output" == *"FUTURE SESSION (stated time is after time_now"* ]]
+  [[ "$output" == *"NOT write a ## Logged section or invent any actuals"* ]]
+}
+
 @test "check-in offers skip and can persist a skip preference" {
   write_overall_profile
   write_library
@@ -425,6 +437,10 @@ EOF
   echo "session content" > "$TRACKING/$TODAY.md"
   run FIT
   [[ "$output" == *"FITNESS_JOURNAL_EXISTING"* && "$output" == *"What's the update"* ]]
+  # update mode also carries time_now + the clock guard so it can't flip a
+  # still-future session to completed (PB-117)
+  [[ "$output" =~ time_now:\ [0-2][0-9]:[0-5][0-9] ]]
+  [[ "$output" == *"CLOCK GUARD"* ]]
 }
 
 @test "fresh setup library template includes a kpis field" {
