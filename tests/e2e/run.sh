@@ -16,6 +16,9 @@
 #   run.sh --command fitness-journal --feature sleep --persona-mode live
 #   run.sh --list                            # show what WOULD run, don't run it
 #
+# Env: E2E_KEEP_RESULTS=1 accumulates results across invocations into ONE union
+#   report (e.g. a scripted sweep + a separate live run); default wipes per run.
+#
 # Selection is data-driven: a scenario JSON carries command/feature/tags/
 # persona_mode; --persona-mode overrides the scenario's own mode (e.g. force live).
 
@@ -45,7 +48,10 @@ command -v python3 >/dev/null 2>&1 || { echo "run.sh: python3 required" >&2; exi
 
 mkdir -p "$RESULTS"
 # Fresh results for THIS invocation (the report aggregates whatever is present).
-rm -f "$RESULTS"/*.result.json "$RESULTS"/*.transcript.txt 2>/dev/null || true
+# Set E2E_KEEP_RESULTS=1 to accumulate across invocations into one union report.
+if [[ "${E2E_KEEP_RESULTS:-0}" != "1" ]]; then
+  rm -f "$RESULTS"/*.result.json "$RESULTS"/*.transcript.txt 2>/dev/null || true
+fi
 
 # reg <command> <key> → value from registry.json
 reg() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["commands"];print(d.get(sys.argv[2],{}).get(sys.argv[3],""))' "$REGISTRY" "$1" "$2"; }
