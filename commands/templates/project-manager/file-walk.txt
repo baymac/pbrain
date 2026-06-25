@@ -57,7 +57,10 @@ STEP 0 — EXPLODE THE DUMP (silently), CHECK FOR A DUPLICATE
 
 STEP 3 — APPLY (create, then enrich). The create returns the new tie:
   1) ${PM_SELF} issue --project <project_id|shortcut> --title "<title>" \
-       [--priority <p>] [--target-date <YYYY-MM-DD>]
+       --state Backlog [--priority <p>] [--target-date <YYYY-MM-DD>]
+     (PB-118: filed/triaged work lands in BACKLOG — the user's staging area — not
+      the ready Todo queue. groom later promotes well-formed backlog issues to Todo.
+      Always pass --state Backlog here so intake never pollutes the pickable set.)
   2) on the returned <tie>, set body + the type's convention label (+ any extra
      label, estimate, sub-issues) in ONE batch:
      ${PM_SELF} update --edits '[

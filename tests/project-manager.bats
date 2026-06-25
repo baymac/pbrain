@@ -186,6 +186,15 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *"Traceback"* ]]
 }
 
+@test "PB-118 file intake creates in Backlog, not the ready Todo queue" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  run PM file "add a dark mode toggle" --project pid
+  [ "$status" -eq 0 ]
+  # The STEP 3 create instruction must file new/triaged work into Backlog so it
+  # doesn't pollute the pickable Todo set; groom promotes it later.
+  [[ "$output" == *"--state Backlog"* ]]
+}
+
 @test "an unknown first token routes to the NL router (not an error)" {
   # With the router, free text is an instruction, not an error: configured →
   # PM_ROUTE with the words echoed back.
