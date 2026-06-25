@@ -43,6 +43,17 @@
 #                         to it). Flags: --app-name, --app-id, --client-id,
 #                         --client-secret, --private-key <pem path>,
 #                         --silo-base-url, --plane-home, --no-restart, --remove.
+#   app [flags]           Package the running Plane instance as a native macOS
+#                         app via Pake (a Tauri webview wrapper) and install it to
+#                         /Applications. Mirrors vhost/github: idempotent, guides
+#                         (doesn't auto-install) its Pake dependency. NOTE: unlike
+#                         a browser, the app's WKWebView has NO RFC 6761
+#                         `*.localhost` resolution, so a vhost host like
+#                         plane.localhost must be in /etc/hosts or the app renders
+#                         blank — the command detects this and prints the one-line
+#                         `sudo` fix rather than running sudo itself. macOS only.
+#                         Flags: --name (default Plane), --url, --host, --port,
+#                         --icon, --no-install, --remove, --plane-home.
 #   status                Show Docker + Plane container + pbrain backend state.
 #   help
 #
@@ -150,6 +161,34 @@ _default_base_url() {
   echo "$DEFAULT_URL"
 }
 
+# The URL the desktop app should load. Unlike pbrain's API client (which wants the
+# numeric loopback http://127.0.0.1:<port>), the app should carry the SAME vanity
+# URL the user types in the browser — http://<APP_DOMAIN> from plane.env (i.e.
+# http://plane.localhost:1800 after vhost), else plain http://localhost.
+_app_url() {
+  local envf dom
+  envf="$(_vhost_envfile 2>/dev/null || true)"
+  if [[ -n "$envf" && -f "$envf" ]]; then
+    dom="$(awk -F= '/^APP_DOMAIN=/{print $2}' "$envf" | tail -1)"
+    if [[ -n "$dom" ]]; then echo "http://$dom"; return 0; fi
+  fi
+  echo "$DEFAULT_URL"
+}
+
+# True (0) if a bare hostname resolves via the OS resolver (getaddrinfo) — the
+# same path the app's WKWebView uses. Loopback literals and "localhost" always
+# pass (no DNS needed). A vhost name like plane.localhost only passes once it's in
+# /etc/hosts: browsers/curl special-case *.localhost per RFC 6761, but macOS's
+# resolver and therefore the webview do NOT. stdlib-only Python (no deps).
+_host_resolves() {
+  local host="${1:-}"
+  [[ -z "$host" ]] && return 0
+  case "$host" in
+    localhost|127.0.0.1|::1|0.0.0.0) return 0 ;;
+  esac
+  python3 -c 'import socket,sys; socket.gethostbyname(sys.argv[1])' "$host" >/dev/null 2>&1
+}
+
 # yes (0) when a Plane API key is reachable (env or config file) — Plane is the
 # sole project backend, so "configured" is the only state that matters now.
 _plane_configured() {
@@ -175,6 +214,8 @@ case "$SUB" in
     echo "configured: $(_plane_configured)"
     echo "default_url: $DEFAULT_URL"
     echo "setup_url: $SETUP_URL"
+    echo "pake: $(_have pake && echo yes || echo no)"
+    echo "app_installed: $( [[ -d "/Applications/Plane.app" ]] && echo yes || echo no )"
     vhost_env="$(_vhost_envfile 2>/dev/null || true)"
     if [[ -n "$vhost_env" && -f "$vhost_env" ]]; then
       vh_port="$(awk -F= '/^LISTEN_HTTP_PORT=/{print $2}' "$vhost_env" | tail -1)"
@@ -531,6 +572,145 @@ PYEOF
     echo "  3) revert any time: /init-plane github --remove"
     ;;
 
+  app)
+    # PB-136: package the running Plane instance as a native macOS app via Pake
+    # (a Tauri/WKWebView wrapper) and install it to /Applications. Idempotent;
+    # guides (never auto-installs) its Pake dependency, the same way `up` guides
+    # Docker. The app carries the browser-facing vanity URL (_app_url) so it looks
+    # and behaves like the site in a browser — EXCEPT for one thing: the webview
+    # resolves hostnames through the OS, with no RFC 6761 *.localhost shortcut, so
+    # a vhost name like plane.localhost must be in /etc/hosts or the app loads
+    # blank. We detect that and print the one-line sudo fix instead of running it.
+    NAME="Plane"; APP_URL=""; A_HOST=""; A_PORT=""; DO_REMOVE=no; NO_INSTALL=no
+    PLANE_HOME_OVERRIDE=""
+    ICON_URL="https://plane.so/favicon/android-chrome-512x512.png"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --name)       NAME="${2:?--name needs a value}"; shift 2;;
+        --url)        APP_URL="${2:?--url needs a value}"; shift 2;;
+        --host)       A_HOST="${2:?--host needs a value}"; shift 2;;
+        --port)       A_PORT="${2:?--port needs a value}"; shift 2;;
+        --icon)       ICON_URL="${2:?--icon needs a value}"; shift 2;;
+        --plane-home) PLANE_HOME_OVERRIDE="${2:?--plane-home needs a value}"; shift 2;;
+        --no-install) NO_INSTALL=yes; shift;;
+        --remove)     DO_REMOVE=yes; shift;;
+        *) echo "pbrain: unknown flag for /init-plane app: $1" >&2; exit 1;;
+      esac
+    done
+
+    APP_PATH="/Applications/$NAME.app"
+
+    if [[ "$DO_REMOVE" == yes ]]; then
+      echo "INIT_PLANE_APP_REMOVE"
+      osascript -e "quit app \"$NAME\"" >/dev/null 2>&1 || true
+      if [[ -d "$APP_PATH" ]]; then
+        rm -rf "$APP_PATH"
+        echo "removed $APP_PATH"
+      else
+        echo "nothing to remove ($APP_PATH not present)"
+      fi
+      exit 0
+    fi
+
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+      echo "INIT_PLANE_APP_UNSUPPORTED /init-plane app builds a macOS .app — this isn't macOS."
+      exit 0
+    fi
+
+    # Pake is required; guide rather than auto-install (matches `up`'s Docker flow).
+    if ! _have pake; then
+      echo "INIT_PLANE_APP_NEED_PAKE Pake CLI isn't installed."
+      echo "Install it (needs Node >= 18, Rust auto-installs on first build):"
+      echo "  npm install -g pake-cli"
+      echo "then re-run: /init-plane app"
+      exit 0
+    fi
+
+    # Resolve the URL: explicit --url wins; else --host/--port compose one; else
+    # the vhost vanity URL from plane.env (falls back to http://localhost).
+    if [[ -z "$APP_URL" ]]; then
+      if [[ -n "$A_HOST" || -n "$A_PORT" ]]; then
+        APP_URL="http://${A_HOST:-plane.localhost}:${A_PORT:-1800}"
+      else
+        APP_URL="$(_app_url)"
+      fi
+    fi
+
+    # Pull the bare host out of the URL for the /etc/hosts resolution check.
+    URL_HOST="$(printf '%s\n' "$APP_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
+
+    echo "INIT_PLANE_APP"
+    echo "target URL: $APP_URL"
+
+    if ! _plane_running; then
+      echo "INIT_PLANE_APP_WARN no Plane container is running — the app will show a"
+      echo "  connection error until you start Plane (/init-plane up)."
+    fi
+
+    # The blank-screen guard: the webview can't resolve a vhost name that the OS
+    # resolver doesn't know. Fail fast with the exact fix instead of shipping a
+    # blank app. (curl/Chrome work via their own *.localhost shortcut; the webview
+    # does not — this is the one place the otherwise-unneeded hosts entry matters.)
+    if ! _host_resolves "$URL_HOST"; then
+      echo "INIT_PLANE_APP_NEED_HOSTS the app's webview can't resolve '$URL_HOST'."
+      echo "Unlike a browser, the macOS webview has no automatic *.localhost"
+      echo "resolution, so add it to /etc/hosts once (needs sudo — run it yourself):"
+      echo "  echo \"127.0.0.1 $URL_HOST\" | sudo tee -a /etc/hosts"
+      echo "then re-run: /init-plane app"
+      exit 0
+    fi
+
+    # Fetch the icon to a temp PNG; fall back to Pake's favicon auto-fetch if the
+    # download isn't a real image.
+    ICON_TMP="$(mktemp -t plane-icon).png"
+    ICON_ARGS=()
+    if _have curl && curl -fsSL -o "$ICON_TMP" "$ICON_URL" 2>/dev/null \
+        && file "$ICON_TMP" 2>/dev/null | grep -qi "PNG image"; then
+      ICON_ARGS=(--icon "$ICON_TMP")
+    else
+      echo "INIT_PLANE_APP_WARN couldn't fetch a PNG icon — building with Pake's auto-fetched favicon."
+    fi
+
+    # Build into the managed Plane home (keeps the .app bundle out of cwd).
+    BUILD_DIR="$PLANE_HOME"; mkdir -p "$BUILD_DIR"
+    echo "building $NAME.app with Pake (compiles a Rust binary — a few minutes)…"
+    if ! ( cd "$BUILD_DIR" && pake "$APP_URL" \
+            --name "$NAME" \
+            "${ICON_ARGS[@]}" \
+            --width 1400 --height 900 \
+            --hide-title-bar --dark-mode --enable-find \
+            --activation-shortcut "CmdOrControl+Shift+P" \
+            --targets app ); then
+      echo "INIT_PLANE_APP_ERROR Pake build failed — see the output above." >&2
+      rm -f "$ICON_TMP"
+      exit 1
+    fi
+    rm -f "$ICON_TMP"
+    BUILT_APP="$BUILD_DIR/$NAME.app"
+
+    if [[ "$NO_INSTALL" == yes ]]; then
+      echo "built (not installed): $BUILT_APP"
+      echo "  open it with: open \"$BUILT_APP\""
+      exit 0
+    fi
+
+    # Install to /Applications: replace any existing copy, clear the Gatekeeper
+    # quarantine flag so the unsigned app opens without the 'unidentified
+    # developer' block.
+    osascript -e "quit app \"$NAME\"" >/dev/null 2>&1 || true
+    rm -rf "$APP_PATH"
+    cp -R "$BUILT_APP" /Applications/
+    xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+    echo "installed: $APP_PATH"
+    echo "next steps:"
+    echo "  1) launch it:           open -a \"$NAME\""
+    echo "  2) global toggle:       Cmd+Shift+P (may need Accessibility permission on first use)"
+    echo "  3) in-app find:         Cmd+F"
+    echo "  4) rebuild any time:    /init-plane app"
+    echo "  5) remove it:           /init-plane app --remove"
+    echo "note: the app only works while your Docker Plane containers are running."
+    ;;
+
   host)
     # PB-18: move Plane onto a VPS + repoint pbrain. Mirrors /project-manager host
     # for the vault-free path. Delegates to lib/plane-host.sh.
@@ -592,7 +772,7 @@ PYEOF
 
   *)
     echo "pbrain: unknown /init-plane subcommand: $SUB" >&2
-    echo "Try: probe | fetch | up | config | vhost | github | host | status | help" >&2
+    echo "Try: probe | fetch | up | config | vhost | github | app | host | status | help" >&2
     exit 1
     ;;
 esac
