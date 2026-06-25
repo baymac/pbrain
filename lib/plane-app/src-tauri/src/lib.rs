@@ -89,6 +89,48 @@ const RIC_POLYFILL: &str = r#"
   if (typeof window.cancelIdleCallback !== 'function') {
     window.cancelIdleCallback = function (id) { clearTimeout(id); };
   }
+
+  // --- Zoom (Cmd +/-/0 and trackpad pinch) ----------------------------------
+  // Tauri's `zoom_hotkeys_enabled` relies on a polyfill / native path that is
+  // unreliable here: the webview loads a REMOTE http origin (Plane), and the
+  // native setZoom route also needs the `webview:allow-set-webview-zoom`
+  // capability we don't grant. So we implement zoom ourselves with CSS `zoom`,
+  // which works on any origin, needs no Tauri permission, and survives Plane's
+  // SPA navigation because this script re-runs at document-start every load.
+  // Level is persisted so it sticks across navigations and restarts.
+  (function () {
+    var KEY = 'planeAppZoom';
+    var MIN = 0.5, MAX = 3.0, STEP = 0.1;
+    function get() {
+      var v = parseFloat(localStorage.getItem(KEY));
+      return (isFinite(v) && v > 0) ? v : 1.0;
+    }
+    function apply(z) {
+      z = Math.min(MAX, Math.max(MIN, Math.round(z * 100) / 100));
+      localStorage.setItem(KEY, String(z));
+      var el = document.documentElement;
+      if (el) el.style.zoom = z;
+    }
+    // Apply the saved level as soon as <html> exists.
+    function init() { apply(get()); }
+    if (document.documentElement) init();
+    else document.addEventListener('DOMContentLoaded', init);
+
+    window.addEventListener('keydown', function (e) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      var k = e.key;
+      if (k === '=' || k === '+') { apply(get() + STEP); e.preventDefault(); }
+      else if (k === '-' || k === '_') { apply(get() - STEP); e.preventDefault(); }
+      else if (k === '0') { apply(1.0); e.preventDefault(); }
+    }, true);
+
+    // Trackpad pinch / Ctrl+wheel zoom.
+    window.addEventListener('wheel', function (e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      apply(get() + (e.deltaY < 0 ? STEP : -STEP));
+    }, { passive: false, capture: true });
+  })();
 })();
 "#;
 
@@ -122,7 +164,20 @@ pub fn run() {
                 .inner_size(1400.0, 900.0)
                 .min_inner_size(800.0, 600.0)
                 .maximized(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                // Use macOS's default (visible) title bar rather than Overlay.
+                // Overlay made the title bar transparent and floated the traffic
+                // lights + window title ON TOP of the webview — but Plane's own web
+                // header has no top inset, so the traffic lights collided with
+                // Plane's workspace switcher / command bar. A normal title bar sits
+                // ABOVE Plane's header instead, so nothing overlaps, with zero
+                // coupling to Plane's DOM.
+                // Enable the browser-style zoom hotkeys (Cmd +/-/0) inside the
+                // WKWebView. Tauri does NOT wire these up by default, so without
+                // this the app cannot zoom at all — Plane's dense Board/spreadsheet
+                // views are unreadable on smaller displays. The flag is native
+                // (maps to WKWebView magnification + the keyboard accelerators) and
+                // needs no extra capability permission.
+                .zoom_hotkeys_enabled(true)
                 .initialization_script(RIC_POLYFILL)
                 .build()?;
 
