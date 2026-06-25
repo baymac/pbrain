@@ -5,7 +5,7 @@ PB-89. This is NOT a re-implementation of Plane. It is the network boundary
 seam: the real commands/project-manager.sh runs unmodified on top of it and
 shells out `python3 <this> <verb> ...` exactly as it would the real engine.
 
-  - READ verbs (spec/find/subtree/blocked-by/web-base/projects) print canned
+  - READ verbs (spec/find/subtree/blocked-by/web-base/link-base/projects) print canned
     JSON sourced from the scenario file named by $E2E_SCENARIO.
   - WRITE verbs (move/comment/update/tag/priority/...) print a minimal OK shape
     AND append a structured record to the journal at $E2E_JOURNAL, one JSON
@@ -116,6 +116,11 @@ def main(argv):
         return 0
     if verb == "web-base":
         _emit(sc.get("web_base", "http://plane.localhost:1800/pb"))
+        return 0
+    if verb == "link-base":
+        # Preferred clickable base (PB-148): the scenario can pin "link_base" to a
+        # plane:// deep link; default mirrors web-base (no app → http fallback).
+        _emit(sc.get("link_base", sc.get("web_base", "http://plane.localhost:1800/pb")))
         return 0
     if verb == "projects":
         _emit(sc.get("projects", []))
