@@ -76,17 +76,19 @@ except Exception: d={}
 print(",".join(g.get("plane_project") for g in d.get("goals",[]) if g.get("plane_project")))' 2>/dev/null || printf '\n'
 }
 
-# pmg_web_base — the BROWSER-FACING Plane base for clickable issue links in the
-# grooming-data (e.g. http://plane.localhost:1800/pb). Delegates to plane.py's
-# `web-base`, the single source of truth (it swaps the 127.0.0.1 loopback for the
-# vanity host and honours PBRAIN_PLANE_WEB_BASE), so groom + /plan-my-work never
-# drift. Empty on any failure (the renderer falls back to a bare id).
-# PBRAIN_PMG_NO_WEB=1 forces empty (tests).
+# pmg_web_base — the PREFERRED Plane base for clickable issue links in the
+# grooming-data. Delegates to plane.py's `link-base`, the single source of truth:
+# it returns the `plane://<workspace>` DEEP LINK when the Plane desktop app is
+# installed (so a queue link opens the issue inside the app, PB-148), and otherwise
+# the browser-facing http web_base (e.g. http://plane.localhost:1800/pb — loopback
+# swapped for the vanity host, PBRAIN_PLANE_WEB_BASE honoured). Groom + /plan-my-work
+# never drift. Empty on any failure (the renderer falls back to a bare id).
+# PBRAIN_PMG_NO_WEB=1 forces empty (tests); PBRAIN_PLANE_DEEPLINK=0/1 pins the form.
 pmg_web_base() {
   [[ "${PBRAIN_PMG_NO_WEB:-0}" == 1 ]] && { printf '\n'; return 0; }
   local py; py="$(pmg_plane_py 2>/dev/null || true)"
   [[ -n "$py" && -f "$py" ]] || { printf '\n'; return 0; }
-  python3 "$py" web-base 2>/dev/null || printf '\n'
+  python3 "$py" link-base 2>/dev/null || printf '\n'
 }
 
 # This file's own lib/ dir, captured AT SOURCE TIME (when BASH_SOURCE is

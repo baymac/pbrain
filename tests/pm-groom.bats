@@ -358,10 +358,32 @@ exec "$realpy" "\$@"
 SHIM
   chmod +x "$STUB/python3"
   export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  export PBRAIN_PLANE_DEEPLINK=0   # pin the http form (no desktop-app deep link)
   run env PATH="$STUB:$PATH" bash -c \
     "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
   [ "$status" -eq 0 ]
   grep -q '\[PB-89\](http://plane.localhost:1800/pb/browse/PB-89)' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
+}
+
+@test "queue link uses the plane:// deep link when the desktop app is present" {
+  local realpy; realpy="$(command -v python3)"
+  cat > "$STUB/python3" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == groom ]]; then
+    echo '{"applied":true,"projects":[],"todo":[{"id":89,"title":"x","project":"pb"}],"needs_review":[],"errors":[]}'; exit 0; fi
+  if [[ "\$a" == ready ]]; then
+    echo '[{"id":89,"title":"x","priority":"urgent","project":"pb"}]'; exit 0; fi
+done
+exec "$realpy" "\$@"
+SHIM
+  chmod +x "$STUB/python3"
+  export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  export PBRAIN_PLANE_DEEPLINK=1   # force the deep-link form (PB-148)
+  run env PATH="$STUB:$PATH" bash -c \
+    "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
+  [ "$status" -eq 0 ]
+  grep -q '\[PB-89\](plane://pb/browse/PB-89)' "$PBRAIN_VAULT/agent-work/daily-grooming/2026-06-22.md"
 }
 
 @test "queue table renders an Auto column with the granted stages" {
@@ -400,6 +422,7 @@ exec "$realpy" "\$@"
 SHIM
   chmod +x "$STUB/python3"
   export PBRAIN_PLANE_WEB_BASE="http://plane.localhost:1800/pb"
+  export PBRAIN_PLANE_DEEPLINK=0   # pin the http form so the shortcut shape is what's asserted
   run env PATH="$STUB:$PATH" bash -c \
     "source '$REPO_ROOT/lib/vault.sh'; source '$REPO_ROOT/lib/launchd.sh'; source '$REPO_ROOT/lib/pm-groom.sh'; pmg_run --projects A --apply"
   [ "$status" -eq 0 ]

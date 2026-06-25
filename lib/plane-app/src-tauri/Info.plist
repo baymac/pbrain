@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the app's Info.plist by Tauri (bundle.macOS.infoPlist).
+
+  App Transport Security: macOS blocks cleartext http:// by default. It grants an
+  automatic exception for the literal host "localhost", but NOT for *.localhost
+  subdomains like "plane.localhost" — which is why an app pointed at the vanity
+  vhost loads a blank screen. We add an explicit exception for the Plane host so
+  the local cleartext instance loads.
+
+  init-plane.sh templates __ATS_HOST__ with the resolved Plane hostname at build
+  time. The committed default is plane.localhost (the usual vhost); NSAllowsLocalNetworking
+  plus the per-domain exception together cover loopback + *.localhost cases.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>plane.localhost</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>

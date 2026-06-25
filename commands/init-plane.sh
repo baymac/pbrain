@@ -44,11 +44,13 @@
 #                         --client-secret, --private-key <pem path>,
 #                         --silo-base-url, --plane-home, --no-restart, --remove.
 #   app [flags]           Package the running Plane instance as a native macOS
-#                         app via Pake (a Tauri webview wrapper) and install it to
-#                         /Applications. Mirrors vhost/github: idempotent, guides
-#                         (doesn't auto-install) its Pake dependency. NOTE: unlike
-#                         a browser, the app's WKWebView has NO RFC 6761
-#                         `*.localhost` resolution, so a vhost host like
+#                         app (a Tauri v2 shell, source in lib/plane-app/) that
+#                         registers a `plane://` URL scheme for DEEP LINKING, and
+#                         install it to /Applications. Replaces the old Pake build
+#                         (Pake couldn't deep-link). Mirrors vhost/github:
+#                         idempotent, guides (doesn't auto-install) its cargo/tauri
+#                         toolchain. NOTE: unlike a browser, the app's WebView has
+#                         NO RFC 6761 `*.localhost` resolution, so a vhost host like
 #                         plane.localhost must be in /etc/hosts or the app renders
 #                         blank — the command detects this and prints the one-line
 #                         `sudo` fix rather than running sudo itself. macOS only.
@@ -214,7 +216,8 @@ case "$SUB" in
     echo "configured: $(_plane_configured)"
     echo "default_url: $DEFAULT_URL"
     echo "setup_url: $SETUP_URL"
-    echo "pake: $(_have pake && echo yes || echo no)"
+    echo "cargo: $(_have cargo && echo yes || echo no)"
+    echo "tauri_cli: $(cargo tauri --version >/dev/null 2>&1 && echo yes || echo no)"
     echo "app_installed: $( [[ -d "/Applications/Plane.app" ]] && echo yes || echo no )"
     vhost_env="$(_vhost_envfile 2>/dev/null || true)"
     if [[ -n "$vhost_env" && -f "$vhost_env" ]]; then
@@ -573,14 +576,19 @@ PYEOF
     ;;
 
   app)
-    # PB-136: package the running Plane instance as a native macOS app via Pake
-    # (a Tauri/WKWebView wrapper) and install it to /Applications. Idempotent;
-    # guides (never auto-installs) its Pake dependency, the same way `up` guides
-    # Docker. The app carries the browser-facing vanity URL (_app_url) so it looks
-    # and behaves like the site in a browser — EXCEPT for one thing: the webview
-    # resolves hostnames through the OS, with no RFC 6761 *.localhost shortcut, so
-    # a vhost name like plane.localhost must be in /etc/hosts or the app loads
-    # blank. We detect that and print the one-line sudo fix instead of running it.
+    # PB-136 / PB-148: package the running Plane instance as a native macOS app and
+    # install it to /Applications. The app is a Tauri v2 shell (source in
+    # lib/plane-app/) that registers a `plane://` URL scheme, so issue links open
+    # straight inside the app (deep linking) — something the old Pake wrapper could
+    # not do (Pake ignores any URL passed on launch). Idempotent; guides (never
+    # auto-installs) its cargo/tauri toolchain the same way `up` guides Docker.
+    #
+    # The app carries the browser-facing vanity URL (_app_url) so it looks and
+    # behaves like the site — EXCEPT the webview resolves hostnames through the OS,
+    # with no RFC 6761 *.localhost shortcut, so a vhost name like plane.localhost
+    # must be in /etc/hosts or the app loads blank. We detect that and print the
+    # one-line sudo fix instead of running it. The resolved URL is templated into
+    # the app's single PLANE_BASE (window start URL + plane:// deep-link target).
     NAME="Plane"; APP_URL=""; A_HOST=""; A_PORT=""; DO_REMOVE=no; NO_INSTALL=no
     PLANE_HOME_OVERRIDE=""
     ICON_URL="https://plane.so/favicon/android-chrome-512x512.png"
@@ -617,13 +625,29 @@ PYEOF
       exit 0
     fi
 
-    # Pake is required; guide rather than auto-install (matches `up`'s Docker flow).
-    if ! _have pake; then
-      echo "INIT_PLANE_APP_NEED_PAKE Pake CLI isn't installed."
-      echo "Install it (needs Node >= 18, Rust auto-installs on first build):"
-      echo "  npm install -g pake-cli"
+    # The Tauri toolchain is required; guide rather than auto-install (matches
+    # `up`'s Docker flow). Need both `cargo` (Rust) and the v2 `cargo tauri` CLI.
+    if ! _have cargo; then
+      echo "INIT_PLANE_APP_NEED_TAURI Rust's cargo isn't installed."
+      echo "Install Rust (https://rustup.rs), then the Tauri CLI:"
+      echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+      echo "  cargo install tauri-cli --version \"^2\""
       echo "then re-run: /init-plane app"
       exit 0
+    fi
+    if ! cargo tauri --version >/dev/null 2>&1; then
+      echo "INIT_PLANE_APP_NEED_TAURI the Tauri v2 CLI isn't installed."
+      echo "Install it (compiles from source — a few minutes):"
+      echo "  cargo install tauri-cli --version \"^2\""
+      echo "then re-run: /init-plane app"
+      exit 0
+    fi
+
+    # Locate the app source shipped with pbrain.
+    APP_SRC="$_SCRIPT_DIR/../lib/plane-app"
+    if [[ ! -f "$APP_SRC/src-tauri/tauri.conf.json" ]]; then
+      echo "INIT_PLANE_APP_ERROR app source not found at $APP_SRC" >&2
+      exit 1
     fi
 
     # Resolve the URL: explicit --url wins; else --host/--port compose one; else
@@ -635,6 +659,7 @@ PYEOF
         APP_URL="$(_app_url)"
       fi
     fi
+    APP_URL="${APP_URL%/}"   # normalize: no trailing slash (we template a bare base)
 
     # Pull the bare host out of the URL for the /etc/hosts resolution check.
     URL_HOST="$(printf '%s\n' "$APP_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')"
@@ -660,33 +685,104 @@ PYEOF
       exit 0
     fi
 
-    # Fetch the icon to a temp PNG; fall back to Pake's favicon auto-fetch if the
-    # download isn't a real image.
-    ICON_TMP="$(mktemp -t plane-icon).png"
-    ICON_ARGS=()
-    if _have curl && curl -fsSL -o "$ICON_TMP" "$ICON_URL" 2>/dev/null \
-        && file "$ICON_TMP" 2>/dev/null | grep -qi "PNG image"; then
-      ICON_ARGS=(--icon "$ICON_TMP")
-    else
-      echo "INIT_PLANE_APP_WARN couldn't fetch a PNG icon — building with Pake's auto-fetched favicon."
+    # Copy the app source into a writable build dir under the managed Plane home,
+    # so the repo's source tree (and its committed localhost default) stays pristine
+    # and re-runs are clean. rsync without target/ keeps the build incremental.
+    BUILD_DIR="$PLANE_HOME/plane-app-build"; mkdir -p "$BUILD_DIR"
+    rsync -a --delete --exclude 'target' --exclude 'node_modules' --exclude 'gen' \
+      "$APP_SRC/" "$BUILD_DIR/"
+
+    # Template the resolved URL into the single PLANE_BASE that drives BOTH the
+    # window start URL and the plane:// deep-link target. The committed default is
+    # http://localhost:1800 in two spots; rewrite both in the build copy only.
+    CONF="$BUILD_DIR/src-tauri/tauri.conf.json"
+    LIBRS="$BUILD_DIR/src-tauri/src/lib.rs"
+    # tauri.conf.json window url: "http://localhost:1800/" -> "<APP_URL>/"
+    python3 - "$CONF" "$APP_URL" <<'PYEOF'
+import sys
+path, base = sys.argv[1], sys.argv[2].rstrip('/')
+s = open(path).read()
+s = s.replace('"http://localhost:1800/"', '"%s/"' % base)
+open(path, 'w').write(s)
+PYEOF
+    # lib.rs PLANE_BASE const (marked with __PLANE_BASE__): swap the bare base.
+    python3 - "$LIBRS" "$APP_URL" <<'PYEOF'
+import sys
+path, base = sys.argv[1], sys.argv[2].rstrip('/')
+s = open(path).read()
+s = s.replace('"http://localhost:1800"; // __PLANE_BASE__',
+              '"%s"; // __PLANE_BASE__' % base)
+open(path, 'w').write(s)
+PYEOF
+    if ! grep -q "$APP_URL" "$LIBRS" 2>/dev/null; then
+      echo "INIT_PLANE_APP_WARN could not template PLANE_BASE — app will target localhost:1800."
     fi
 
-    # Build into the managed Plane home (keeps the .app bundle out of cwd).
-    BUILD_DIR="$PLANE_HOME"; mkdir -p "$BUILD_DIR"
-    echo "building $NAME.app with Pake (compiles a Rust binary — a few minutes)…"
-    if ! ( cd "$BUILD_DIR" && pake "$APP_URL" \
-            --name "$NAME" \
-            "${ICON_ARGS[@]}" \
-            --width 1400 --height 900 \
-            --hide-title-bar --dark-mode --enable-find \
-            --activation-shortcut "CmdOrControl+Shift+P" \
-            --targets app ); then
-      echo "INIT_PLANE_APP_ERROR Pake build failed — see the output above." >&2
-      rm -f "$ICON_TMP"
-      exit 1
+    # App Transport Security: macOS auto-exempts the literal host "localhost" from
+    # its cleartext-http block, but NOT *.localhost subdomains (so an app pointed at
+    # plane.localhost otherwise loads blank). Template the resolved host into the
+    # merged Info.plist's ATS exception so the local http instance loads regardless
+    # of host. URL_HOST was extracted above for the /etc/hosts check.
+    PLIST="$BUILD_DIR/src-tauri/Info.plist"
+    if [[ -f "$PLIST" ]]; then
+      python3 - "$PLIST" "$URL_HOST" <<'PYEOF'
+import sys
+path, host = sys.argv[1], sys.argv[2]
+s = open(path).read()
+s = s.replace('<key>plane.localhost</key>', '<key>%s</key>' % host)
+open(path, 'w').write(s)
+PYEOF
+    fi
+
+    # Set the app/window display name to --name if customized.
+    if [[ "$NAME" != "Plane" ]]; then
+      python3 - "$CONF" "$NAME" <<'PYEOF'
+import sys, json
+path, name = sys.argv[1], sys.argv[2]
+c = json.load(open(path))
+c['productName'] = name
+for w in c.get('app', {}).get('windows', []):
+    if w.get('label') == 'main':
+        w['title'] = name
+json.dump(c, open(path, 'w'), indent=2)
+PYEOF
+    fi
+
+    # Fetch the icon to a PNG and regenerate the bundle icon set (.icns) from it.
+    ICON_TMP="$(mktemp -t plane-icon).png"
+    if _have curl && curl -fsSL -o "$ICON_TMP" "$ICON_URL" 2>/dev/null \
+        && file "$ICON_TMP" 2>/dev/null | grep -qi "PNG image"; then
+      cp "$ICON_TMP" "$BUILD_DIR/src-tauri/icons/icon.png"
+      ( cd "$BUILD_DIR/src-tauri/icons"
+        sips -z 32 32   icon.png --out 32x32.png >/dev/null 2>&1 || true
+        sips -z 128 128 icon.png --out 128x128.png >/dev/null 2>&1 || true
+        sips -z 256 256 icon.png --out 128x128@2x.png >/dev/null 2>&1 || true
+        ISET=icon.iconset; mkdir -p "$ISET"
+        for s in 16 32 128 256 512; do sips -z $s $s icon.png --out "$ISET/icon_${s}x${s}.png" >/dev/null 2>&1 || true; done
+        sips -z 32 32 icon.png --out "$ISET/icon_16x16@2x.png" >/dev/null 2>&1 || true
+        sips -z 64 64 icon.png --out "$ISET/icon_32x32@2x.png" >/dev/null 2>&1 || true
+        sips -z 256 256 icon.png --out "$ISET/icon_128x128@2x.png" >/dev/null 2>&1 || true
+        sips -z 512 512 icon.png --out "$ISET/icon_256x256@2x.png" >/dev/null 2>&1 || true
+        iconutil -c icns "$ISET" -o icon.icns >/dev/null 2>&1 || true
+        rm -rf "$ISET" )
+    else
+      echo "INIT_PLANE_APP_WARN couldn't fetch a PNG icon — building with the bundled Plane icon."
     fi
     rm -f "$ICON_TMP"
-    BUILT_APP="$BUILD_DIR/$NAME.app"
+
+    echo "building $NAME.app with Tauri (compiles a Rust binary — a few minutes)…"
+    if ! ( cd "$BUILD_DIR" && cargo tauri build --bundles app ); then
+      echo "INIT_PLANE_APP_ERROR Tauri build failed — see the output above." >&2
+      exit 1
+    fi
+    BUILT_APP="$BUILD_DIR/src-tauri/target/release/bundle/macos/Plane.app"
+    # Honor a custom --name: the bundle is named from productName, so it is already
+    # "$NAME.app"; recompute the path generically.
+    BUILT_APP="$(find "$BUILD_DIR/src-tauri/target/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)"
+    if [[ -z "$BUILT_APP" || ! -d "$BUILT_APP" ]]; then
+      echo "INIT_PLANE_APP_ERROR build produced no .app bundle" >&2
+      exit 1
+    fi
 
     if [[ "$NO_INSTALL" == yes ]]; then
       echo "built (not installed): $BUILT_APP"
@@ -696,19 +792,24 @@ PYEOF
 
     # Install to /Applications: replace any existing copy, clear the Gatekeeper
     # quarantine flag so the unsigned app opens without the 'unidentified
-    # developer' block.
+    # developer' block, and register the plane:// scheme with Launch Services
+    # (macOS only binds a custom scheme from an app under /Applications).
     osascript -e "quit app \"$NAME\"" >/dev/null 2>&1 || true
     rm -rf "$APP_PATH"
-    cp -R "$BUILT_APP" /Applications/
+    cp -R "$BUILT_APP" "$APP_PATH"
     xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
     echo "installed: $APP_PATH"
     echo "next steps:"
     echo "  1) launch it:           open -a \"$NAME\""
-    echo "  2) global toggle:       Cmd+Shift+P (may need Accessibility permission on first use)"
-    echo "  3) in-app find:         Cmd+F"
-    echo "  4) rebuild any time:    /init-plane app"
-    echo "  5) remove it:           /init-plane app --remove"
+    echo "  2) deep link an issue:  open 'plane://pb/browse/PB-110'"
+    echo "  3) or convert a link:   $APP_SRC/plane-open.sh 'http://plane.localhost:1800/pb/browse/PB-110'"
+    echo "  4) in-app find:         Cmd+F"
+    echo "  5) rebuild any time:    /init-plane app"
+    echo "  6) remove it:           /init-plane app --remove"
     echo "note: the app only works while your Docker Plane containers are running."
+    echo "note: first launch shows Plane's login — after you sign in, deep links land on the issue."
     ;;
 
   host)
