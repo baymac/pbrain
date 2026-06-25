@@ -1943,6 +1943,39 @@ def enqueue_ordered(cfg, client, ordered_rows):
     return out
 
 
+def rank_done_by_completion(cfg, client, project_ids):
+    """PB-146: order each project's Done column newest-completed-first. Plane's board
+    sorts a column by sort_order ascending, so we stamp the most-recently-completed
+    issue with the SMALLEST sort_order. Touches only sort_order (no state change) on
+    completed-group issues; issues without a completed_at sink to the bottom. Idempotent
+    — re-running reproduces the same ranking. Per-row best-effort; returns a summary."""
+    out = []
+    for pid in project_ids:
+        try:
+            items = client.list_work_items(pid)
+            states = client.list_states(pid)
+        except PlaneError as e:
+            out.append({"project_id": pid, "ok": False, "error": str(e)})
+            continue
+        sbi = {s["id"]: s for s in states}
+        done = [it for it in items
+                if GROUP_TO_STATUS.get(state_group(it, sbi)) == "done"]
+        # Newest completed_at first → smallest sort_order. Missing completed_at sorts
+        # last (empty string is < any real ISO timestamp, so negate via the flag).
+        done.sort(key=lambda it: (it.get("completed_at") or "",), reverse=True)
+        rank = 0.0
+        for it in done:
+            rank += 1000.0
+            try:
+                client.update_work_item(pid, it.get("id"), {"sort_order": rank})
+                out.append({"tie": "%s:%s" % (pid, it.get("id")), "ok": True,
+                            "sort_order": rank})
+            except PlaneError as e:
+                out.append({"tie": "%s:%s" % (pid, it.get("id")), "ok": False,
+                            "error": str(e)})
+    return out
+
+
 def progress(cfg, client, project_ids, since=None):
     """Per-project progress: status counts, weighted pct, items completed since
     `since`. Keyed by project id. Best-effort — a project that errors yields an
@@ -3478,7 +3511,9 @@ def cmd_queued(args):
 def cmd_enqueue(args):
     """PB-141: groom writes the computed run queue into Plane — move the ordered set
     into the Queued state with ascending sort_order. Input is the ordered ready
-    stream (ready --ordered); we re-read it here so groom stays a thin caller."""
+    stream (ready --ordered); we re-read it here so groom stays a thin caller.
+    PB-146: also rank each project's Done column newest-completed-first (--no-done
+    skips it)."""
     cfg = load_config()
     client = make_client(cfg)
     ids = (project_ids_from_arg(cfg, args.projects) if getattr(args, "projects", None)
@@ -3487,7 +3522,10 @@ def cmd_enqueue(args):
     if not ids:
         raise PlaneError("no project id — pass --project/--projects or set it in setup")
     ordered = ready_multi(cfg, client, ids, ordered=True)
-    print(json.dumps(enqueue_ordered(cfg, client, ordered), ensure_ascii=False))
+    result = {"queued": enqueue_ordered(cfg, client, ordered)}
+    if not getattr(args, "no_done", False):
+        result["done_ranked"] = rank_done_by_completion(cfg, client, ids)
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -4006,6 +4044,8 @@ def build_parser():
     sp = sub.add_parser("enqueue")
     sp.add_argument("--project")
     sp.add_argument("--projects", help="comma-separated project refs (uuid|name|shortcut)")
+    sp.add_argument("--no-done", action="store_true",
+                    help="PB-146: skip ranking the Done column by completed_at")
     sp.set_defaults(func=cmd_enqueue)
 
     sp = sub.add_parser("resolve"); sp.add_argument("--ties", required=True); sp.set_defaults(func=cmd_resolve)

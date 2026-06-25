@@ -268,6 +268,39 @@ PYEOF
   [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
 }
 
+@test "PB-146 rank_done_by_completion: Done column ranked newest-completed-first (smallest sort_order)" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+class FakeClient:
+    def __init__(self): self.patches=[]
+    def list_states(self, pid): return [
+        {"id":"d","name":"Done","group":"completed"},
+        {"id":"t","name":"Todo","group":"unstarted"}]
+    def list_work_items(self, pid): return [
+        {"id":"a","state":"d","completed_at":"2026-06-20T10:00:00Z"},
+        {"id":"b","state":"d","completed_at":"2026-06-25T10:00:00Z"},  # newest
+        {"id":"c","state":"d","completed_at":""},                       # no date → last
+        {"id":"z","state":"t","completed_at":""},                       # not Done → ignored
+    ]
+    def update_work_item(self, pid, iid, body): self.patches.append((iid, body))
+
+fc = FakeClient()
+out = m.rank_done_by_completion({}, fc, ["p"])
+ranked = [(iid, body["sort_order"]) for iid, body in fc.patches]
+# Only Done issues touched; the Todo issue z is never patched.
+assert [iid for iid,_ in ranked] == ["b","a","c"], ranked   # newest→oldest→undated
+# newest (b) gets the smallest sort_order so it floats to the top of the column
+assert ranked[0][1] < ranked[1][1] < ranked[2][1], ranked
+assert all(set(body.keys())=={"sort_order"} for _,body in fc.patches)  # state untouched
+assert all(r.get("ok") for r in out)
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]; [[ "$output" == *ok* ]]
+}
+
 @test "PB-130 STAGE_TO_STATE maps the auto-exec stages to pipeline states" {
   run python3 - "$PLANE" <<'PYEOF'
 import sys, importlib.util
