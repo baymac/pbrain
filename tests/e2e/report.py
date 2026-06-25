@@ -65,9 +65,19 @@ def main(argv):
             return ("skip", "SKIP")
         return ("ok", "PASS") if r.get("passed") else ("bad", "FAIL")
 
-    # A "live" run is one whose transcript shows the two-real-model conversation.
-    def _live_badge(r):
-        return " <span class='badge live'>LIVE</span>" if "skill model ↔ persona model" in r.get("transcript", "") else ""
+    # Fidelity badge. LIVE = a real two-model conversation drove the real skill and
+    # the model wrote the artifact. SCRIPT-ONLY = the command script ran and its
+    # emitted instructions were checked, but the driver replayed the agent's write,
+    # so the model's BEHAVIOUR was not exercised. Skipped runs get neither.
+    def _is_live(r):
+        return "skill model ↔ persona model" in r.get("transcript", "")
+
+    def _fidelity_badge(r):
+        if r.get("skipped"):
+            return ""
+        if _is_live(r):
+            return " <span class='badge live' title='Real skill driven by a real model; the model wrote the artifact.'>LIVE</span>"
+        return " <span class='badge scriptonly' title='The command script ran and its emitted instructions were asserted, but the driver replayed the agent file-write — the model was NOT exercised.'>SCRIPT-ONLY</span>"
 
     rows = []
     for r in runs:
@@ -95,7 +105,7 @@ def main(argv):
             "<h4>Seams (not verified by harness)</h4>{sh}"
             "</details>".format(
                 cls=cls, s=_esc(r.get("display") or r.get("scenario")),
-                p=_esc(r.get("persona")), live=_live_badge(r),
+                p=_esc(r.get("persona")), live=_fidelity_badge(r),
                 m=mark, e=_esc(r.get("expect")),
                 tr=_esc(r.get("transcript", "")),
                 track=_tracking_html(r),
@@ -127,6 +137,7 @@ summary{{cursor:pointer;font-size:14px}}
 .badge.bad{{background:rgba(207,34,46,.2);color:var(--bad)}}
 .badge.skip{{background:rgba(210,153,34,.2);color:#d29922}}
 .badge.live{{background:rgba(56,139,253,.2);color:#58a6ff}}
+.badge.scriptonly{{background:rgba(139,148,158,.2);color:#8b949e}}
 .summary .skip{{color:#d29922}}
 tr.skip td.m{{color:#d29922}}
 details.skip{{border-color:#d29922}}
@@ -140,7 +151,8 @@ footer{{padding:16px 24px;color:var(--mut);border-top:1px solid var(--bd);font-s
 </style></head><body>
 <header>
 <h1>pbrain · e2e report</h1>
-<div class=sub>generated {stamp} · standalone (no external assets) · {total} runs (scenario × persona) · <span class=badge style="background:rgba(56,139,253,.2);color:#58a6ff">LIVE</span> = real two-model conversation</div>
+<div class=sub>generated {stamp} · standalone (no external assets) · {total} runs (scenario × persona)</div>
+<div class=sub style="margin-top:6px"><span class=badge style="background:rgba(56,139,253,.2);color:#58a6ff">LIVE</span> real skill + real model wrote the artifact (end-to-end) &nbsp;·&nbsp; <span class=badge style="background:rgba(139,148,158,.2);color:#8b949e">SCRIPT-ONLY</span> the command script ran and its emitted instructions were asserted, but the driver replayed the file-write — the model was NOT exercised</div>
 <div class=summary><span class=ok>● {passed} passed</span><span class=bad>● {failed} failed</span><span class=skip>● {skipped} skipped</span></div>
 </header>
 <main>
