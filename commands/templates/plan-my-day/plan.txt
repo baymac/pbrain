@@ -133,7 +133,9 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     - If `fitness_sleep` is the "(not recorded — ask the user)" sentinel
       (an internal marker — never show it): open with "Before we plan — what
       time did you wake up?" (compute hours if they volunteer bed time too;
-      flag < 7h).
+      flag < 7h). Record ONLY what they actually give — never assume or infer a
+      typical wake/bed time, and never carry over a guessed value; if they don't
+      answer, leave it unrecorded rather than fill in a plausible time.
   1b — BACKFILL. Ask: "What have you done since waking until now?" Take
     whatever they say (work, meals, errands, scrolling — all of it) and slot
     it into time ranges YOURSELF, marked ✓ — gap-free, no overlaps, from wake

@@ -279,6 +279,66 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"sleep_bed:"* && "$output" == *"sleep_wake:"* && "$output" == *"sleep_hours:"* ]]
 }
 
+@test "Step 4 asks for sleep and is given-or-blank, never carried or fabricated (PB-110)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # Final contract: sleep is mandatory to ASK, written only from what the user gives
+  # this session, else BLANK. No carry-forward, no profile window, no inference.
+  [[ "$output" == *"mandatory to surface"* ]]
+  [[ "$output" == *"SLEEP GIVEN THIS SESSION"* ]]
+  [[ "$output" == *"leave all four sleep_* BLANK"* ]]
+  [[ "$output" == *"false data"* ]]
+  # Carry-forward must be GONE from the instructions entirely.
+  [[ "$output" != *"CARRY FORWARD"* ]]
+  [[ "$output" != *"carried forward"* ]]
+  [[ "$output" != *"MOST RECENT SLEEP"* ]]
+}
+
+@test "a prior session's sleep is NOT pulled into today's context (PB-110, no carry)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  # A prior session that recorded sleep — under the old contract this was the
+  # carry-forward source; under the final contract it must NOT surface at all.
+  cat > "$TRACKING/2026-06-20.md" <<EOF
+---
+type: fitness
+date: 2026-06-20
+activity: gym
+sleep_bed: 23:40
+sleep_wake: 07:10
+sleep_quality: 7
+sleep_hours: 7.5
+---
+# Gym
+EOF
+  run FIT
+  # No carry-forward mechanism: the dedicated sleep-source block is gone entirely,
+  # so the prior night is never presented AS today's sleep source. (The raw file
+  # still appears verbatim in the RECENT SESSIONS dump — that's context, not a
+  # sleep source — so we assert on the source machinery, not the substring.)
+  [[ "$output" != *"MOST RECENT SLEEP"* ]]
+  [[ "$output" != *"most recent session (2026-06-20)"* ]]
+  [[ "$output" != *"CARRY FORWARD"* ]]
+  [[ "$output" != *"carried forward"* ]]
+}
+
+@test "the profile typical window is never offered as a sleep source (PB-110)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # write_overall_profile sets the window to 23:00/07:00 — it must never appear as a
+  # sleep value, and the instructions must forbid using it.
+  [[ "$output" != *"profile typical sleep window"* ]]
+  [[ "$output" != *"sleep_bed: 23:00"* ]]
+  [[ "$output" != *"sleep_wake: 07:00"* ]]
+  # The instructions explicitly forbid copying the profile's typical window.
+  [[ "$output" == *"profile's typical sleep window"* ]]
+}
+
 @test "daily flow opens with a skippable readiness check-in, logger-framed" {
   write_overall_profile
   write_library
@@ -287,6 +347,19 @@ days_ago() { python3 -c "import datetime,sys; print((datetime.date.today()-datet
   [[ "$output" == *"flexible LOGGER"* && "$output" == *"Quick check-in"* \
      && "$output" == *"LOGGER, not an interrogation"* \
      && "$output" == *"straight to logging"* ]]
+}
+
+@test "sleep is mandatory to ask even when the check-in is skipped (PB-110, revised)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT
+  # Step 1 must carve sleep out of the skip: the check-in is skippable, the one
+  # sleep line is not, and it is asked once and never force-filled or invented.
+  [[ "$output" == *"sleep is the one mandatory field"* ]]
+  [[ "$output" == *"ALWAYS ask"* ]]
+  [[ "$output" == *"still confirm the one sleep line"* ]]
+  [[ "$output" == *"a value the user did not give is false data"* ]]
 }
 
 @test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {

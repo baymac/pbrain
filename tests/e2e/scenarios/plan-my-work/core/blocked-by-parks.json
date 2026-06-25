@@ -1,0 +1,54 @@
+{
+"_doc": "Blocker can't finish \u2192 primary never starts. PB-814 is blocked_by [PB-813]; PB-813 has only auto:plan, so with the cautious persona it PARKS at implement. The loop must NOT begin the primary (no PB-814 move\u2192doing). Terminal: park:PB-813:implement.",
+"primary_id": "PB-814",
+"base_branch": "main",
+"web_base": "http://plane.localhost:1800/pb",
+"gh_present": "yes",
+"test_result": "green",
+"ci_result": "green",
+"expect": "park:PB-813:implement",
+"display": "blocked-by-parks (blocker PB-813 parks \u2192 primary PB-814 never starts)",
+"issues": [
+{
+"tie": "proj-uuid:issue-uuid-813",
+"id": "PB-813",
+"id_slug": "pb813-blocker",
+"title": "Blocker that parks",
+"approved": false,
+"has_plan": false,
+"auto_gates": [
+"plan"
+],
+"blocked_by": [],
+"subtree": [],
+"state": "Todo",
+"project": "pb"
+},
+{
+"tie": "proj-uuid:issue-uuid-814",
+"id": "PB-814",
+"id_slug": "pb814-primary",
+"title": "Primary that must wait",
+"approved": true,
+"has_plan": true,
+"auto_gates": [
+"plan",
+"implement",
+"test",
+"ship",
+"land"
+],
+"blocked_by": [
+"PB-813"
+],
+"subtree": [],
+"state": "Todo",
+"project": "pb"
+}
+],
+"personas": [
+"cautious"
+],
+"command": "plan-my-work",
+"feature": "core"
+}

@@ -695,6 +695,11 @@ print("\n\n".join(parts) if parts else "(no previous sessions)")
 PYEOF
 )"
 
+# Sleep is given-or-blank: it is mandatory to ASK (Step 1), written only from what
+# the user gives THIS session, and otherwise left blank. There is deliberately no
+# carry-forward from prior sessions and no profile-window fallback — a value the
+# user did not give is an assumption, and an assumed sleep reading is false data.
+
 # Bundle every activity profile (highest COMMITTED version per slug — an open
 # draft must not shadow the committed version below it).
 ACTIVITY_PROFILES="$(python3 - "$ACT_STORE" <<'PYEOF' 2>/dev/null || true
@@ -858,6 +863,10 @@ Step 2 — Based on intent:
 
 Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep the
   \`activity:\`/\`focus:\` and \`sleep_*\` frontmatter intact (plan-my-day reads them).
+  If any sleep_* field is BLANK, leave it BLANK unless the user gives the value
+  now. Do NOT carry it forward from a prior entry, do NOT copy the profile's typical
+  window, do NOT invent a value — a sleep reading the user did not give is false
+  data, and a blank field is the honest state.
   Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
   session is done, \`partial\` if partly done, \`planned\` while still plan-only.
 
@@ -911,24 +920,35 @@ DATE — today is date_human above ($TODAY_HUMAN). Use it VERBATIM for the weekd
 and date. NEVER compute or guess the day of the week yourself — copy day_of_week
 ($DOW) / date_human exactly. (This is the local machine time; it is authoritative.)
 
-Step 1 — QUICK CHECK-IN (skippable). If a standing preference above says to skip
-  the check-in, SKIP this whole step and go to Step 2. Otherwise present it as one
-  quick batch — the user may answer some, all, or none:
+Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above says to
+  skip the check-in, SKIP the rest of this step — BUT sleep is the one mandatory
+  field, so still ask the ONE sleep line (item 3) before moving to Step 2. Otherwise
+  present the whole batch as one quick batch — the user may answer some, all, or
+  none:
   "Quick check-in (or say 'skip'):"
   1. Energy level? (1–10)
   2. Soreness, pain, or injury? Which muscles (1–10), flag anything acute or a
      movement to work around. PRE-FILL from RECENT SESSIONS + the activity
      profiles' notes, e.g. "(Last few days: lower back 3/10 on the chest day,
      right knee 6/10 after football last night)".
-  3. Sleep: what time to bed, what time awake, and quality 1–10?
+  3. Sleep (ALWAYS ask — this is mandatory to surface, never silently filled):
+     what time to bed, what time awake, and quality 1–10? Ask plainly, with NO
+     prefilled default. Write ONLY what the user gives this session. Do NOT carry a
+     value forward from a prior entry, do NOT offer the profile's typical window,
+     do NOT assume any time — a value the user did not give is false data; a blank
+     field is honest.
   4. Stress? (low / medium / high)
   5. Bodyweight today? (kg — skip if you don't have it)
-  This is a LOGGER, not an interrogation — never block. If the user just states
-  what they DID or are PLANNING, skip the rest and go straight to logging.
-  IF THE USER SAYS "SKIP" (or ignores it): drop it and move to Step 2, then ask
+  This is a LOGGER, not an interrogation — never block. Ask the sleep line ONCE; if
+  the user skips or ignores it, leave sleep_* blank (Step 4c) — do not nag, do not
+  invent. If the user just states what they DID or are PLANNING, ask the one sleep
+  line and otherwise go straight to logging.
+  IF THE USER SAYS "SKIP" (or ignores it): drop the rest — but still ask the one
+  sleep line — move to Step 2, then ask
   ONCE — "Want me to skip this check-in from now on?" On a yes, fold this standing
   preference INTO the fitness profile (at $FITNESS_PROFILE_FILE): append
-  "Skip the quick check-in; go straight to the day's picture." to the top-level
+  "Skip the quick check-in (still confirm the one sleep line); go straight to the
+  day's picture." to the top-level
   "prefs" array in its fenced JSON block (create the array if absent), editing the
   file IN PLACE — do NOT mint a new profile version. Never write it without an
   explicit yes. From then on the standing-pref check above (re-injected from the
@@ -969,12 +989,23 @@ Step 3 — PARSE the description into the chosen activity's KPIs, EXPLODING it i
     \`kpis\` for it yet), use the derived defaults now and remember to offer to
     save them in Step 7.
 
-Step 4 — Fold in whatever state they gave (don't re-ask). From bed + wake times
-  INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
-  and write the four sleep_* fields; leave them blank when not given (plan-my-day
-  and the Sleep-well habit read sleep_*). If a flag stands out — short sleep, high
-  soreness on what they're loading, low energy — note it in ONE line and, if it
-  fits, suggest scaling back. Never prescribe and never block; they decide.
+Step 4 — Fold in whatever state they gave, then set the four sleep_* fields by this
+  precedence. plan-my-day and the Sleep-well habit read sleep_*, but a WRONG value is
+  worse than a blank one — so NEVER write a sleep value the user did not give, and
+  NEVER invent or carry one:
+    a) SLEEP GIVEN THIS SESSION (asked in Step 1, or volunteered) — from bed + wake
+       INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
+       and write all four. This is a fresh reading; no provenance note needed.
+    b) ELSE leave all four sleep_* BLANK. This covers any case where the user did
+       not give sleep this session — they skipped the question, or there's nothing
+       on record. Do NOT carry a value forward from a prior entry, do NOT copy the
+       profile's typical sleep window, do NOT assume a usual bedtime, do NOT infer a
+       plausible value. A value the user did not give is false data; a blank field
+       is the correct, honest state. The skill wants the data and asks for it — but
+       if the user withholds it, that is fine, and the field stays blank.
+  If a flag stands out — short sleep, high soreness on what they're loading, low
+  energy — note it in ONE line and, if it fits, suggest scaling back. Never prescribe
+  and never block; they decide.
 
 Step 5 — GENERATE a plan-ahead session, or stay the logger (logger-first):
   From Step 2's answer, pick ONE case.

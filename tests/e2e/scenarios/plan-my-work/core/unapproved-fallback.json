@@ -1,0 +1,29 @@
+{
+"_doc": "Mirrors PB-89 itself: approved=false, only auto:plan. Loop drafts+saves the plan, then PARKS at the implement gate (no auto:implement). Asserts WIP-commit + push + 'pbrain park:' breadcrumb + status stays doing. Terminal: park:implement (cautious persona, which approves no manual gate).",
+"id_slug": "pb901-fallback",
+"base_branch": "main",
+"web_base": "http://plane.localhost:1800/pb",
+"gh_present": "yes",
+"test_result": "green",
+"ci_result": "green",
+"expect": "park:implement",
+"issue": {
+"tie": "proj-uuid:issue-uuid-901",
+"id": "PB-901",
+"title": "Unapproved, only auto:plan",
+"approved": false,
+"has_plan": false,
+"auto_gates": [
+"plan"
+],
+"blocked_by": [],
+"comments": [],
+"state": "Todo",
+"project": "pb"
+},
+"personas": [
+"cautious"
+],
+"command": "plan-my-work",
+"feature": "core"
+}

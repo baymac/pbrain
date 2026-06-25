@@ -58,20 +58,20 @@ setup() {
 # Personas: fast (passes every manual gate) and cautious (passes none).
 
 @test "approved-fastpath × fast → reaches done (all auto:* + CI green)" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/approved-fastpath.json" \
-              "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/approved-fastpath.json" \
+              "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "approved-fastpath × cautious → reaches done (all gates auto, no manual go needed)" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/approved-fastpath.json" \
-              "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/approved-fastpath.json" \
+              "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "unapproved-fallback × cautious → drafts plan, parks at implement (durable)" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/unapproved-fallback.json" \
-              "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/unapproved-fallback.json" \
+              "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
@@ -86,46 +86,46 @@ d=json.load(open(sys.argv[1]))
 d["expect"]="done"
 d["display"]="unapproved-fallback (fast carries through to done)"
 json.dump(d,open(sys.argv[2],"w"))' \
-    "$E2E_DIR/scenarios/unapproved-fallback.json" "$variant"
-  run e2e_run "$REPO_ROOT" "$variant" "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+    "$E2E_DIR/scenarios/plan-my-work/core/unapproved-fallback.json" "$variant"
+  run e2e_run "$REPO_ROOT" "$variant" "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   rm -f "$variant"
   [ "$status" -eq 0 ]
 }
 
 @test "gh-absent-handback × fast → pushes branch, hands back URL, no fabricated PR" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/gh-absent-handback.json" \
-              "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/gh-absent-handback.json" \
+              "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "ci-red-hardstop × fast → auto:land + CI red hard-stops merge (no done)" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/ci-red-hardstop.json" \
-              "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/ci-red-hardstop.json" \
+              "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 # --- multi-loop: dependency-aware (blocked_by) + parent/sub-issues (PB-81) ---
 
 @test "blocked-by-chain × fast → blocker PB-811 lands first, then primary PB-812" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/blocked-by-chain.json" \
-              "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/blocked-by-chain.json" \
+              "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "blocked-by-parks × cautious → blocker parks, primary never starts" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/blocked-by-parks.json" \
-              "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/blocked-by-parks.json" \
+              "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "parent-subissues × fast → each child lands, parent PB-820 closed last" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/parent-subissues.json" \
-              "$E2E_DIR/personas/fast.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/parent-subissues.json" \
+              "$E2E_DIR/personas/fast/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }
 
 @test "unapproved-deep-park × cautious → auto through ship, parks at land (CI green)" {
-  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/unapproved-deep-park.json" \
-              "$E2E_DIR/personas/cautious.md" "$E2E_RESULTS"
+  run e2e_run "$REPO_ROOT" "$E2E_DIR/scenarios/plan-my-work/core/unapproved-deep-park.json" \
+              "$E2E_DIR/personas/cautious/persona.md" "$E2E_RESULTS"
   [ "$status" -eq 0 ]
 }

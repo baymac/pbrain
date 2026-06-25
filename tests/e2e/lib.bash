@@ -115,7 +115,13 @@ e2e_env_setup() {
   E2E_REAL_ROOT="$1"; E2E_SCENARIO_FILE="$2"; E2E_PERSONA_FILE="$3"
   local outdir="$4"
   E2E_SNAME="$(basename "$E2E_SCENARIO_FILE" .json)"
-  E2E_PNAME="$(basename "$E2E_PERSONA_FILE" .md)"
+  # Persona name: a per-persona dir is .../<name>/persona.md (the new layout), so
+  # take the PARENT dir name there; a flat <name>.md (legacy) uses its basename.
+  if [[ "$(basename "$E2E_PERSONA_FILE")" == "persona.md" ]]; then
+    E2E_PNAME="$(basename "$(dirname "$E2E_PERSONA_FILE")")"
+  else
+    E2E_PNAME="$(basename "$E2E_PERSONA_FILE" .md)"
+  fi
   E2E_PERSONA_NAME="$E2E_PNAME"
 
   E2E_WORK="$(mktemp -d)"
@@ -139,6 +145,24 @@ e2e_env_setup() {
   _tr ""
 }
 
+# Seed the persona's per-command fixtures into the real temp vault, if any. A
+# persona dir holds fixtures/<command>/ — a ready-made vault subtree (profile,
+# library, prior sessions). Copying it makes the real skill run against this
+# persona's pre-populated vault instead of an inline stub. No-op when the persona
+# has no fixtures for this command (first-run/setup path). Returns 0 if seeded.
+# e2e_seed_persona_fixtures <command> <dest_dir_under_vault>
+e2e_seed_persona_fixtures() {
+  local command="$1" dest="$2"
+  local persona_dir; persona_dir="$(dirname "$E2E_PERSONA_FILE")"
+  local fx="$persona_dir/fixtures/$command"
+  [[ -d "$fx" ]] || return 1
+  mkdir -p "$dest"
+  # copy contents (including dotfiles like .profile) into dest
+  cp -R "$fx/." "$dest/"
+  e2e_note "seeded $E2E_PNAME's $command fixtures into the vault ($(cd "$fx" && find . -type f | wc -l | tr -d ' ') files)"
+  return 0
+}
+
 # Fold subshell-recorded parse mismatches into the failure list. Call once before
 # computing pass/fail.
 e2e_fold_parse_fails() {
@@ -148,10 +172,12 @@ e2e_fold_parse_fails() {
 }
 
 # --- result emission --------------------------------------------------------
-# e2e_emit_result <pass:true|false> <tracking_kind> <tracking_json_path> <artifact>
+# e2e_emit_result <pass:true|false|skip> <tracking_kind> <tracking_json_path> <artifact>
 #   tracking_kind: plane-journal | vault-file | db-rows
 #   tracking_json_path: a file of JSON-lines (plane-journal/db-rows) or ""
 #   artifact: a string (vault-file: "<path>\n---\n<contents>"); or ""
+#   pass "skip": a real third state (e.g. live model unavailable) — recorded as
+#     skipped:true and NOT counted as a failure (the report badges it distinctly).
 # Writes the base result JSON, then _emit_arrays_json fills failures/seams
 # precisely (one element per entry, no space-splitting).
 e2e_emit_result() {
@@ -167,8 +193,11 @@ if tjson:
         tracking = [json.loads(l) for l in open(tjson) if l.strip()]
     except Exception:
         tracking = []
+skipped = (passed == "skip")
 json.dump({
-    "scenario": sname, "persona": pname, "passed": passed == "true",
+    "scenario": sname, "persona": pname,
+    "passed": (passed == "true") or skipped,
+    "skipped": skipped,
     "expect": expect, "display": display or sname,
     "transcript": transcript,
     "tracking_kind": kind, "tracking": tracking, "artifact": artifact,
