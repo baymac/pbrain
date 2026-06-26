@@ -36,6 +36,8 @@ Just describe what you ate. No upfront mode selection — the command opens with
 
 **Existing entry:** add new meals, swap items, or plan remaining slots. Recomputes totals and the "remaining" row in place.
 
+**Backfill a past day:** pass `--date YYYY-MM-DD` (or a bare `YYYY-MM-DD`) to log or close a previous day instead of today — `diet-journal.sh --date 2026-06-26` writes `fitness/diet-tracking/2026-06-26.md`. The chosen date drives the entry file, its `date:` frontmatter, and the fitness anchoring (it reads *that* day's session, not today's). No `--date` → today. This is how `/end-of-day` logs meals when closing a past day.
+
 Every entry includes:
 
 - Meal-by-meal macros table (calories, protein, carbs, fat, fiber) with `Total / Target / Remaining` rows.
