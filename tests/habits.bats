@@ -1853,6 +1853,9 @@ _plant_source_profiles() {
   grep -q '"id": "sleep-well"' "$PBRAIN_HABITS_PROFILE_FILE"
   # sleep-well bakes the normal window from the fitness profile
   grep -q '"normal_time": "23:15"' "$PBRAIN_HABITS_PROFILE_FILE"
+  # PB-109: Eat clean is seeded as slip_ladder (the intended model), NOT meal_ratio.
+  grep -q '"type": "slip_ladder"' "$PBRAIN_HABITS_PROFILE_FILE"
+  ! grep -q '"type": "meal_ratio"' "$PBRAIN_HABITS_PROFILE_FILE"
 }
 
 @test "seeding is idempotent on re-run" {

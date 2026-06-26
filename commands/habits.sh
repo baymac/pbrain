@@ -210,7 +210,11 @@ with ProfileLock(path) as lock:
             # Default scored habit: scoring lives in lib/habits.sh (score_from_spec)
             # + the /habits spec ("Default scored habits"), never in notes.
             "notes": "",
-            "scoring": {"type": "meal_ratio"},
+            # PB-109: slip_ladder is the INTENDED model for Eat clean (matches the
+            # committed profile). Inputs stay --good (clean meals) / --bad (unclean):
+            # slips = bad + max(0, good_target - good), score = ladder[min(slips, …)].
+            "scoring": {"type": "slip_ladder", "good_target": 3,
+                        "ladder": [1.0, 0.6, 0.3, 0]},
         })
         added.append("Eat clean (scored from your diet log)")
 

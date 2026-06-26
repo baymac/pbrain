@@ -437,7 +437,7 @@ without re-asking. Use the Edit tool on each file.
         today (4b), build the --session JSON (mode/status/planned/actual from
         the session log vs the activity plan) and mark it per the session_volume
         instructions. No movement today → skip.
-      • "Eat clean" (meal_ratio) — if diet_file exists and was reconciled in 4a,
+      • "Eat clean" (slip_ladder) — if diet_file exists and was reconciled in 4a,
         count CLEAN vs UNCLEAN meals from the closed diet log and mark it with
         --good <clean> --bad <unclean> per the HABIT EXTRACTION block. No diet
         log → skip.
@@ -495,7 +495,8 @@ without re-asking. Use the Edit tool on each file.
         - Score column: the 0–1 "score" field verbatim (e.g. 0.8); "—" when score is null.
         - Priority column: the "priority" field verbatim.
         - Basis column: derive a terse note from what you already know:
-            meal_ratio    → "X clean / Y unclean" meals
+            slip_ladder   → "X clean / Y unclean" meals (e.g. Eat clean)
+            meal_ratio    → "X clean / Y unclean" units (generic ratio habit)
             deviation     → "bed HH:MM vs HH:MM · N.Nh" (from fitness frontmatter)
             weighted_completion → "N/M tasks" or "X/Y pts" (from the work tracker)
             session_volume      → "Nkg / Mkg planned" or "completed / skipped"

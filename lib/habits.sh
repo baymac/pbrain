@@ -71,7 +71,7 @@
 # command's committed profile exists (or, for Deep work, the laptop tracker DB);
 # a command the user never set up — or disabled by never committing its profile
 # — seeds none of its habits (PB-39). The hard-coded command→habit map:
-#   /diet-journal     (committed diet profile)     → "Eat clean"   (meal_ratio).
+#   /diet-journal     (committed diet profile)     → "Eat clean"   (slip_ladder).
 #   /fitness-journal  (committed fitness profile)   → "Sleep well"  (deviation; normal window from it).
 #   /fitness-journal  (committed fitness-library)   → "Train"       (session_volume; any logged session)
 #                                                     + one per-activity habit per library activity.
@@ -866,7 +866,8 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
       are INDEPENDENT penalties and STACK — a short AND dirty day is worse than
       one that is only one of the two. (PB-142; they used to compete via max().)
 
-    "meal_ratio" (eat-clean): inputs good = clean MEALS, bad = unclean MEALS.
+    "meal_ratio" (a ratio-style alternative — NOT what Eat clean uses; Eat
+    clean is slip_ladder above): inputs good = clean MEALS, bad = unclean MEALS.
       score = good / (good + bad), rounded to 2 dp. The score depends on the
       NUMBER of meals — one slip out of 3 meals scores worse than one of 6.
 
@@ -1860,9 +1861,11 @@ print("\n".join(out))
   printf '%s\n' "where --good = qualifying units (e.g. clean home-cooked meals) and --bad ="
   printf '%s\n' "slip units (e.g. outside/junk meals). habits.sh applies the profile formula."
   printf '%s\n' "(If you've already reduced it to one slip count, pass --slips <N> instead.)"
-  printf '%s\n' "Meal-ratio scored habits (e.g. Eat clean): count clean vs unclean MEALS from"
+  printf '%s\n' "Slip-ladder scored habits (e.g. Eat clean): count clean vs unclean MEALS from"
   printf '%s\n' "today's diet log/table — every eating occasion counts — and pass them as"
-  printf '%s\n' "--good/--bad; the score scales with how many meals the day actually had."
+  printf '%s\n' "--good/--bad; the score steps down a ladder by the number of slips (unclean"
+  printf '%s\n' "meals plus any shortfall under the clean-meal target). Classification is the"
+  printf '%s\n' "same; the profile rule owns the formula."
   printf '%s\n' "Deviation-scored habits (e.g. Sleep well): derive the ACTUAL bed time and"
   printf '%s\n' "sleep hours from the session (the fitness check-in answers, or the"
   printf '%s\n' "plan-my-day wake/bed exchange) and mark with:"
