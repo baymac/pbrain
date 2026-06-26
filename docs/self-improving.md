@@ -7,7 +7,7 @@ It has two halves:
 - **Read side** — at the start of *every* command, your saved preferences for that command (and your global preferences) are injected into context, so it behaves the way you asked last time. This runs on every command (except `/init-obsidian`, which runs before a vault exists) via `lib/prefs.sh`.
 - **Capture side** — once a day, at the end of `/end-of-day`, a single **scheduled, correction-driven** pass looks back over the day and proposes anything worth remembering (see below). This is the *only* capture path: commands no longer nag "did you correct me?" inline.
 
-Preferences and feedback live in the vault under `.pbrain/` (migration 0001 copied any older `~/.config/pbrain/` files across), so they sync to every device with the rest of your vault.
+Preferences and feedback live in the vault under `.pbrain/` (migration 0001 copied any older `~/.config/pbrain/` files across), so they sync to every device with the rest of your vault. A **preference** is read back and injected on every run; a **quality fix** is logged to a *write-only* `feedback.md` (never injected, so it costs no context) and can optionally be raised upstream as a GitHub issue against `baymac/pbrain`.
 
 ## The scheduled, correction-driven pass (PB-47)
 
@@ -25,13 +25,13 @@ Each proposed correction is classified, and the kinds go to different places —
 |---|---|---|---|
 | **Preference (command)** | How *you* want one command to behave | `$VAULT_DIR/.pbrain/<command>/prefs.md` (a profile-owning command folds it into the profile's `prefs` array instead) | yes (your vault) |
 | **Preference (global)** | How *you* want every command to behave | `$VAULT_DIR/.pbrain/_global/prefs.md` | yes (your vault) |
-| **Quality fix** | A bug or improvement that helps *everyone* | `$VAULT_DIR/.pbrain/<command>/feedback.md` | yes |
+| **Quality fix** | A bug or improvement that helps *everyone* | `$VAULT_DIR/.pbrain/<command>/feedback.md` (write-only log), then optionally a GitHub issue on `baymac/pbrain` | yes (your vault) |
 
-Preferences are read back and injected on the next run — that's the half that actually closes the loop. The global file is injected on *every* command, before that command's own prefs.
+Preferences are read back and injected on the next run — that's the half that actually closes the loop. The global file is injected on *every* command, before that command's own prefs. `feedback.md` is **write-only**: it's a local bug logbook that is *never* read back or injected, so it never bloats context — only `prefs.md` is loaded each run.
 
 ### Turning off suggestions and nudges
 
-Every built-in suggestion yields to a standing preference that says to skip it — preferences always win over a default nudge. A correction like "stop suggesting `/journal` or `/gratitude-journal` before other commands" (or "stop nudging me about X") is saved to the **global** file, so it takes effect across *all* commands — not just the one you were running. This matters because a nudge like the morning-sequence journal/gratitude check fires from many commands (`/plan-my-day`, `/brainstorm`, `/diet-journal`, `/fitness-journal`, `/organize-clippings`, …); a per-command preference could only silence one of them, so these cross-command skips live in `_global/prefs.md`. A preference that's specific to one command ("ask only one question in `/journal`") still goes to that command's file. You can also edit `_global/prefs.md` by hand any time. Quality fixes are collected for you to send upstream; after saving one, the pass offers to open a GitHub issue (only if `gh` is installed and you say yes). The prefs and feedback files are plain markdown, one per command, editable by hand any time.
+Every built-in suggestion yields to a standing preference that says to skip it — preferences always win over a default nudge. A correction like "stop suggesting `/journal` or `/gratitude-journal` before other commands" (or "stop nudging me about X") is saved to the **global** file, so it takes effect across *all* commands — not just the one you were running. This matters because a nudge like the morning-sequence journal/gratitude check fires from many commands (`/plan-my-day`, `/brainstorm`, `/diet-journal`, `/fitness-journal`, `/organize-clippings`, …); a per-command preference could only silence one of them, so these cross-command skips live in `_global/prefs.md`. A preference that's specific to one command ("ask only one question in `/journal`") still goes to that command's file. You can also edit `_global/prefs.md` by hand any time. Quality fixes are handled differently: when one surfaces, the pass always logs it to the write-only `<command>/feedback.md` (a local bug record that never re-enters context), then offers to *also* raise it upstream as a GitHub issue against `baymac/pbrain` — via `gh issue create` if the GitHub CLI is installed and authenticated, otherwise it hands you a prefilled issue URL to paste. Declining the issue is fine; the local log still stands. The prefs and feedback files are plain markdown, one per command, editable by hand any time.
 
 ### Profile changes
 
@@ -45,7 +45,7 @@ Lasting changes to a core profile you own (plans / diet / fitness) are **not** c
 | `PBRAIN_SELF_IMPROVE_BATCH` | `off` disables just the scheduled end-of-day pass. | `on` |
 | `PBRAIN_CLAUDE_PROJECTS_DIR` | Where the pass looks for Claude Code transcripts. | `~/.claude/projects` |
 | `PBRAIN_PREFS_DIR` | Preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT_DIR/.pbrain` |
-| `PBRAIN_FEEDBACK_DIR` | Quality-fix ROOT (per-command `<cmd>/feedback.md`) | `$VAULT_DIR/.pbrain` |
+| `PBRAIN_FEEDBACK_DIR` | Quality-fix log ROOT (write-only per-command `<cmd>/feedback.md`) | `$VAULT_DIR/.pbrain` |
 
 ## Behavior you can count on
 
