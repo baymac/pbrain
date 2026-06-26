@@ -9,6 +9,8 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 
 **Run bash immediately. Do not say anything to the user until you have the INSTRUCTIONS block.** If the user passed arguments (e.g. `profile show`, `profile new`, `profile commit`), append them to the command.
 
+**Backfilling a past day:** pass `--date YYYY-MM-DD` (or a bare `YYYY-MM-DD`) to log/close a previous day — it drives the entry file, its `date:` frontmatter, and the meal-time fitness anchoring (that date's `/fitness-journal` session, not today's). No `--date` → today. Used by `/end-of-day` when closing a past day.
+
 The script emits one of several tokens — follow the INSTRUCTIONS for whichever fires. Key hard rules:
 - Migration (`DIET_JOURNAL_MIGRATION`): merge the old profile JSON + diet plan into one versioned profile, validating part by part with the user — confirm stats, recompute stale targets, ask the new meal-times questions. Never import silently.
 - First-time setup: interview in 2–3 question batches (not one at a time, not all at once). Present computed targets for confirmation before writing the profile. Don't log food until the profile is committed.
