@@ -252,7 +252,10 @@ for f in sorted(glob.glob(os.path.join(d, "*.md")))[-10:]:
     except Exception:
         pass
 PYEOF
-  envsubst < "$_SCRIPT_DIR/templates/plan-my-day/rebuild.txt"
+  # Same export caveat as setup.txt: export every var rebuild.txt references
+  # (scoped to a subshell) so the bare-envsubst empty-$STORE bug can't recur.
+  ( export STORE TODAY ISO_WEEK MONTH_YEAR OLD_JSON OLD_PROFILE VAULT_DIR _SCRIPT_DIR
+    envsubst '$STORE $TODAY $ISO_WEEK $MONTH_YEAR $OLD_JSON $OLD_PROFILE $VAULT_DIR $_SCRIPT_DIR' < "$_SCRIPT_DIR/templates/plan-my-day/rebuild.txt" )
   echo ""
   echo "=== PROFILE SCHEMA (JSON shape reference) ==="
   cat "$_SCRIPT_DIR/templates/plan-my-day/profile-schema.txt"
@@ -315,7 +318,12 @@ if [[ -z "$PROFILE_FILE" ]]; then
     echo "Daily planning starts once the profile is committed."
     exit 0
   fi
-  envsubst < "$_SCRIPT_DIR/templates/plan-my-day/setup.txt"
+  # envsubst only substitutes EXPORTED vars; STORE/TODAY are plain locals, so a
+  # bare call rendered every $STORE blank (empty store: path, broken "write into
+  # $STORE" step). Export them for this one call, scoped to a subshell so the
+  # exports don't leak into the rest of the script.
+  ( export STORE TODAY
+    envsubst '$STORE $TODAY' < "$_SCRIPT_DIR/templates/plan-my-day/setup.txt" )
   echo ""
   echo "=== PROFILE SCHEMA (JSON shape reference) ==="
   cat "$_SCRIPT_DIR/templates/plan-my-day/profile-schema.txt"
