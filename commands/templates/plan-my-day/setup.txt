@@ -8,33 +8,31 @@ goals library.
 
 Step 1 — Frame it warmly: "Let's get a clear picture of what you're pushing
 forward right now — that way each daily plan is anchored on what matters to
-you, not just a generic to-do list."
+you, not just a generic to-do list. We'll do this in order: first your goals,
+then how you like to work, then the shape of a normal day."
 
-Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
+Step 2 — Interview the user. IN ORDER (2a → 2b → 2c → 2d). This order is
+deliberate — the focus list comes FIRST so everything after it has something
+to anchor on. HARD RULE: never open with several abstract asks at once (do NOT
+say "tell me your focus list, how you work, and the shape of your day" in one
+breath). Ask ONE thing at a time, ground each with a concrete example, and let
+the user answer before moving on. Don't use jargon ("focus list", "working
+style") without explaining it in plain words first.
 
-  Working style
-  - Typical weekday: which hours are your IMPORTANT focus hours?
-  - How many total work hours per day do you realistically want?
-  - Preferred work-session length? (45 / 60 / 90 / 120 min)
-  - Break preference: how long between sessions, what restful activities
-    do you actually like (the rotation the plan uses)?
-  - When must the LAST work block of the day end?
-  - Energy peak: morning / afternoon / night / mixed?
-  - Anything that wrecks your day if it slips?
-  - Any other /plan-my-day preferences (e.g. "always surface carry-forward
-    tasks first", "keep Sundays block-free")?
-  Once you have the above, draft a short planning_guidelines paragraph:
-  "Here's how I'll plan your day: [block sizing, anchor philosophy, what
-  it optimises for]." Read it back and confirm with the user.
-
-  Current focus — what are you actively trying to build or achieve?
-  Work focus (projects, career, money) and life focus (health/body, creative
-  pursuits, relationships, inner work, finances). For each item:
+  2a — CURRENT FOCUS (do this FIRST). This is the spine of the profile.
+  Open plainly, with examples, and gather the LIST before any detail:
+  "Let's start with your goals — the handful of things your weeks actually go
+  into right now. Both sides: PROFESSIONAL (e.g. a project at work, a launch, a
+  job search, a side business) and PERSONAL (e.g. training for a race, learning
+  an instrument, a creative habit, time with family, finances). What's on your
+  list right now? Just name them — we'll go into each one after."
+  Once they've named the set, go through them ONE AT A TIME, asking a bit about
+  each (don't batch all the questions across all items at once):
   - classify: lib = "work" (project/career) | "goals" (life goal)
   - track: professional | personal
   - horizon: short (3–6 months) | long (6+ months)
   - priority (1 = most important), deadline or "ongoing"
-  - success_looks_like — short phrase
+  - success_looks_like — short phrase ("what does done/working look like?")
   - context — a working-notes paragraph (what it is, where it stands, what
     kind of effort it needs)
   Register each as a short library card too:
@@ -43,8 +41,30 @@ Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
     goals-library card — id, name, shortcut, category (health|creative|
       relationships|financial|personal), one-line summary
 
-  Typical day breakup (×2 — workday + rest day). This is the heart of the
-  schedule. Ask: "Walk me through an average WORKDAY from wake to bed — every
+  2b — WORKING STYLE + SLEEP (only after the focus list exists). Explain it
+  plainly first ("now, how you actually like to work — this is what sizes your
+  daily blocks"), then ask in a small batch:
+  - Typical weekday: which hours are your IMPORTANT focus hours?
+  - How many total work hours per day do you realistically want?
+  - Preferred work-session length? (45 / 60 / 90 / 120 min)
+  - Break preference: how long between sessions, what restful activities
+    do you actually like (the rotation the plan uses)?
+  - When must the LAST work block of the day end?
+  - Energy peak: morning / afternoon / night / mixed?
+  - Usual sleep timing: what time do you normally wake, and what bedtime are
+    you aiming for? (Needed to bound the day — wake gates the first block, bed
+    gates the last. If a fitness profile already records this, confirm it in
+    passing instead of re-asking.)
+  - Anything that wrecks your day if it slips?
+  - Any other /plan-my-day preferences (e.g. "always surface carry-forward
+    tasks first", "keep Sundays block-free")?
+  Once you have the above, draft a short planning_guidelines paragraph:
+  "Here's how I'll plan your day: [block sizing, anchor philosophy, what
+  it optimises for]." Read it back and confirm with the user.
+
+  2c — TYPICAL DAY breakup (×2 — workday + rest day), AFTER the goals + working
+  style are set. This is the heart of the schedule. Ask: "Walk me through an
+  average WORKDAY from wake to bed — every
   activity with its time: wake/prep, workout, each meal, your work blocks, the
   walk, wind-down, bed. I'll be GENEROUS with each block so real days leave
   slack to do EXTRA, never a deficit." Capture each segment as
@@ -59,7 +79,11 @@ Step 2 — Interview the user. Ask in 2–3 batches, not all at once:
   (e.g. ["sat","sun"]). Set typical_day.padded: true.
   DERIVE daily_anchors from the workday segments (no separate question):
   wake_time←wake.start, workout_time←fitness.start, lunch_time/dinner_time←
-  the meal slots, walk_time←movement.start, bed_target←bed.start.
+  the meal slots, walk_time←movement.start, bed_target←bed.start. Reconcile
+  wake_time/bed_target with the sleep timing captured in 2b — if they differ,
+  ask which is right rather than silently picking one.
+
+  2d — VARIATION + ANTI-PATTERNS + ANCHORS (last).
 
   Variation preferences (ask once, plainly):
     - Non-gym fitness days: use activity_buffers (see profile-schema.txt) for
