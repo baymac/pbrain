@@ -1540,6 +1540,44 @@ PROF
   [ "$output" = "0.4" ]
 }
 
+@test "PB-108 scored mark with no --note auto-fills a basis note (slip_ladder)" {
+  _write_scored_profile
+  HABITS mark --name "Eat clean" --date 2026-06-05 --good 3 --bad 1 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-05.md")"
+  # the Note column carries the derived basis, not a blank
+  [[ "$body" == *"3 clean / 1 unclean"* ]]
+}
+
+@test "PB-108 an explicit --note still overrides the derived basis note" {
+  _write_scored_profile
+  HABITS mark --name "Eat clean" --date 2026-06-05 --good 3 --bad 1 --note "my own note" >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-05.md")"
+  [[ "$body" == *"my own note"* ]]
+  [[ "$body" != *"3 clean / 1 unclean"* ]]
+}
+
+@test "PB-108 weighted_completion + focus_ratio derive their own basis notes" {
+  _write_profile   # any profile so the track file infra exists
+  cat > "$PBRAIN_HABITS_PROFILE_FILE" <<'PROF'
+---
+type: habits-profile
+---
+```json
+{"habits":[
+ {"id":"work-the-plan","name":"Work the plan","schedule_type":"daily","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":0.75,"scoring":{"type":"weighted_completion"}},
+ {"id":"deep-work","name":"Deep work","schedule_type":"daily","direction":"at_least","priority":"high","archived":false,"unit":"","measure_target":0.75,"scoring":{"type":"focus_ratio"}}
+]}
+```
+PROF
+  HABITS mark --name "Work the plan" --date 2026-06-05 \
+    --items '[{"priority":1,"difficulty":"hard","status":"done"},{"priority":2,"difficulty":"normal","status":"dropped"}]' >/dev/null
+  HABITS mark --name "Deep work" --date 2026-06-05 \
+    --focus '{"work":120,"social":30,"entertainment":10}' >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-05.md")"
+  [[ "$body" == *"1/2 tasks done"* ]]
+  [[ "$body" == *"120m work / 40m distraction"* ]]
+}
+
 @test "mark subcommand parses --good/--bad and emits a [scored] extraction tag" {
   _write_scored_profile
   export PBRAIN_PREFS_DIR="$TMP/prefs"   # isolate from the real user prefs

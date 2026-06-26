@@ -1038,6 +1038,57 @@ def score_from_spec(spec, good=None, bad=None, slips=None,
     except (TypeError, ValueError, IndexError):
         return None
 
+def _basis_note(spec, good=None, bad=None, slips=None, actual_time=None,
+                actual_hours=None, items=None, session=None, focus=None, done=None):
+    """PB-108: a terse, self-explanatory basis string for a SCORED mark, derived
+    from the same inputs score_from_spec consumes — the same shape /end-of-day's
+    Scoreboard "Basis" column shows. Returns "" when nothing meaningful can be
+    said (caller then leaves the Note blank). Pure."""
+    if not isinstance(spec, dict):
+        return ""
+    stype = str(spec.get("type", "slip_ladder")).strip()
+    g = _to_int(good) or 0
+    b = _to_int(bad) or 0
+
+    if stype == "weighted_completion" and isinstance(items, list) and items:
+        total = len(items)
+        done_n = sum(1 for it in items
+                     if str((it or {}).get("status", "")).strip().lower() == "done")
+        return "%d/%d tasks done" % (done_n, total)
+    if stype == "focus_ratio" and isinstance(focus, dict):
+        # Sum work vs distraction minutes the SAME way the scorer does, so the
+        # note reflects what produced the number.
+        work_cats = spec.get("work_categories") or ["work"]
+        distr_cats = spec.get("distraction_categories") or ["social", "entertainment"]
+        def _sum(cats):
+            return sum((_to_float(focus.get(c)) or 0.0) for c in cats)
+        w, d = _sum(work_cats), _sum(distr_cats)
+        return "%sm work / %sm distraction" % (fmtnum(w), fmtnum(d))
+    if stype == "session_volume" and isinstance(session, dict):
+        act = session.get("actual"); pln = session.get("planned")
+        st = str(session.get("status", "")).strip().lower()
+        if act is not None and pln is not None:
+            return "%s / %s planned" % (fmtnum(_to_float(act) or 0),
+                                        fmtnum(_to_float(pln) or 0))
+        if st:
+            return st
+        return ""
+    if stype == "deviation":
+        nt = spec.get("normal_time")
+        parts = []
+        if actual_time:
+            parts.append("bed %s%s" % (actual_time, (" vs %s" % nt) if nt else ""))
+        if actual_hours:
+            parts.append("%sh" % fmtnum(_to_float(actual_hours) or 0))
+        return " · ".join(parts)
+    # slip_ladder / meal_ratio and any count-based scorer: "X clean / Y unclean".
+    if good is not None or bad is not None or slips is not None:
+        sl = _to_int(slips)
+        if sl is not None and good is None and bad is None:
+            return "%d slip%s" % (sl, "" if sl == 1 else "s")
+        return "%d clean / %d unclean" % (g, b)
+    return ""
+
 def criteria_str(h):
     st = h["schedule_type"]
     sym = "≤" if h["direction"] == "at_most" else "≥"
@@ -1374,6 +1425,18 @@ elif op == "mark":
                               focus=focus_parsed, done=done_parsed)
         if val is not None:
             amount = fmtnum(val)  # feed the measured-amount path below
+            # PB-108: a scored row with a bare number isn't self-explanatory in
+            # the vault. If the caller passed no --note, auto-derive a terse basis
+            # note from the very inputs that produced the score (explicit --note
+            # still wins — this only fills the blank).
+            if not note.strip():
+                derived = _basis_note(h["scoring"], good=g, bad=b, slips=sl,
+                                      actual_time=a_time.strip() or None,
+                                      actual_hours=a_hours.strip() or None,
+                                      items=items_parsed, session=session_parsed,
+                                      focus=focus_parsed, done=done_parsed)
+                if derived:
+                    note = derived
     con = sqlite3.connect(db) if os.path.exists(db) else None
     if not os.path.exists(f):
         _act = [x for x in habits if not x["archived"]]
