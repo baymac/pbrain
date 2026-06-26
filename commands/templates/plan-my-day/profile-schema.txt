@@ -44,7 +44,8 @@
    "non_gym_fitness": {"ask_duration_including_buffer": false, "shift_meals_to_fit": true},
    "activity_buffers": {
      "football": {"commute_before_min": 30, "commute_after_min": 30, "post_home_settle_min": 30, "total_window_min": 120, "note": "30 min commute there + session + 30 min back + 30 min shower/settle. Same treatment as gym — never ask for commute time."},
-     "apple_fitness": {"buffer_before_min": 5, "buffer_after_min": 5, "note": "5 min prep before + 5 min settle after. Never ask for buffer time."}
+     "apple_fitness": {"buffer_before_min": 5, "buffer_after_min": 5, "note": "5 min prep before + 5 min settle after. Never ask for buffer time."},
+    "yoga": {"buffer_before_min": 5, "buffer_after_min": 30, "note": "5 min set up before + 30 min shower/recovery after, rendered as its OWN row before the next meal (never folded into the session duration). Never ask for buffer time."}
    },
    "late_wake": {"shift_timeline": true},
    "skip_fitness_when": "Suggest (never silently drop) skipping today's fitness only when meals are running late AND the last few days have already been active — judge both in context."},

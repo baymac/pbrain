@@ -245,6 +245,27 @@ EOF
   [[ "$output" == *"Typical day breakup"* ]]
 }
 
+@test "PB-68: fresh setup schema seeds a yoga activity_buffer (shower/recovery)" {
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"\"yoga\""* ]]
+  [[ "$output" == *"buffer_after_min"* ]]   # the 30-min shower/recovery buffer
+}
+
+@test "PB-68: daily plan renders session-vs-buffer separation + at-home recovery row" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  # session row stays at logged training time; buffers are their OWN rows
+  [[ "$output" == *"SESSION ROW vs BUFFER ROWS"* ]]
+  [[ "$output" == *"never folded into the session"* || "$output" == *"NOT a fattened session row"* ]]
+  # at-home (yoga / Apple Fitness) gets a post-session shower/recovery row too
+  [[ "$output" == *"shower/recovery"* ]]
+  # a no-entry activity still gets a sensible DEFAULT recovery gap, surfaced
+  [[ "$output" == *"DEFAULT recovery gap"* ]]
+}
+
 @test "rebuild block carries the typical_day + variation_rules template" {
   mkdir -p "$PBRAIN_VAULT/life"
   echo "old goals profile" > "$PBRAIN_VAULT/life/Goals Profile.md"

@@ -203,6 +203,18 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            it out, then shift the nearby meal slots to fit — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
            activity has NO entry in activity_buffers.
+           SESSION ROW vs BUFFER ROWS — render them SEPARATELY (PB-68). The
+           fitness journal's duration is TRAINING time only; the SESSION row uses
+           exactly that logged duration (a 20-min yoga = a 20-min row), NEVER
+           inflated to absorb buffer time. Buffers go in their OWN explicit rows:
+           a get-ready/set-up row BEFORE the session, and — for an AT-HOME session
+           too (yoga, Apple Fitness) — a shower/recovery row AFTER it, before the
+           next meal, exactly like a gym day's get-ready/prep segment. Never fold
+           a buffer into the session row, and never drop the post-session recovery
+           gap on an at-home day. If the activity has an activity_buffers entry,
+           use its buffer_before/after; if it has NO entry, apply a sensible
+           DEFAULT recovery gap (~30 min shower/settle before the next meal) and
+           say so — do not silently absorb it into the session.
          - Late wake-up (today's wake from 1a is later than the template's wake
            slot): shift the timeline later, ENFORCING ≥30 min between wake and
            the first work block (variation_rules.min_wake_to_work_gap_min).
@@ -235,10 +247,14 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
         preserved), calendar events (zero variance), the fitness session
         (`fitness_today_schedule` or the user's stated time) — NOTE: the
         fitness journal's duration is the TRAINING time only; the workout's
-        PLANNING slot is the skeleton's gym/activity slot, which bundles
-        commute + get-ready + post-workout prep around it (so a ~60-min
-        session can occupy a 2h+ slot), and the skeleton's own get-ready/prep
-        segment then sits between the workout and lunch — meal times
+        PLANNING slot is the skeleton's gym/activity slot, which surrounds the
+        session with commute + get-ready + post-workout prep (so a ~60-min
+        session can occupy a 2h+ window) — but those buffers are SEPARATE rows,
+        NOT a fattened session row (PB-68): the session row stays at the logged
+        training time, and the skeleton's own get-ready/prep + post-session
+        shower/recovery sit in their own rows between the workout and lunch (this
+        holds for at-home non-gym sessions too — see the non-gym rule above) —
+        meal times
         (`diet_meal_times`, shifted around the workout per the diet profile),
         habit reminder times (🔔 in the rollup), working_style.focus_hours
         preferred, nothing past working_style.last_block_end,
