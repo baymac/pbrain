@@ -509,10 +509,10 @@ pmg_status() {
 # pmg_doctor [--apply] — diagnose whether the daily groom LaunchAgent will fire
 # reliably on AC power, and (optionally, opt-in) apply the one fix that matters.
 #
-# Why this exists (PB-79): the groom agent uses StartCalendarInterval at 06:40.
+# Why this exists (PB-79): the groom agent uses StartCalendarInterval at 06:00.
 # launchd DOES run a missed StartCalendarInterval job on the next wake — but only
 # while the Mac can wake/run work during AC sleep, which is gated by Power Nap.
-# With Power Nap off and the lid closed overnight on AC, the 06:40 fire can be
+# With Power Nap off and the lid closed overnight on AC, the 06:00 fire can be
 # skipped until the user opens the laptop. So the one knob that makes overnight
 # firing reliable is `pmset -c powernap 1`. Everything else here is informational.
 #
@@ -640,7 +640,7 @@ pmg_doctor() {
     verdict="OK"
   else
     verdict="WARN"
-    fix="Power Nap is off on AC, so the 06:40 groom may not fire during overnight sleep until you open the lid. Enable it: sudo pmset -c powernap 1  (or System Settings > Battery > Options > Power Nap). Re-run with --apply to do it now."
+    fix="Power Nap is off on AC, so the 06:00 groom may not fire during overnight sleep until you open the lid. Enable it: sudo pmset -c powernap 1  (or System Settings > Battery > Options > Power Nap). Re-run with --apply to do it now."
   fi
   echo "verdict: $verdict"
   [[ -n "$fix" ]] && echo "fix: $fix"
@@ -709,12 +709,12 @@ pmg_claude_auth_probe() {
 }
 
 # pmg_schedule_install [HH:MM] [csv-projects] [autonomous] — daily LaunchAgent that
-# runs the groom scan. Default 06:40 (a few hours before a typical first work block).
+# runs the groom scan. Default 06:00 (a few hours before a typical first work block).
 # autonomous=1 wires the headless-Claude judgment-triage pass (PBRAIN_GROOM_AUTONOMOUS
 # + HOME/USER + a claude/node-inclusive PATH so the subscription keychain login is
 # found). NO secret is written — auth is the user's existing keychain login.
 pmg_schedule_install() {
-  local hhmm="${1:-06:40}" projects="${2:-}" autonomous="${3:-}"
+  local hhmm="${1:-06:00}" projects="${2:-}" autonomous="${3:-}"
   local sh
   sh="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../commands" && pwd -P)/project-manager.sh"
   local hh="${hhmm%%:*}" mm="${hhmm##*:}"

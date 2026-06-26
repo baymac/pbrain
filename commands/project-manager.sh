@@ -986,7 +986,7 @@ PYEOF
         ;;
       enable)
         echo "PM_GROOM_ENABLE"
-        pmg_schedule_install "${F_time:-06:40}" "${F_projects:-}" \
+        pmg_schedule_install "${F_time:-06:00}" "${F_projects:-}" \
           "$(_has_bool autonomous && printf 1 || printf 0)" || true
         echo "scheduled: $(pmg_plist)"
         if _has_bool autonomous; then

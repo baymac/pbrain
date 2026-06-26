@@ -2,7 +2,7 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// The 06:40 grooming LaunchAgent (com.pbrain.pm-groom) runs headless. A process
+// The 06:00 grooming LaunchAgent (com.pbrain.pm-groom) runs headless. A process
 // launched by launchd gets NO Full Disk Access, and the Obsidian vault lives in
 // Apple's privacy-protected iCloud container
 // (~/Library/Mobile Documents/iCloud~md~obsidian/…). So when the bash groom tries
