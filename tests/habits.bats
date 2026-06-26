@@ -531,6 +531,17 @@ EOF
   [[ "$output" == *"mark --name"* ]]
 }
 
+@test "PB-116 emit_habits_extract forbids fuzzy / shared-keyword habit matching" {
+  _write_profile
+  run pbrain_emit_habits_extract journal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NO FUZZY"* ]]
+  [[ "$output" == *"SHARED-KEYWORD"* ]]
+  # the concrete washroom-vs-Clean-room example from the bug report
+  [[ "$output" == *"washroom cleaning"* ]]
+  [[ "$output" == *"mark"* && "$output" == *"NOTHING"* ]]
+}
+
 @test "emit_habits_extract holds eod_only habits back from mid-day commands" {
   _write_eod_profile
   run pbrain_emit_habits_extract journal
