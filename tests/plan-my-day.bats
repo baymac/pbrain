@@ -202,6 +202,18 @@ EOF
   [[ "$output" != *"## Today's focus"* ]]
 }
 
+@test "PB-71: shower-coupled grooming habits fold into the shower/get-ready block" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BLOCK-COUPLED HABITS"* ]]
+  [[ "$output" == *"shampoo"* && "$output" == *"microneedling"* ]]
+  # reminder aligned to the block start, and a fallback when no shower block
+  [[ "$output" == *"align its one-shot habit reminder to"* ]]
+  [[ "$output" == *"FALLBACK"* ]]
+}
+
 @test "PB-75: plan instructions forbid narrating internal preflight + habit-scan logic" {
   write_plans_profile
   write_libraries

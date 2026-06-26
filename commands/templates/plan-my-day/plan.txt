@@ -302,6 +302,18 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      (work is the flex variable), never by collapsing a skeleton segment or
      dropping a meal. Fitness may be dropped ONLY via the explicit 1b.5 skip
      suggestion the user accepted.
+  b2. BLOCK-COUPLED HABITS (PB-71) — some tracked habits naturally happen AS PART
+     of another anchor, not on their own. SHOWER-COUPLED GROOMING (Shampoo,
+     Microneedling, and similar) belongs inside the shower / get-ready / recovery
+     block, not on standalone rows. When such a block exists today AND a coupled
+     habit is DUE this week (check the HABITS rollup: under its weekly cap / not
+     yet met), FOLD it into that block — annotate the row (e.g. "Shower + recovery
+     — shampoo, microneedling if due") and align its one-shot habit reminder to
+     the block's START time, instead of emitting an independent anchor row.
+     FALLBACK: if there is NO shower/get-ready block today, keep the current
+     behavior (its own reminder/row). This is a general host-block coupling
+     pattern (grooming → shower); other habits may later couple to a host block
+     the same way.
   c. The table ALWAYS starts at the user's actual wake time today (from 1a) —
      NEVER at current_time. Everything from 1b is backfilled as ✓ rows at its
      real time. The plan spans wake → bed.
