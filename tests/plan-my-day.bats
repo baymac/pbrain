@@ -161,6 +161,20 @@ EOF
   [[ "$output" == *"goals-library.v1.md"* ]]
 }
 
+@test "setup token resolves a non-empty store path (regression: PB envsubst export bug)" {
+  # Regression: setup.txt is rendered via envsubst, which only substitutes
+  # EXPORTED vars. STORE was a plain local, so every $STORE rendered blank —
+  # the agent got "store:" with no path and a broken "write into " step.
+  run PMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SETUP_PROFILE"* ]]
+  # The store: header line must carry the real .profile path, not be empty.
+  [[ "$output" == *"store: $STORE"* ]]
+  # And the Step 3 write instruction must name that same path, not "into  (".
+  [[ "$output" == *"Write THREE files into $STORE"* ]]
+  [[ "$output" != *"Write THREE files into  ("* ]]
+}
+
 @test "open plans-profile draft short-circuits to the draft block" {
   mkdir -p "$STORE"
   printf -- '---\nversion: 1\ncommitted: false\n---\n# Plans profile\n```json\n{}\n```\n' \
@@ -254,7 +268,7 @@ EOF
   [[ "$output" == *"\"workday\""* ]]
   [[ "$output" == *"\"rest_day\""* ]]
   [[ "$output" == *"min_wake_to_work_gap_min"* ]]
-  [[ "$output" == *"Typical day breakup"* ]]
+  [[ "$output" == *"TYPICAL DAY breakup"* ]]   # PB-164: 2c header (was "Typical day breakup")
 }
 
 @test "rebuild block carries the typical_day + variation_rules template" {
