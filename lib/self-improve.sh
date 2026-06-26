@@ -21,11 +21,14 @@
 # loop used before PB-47:
 #   $VAULT_DIR/.pbrain/_global/prefs.md     global preferences
 #   $VAULT_DIR/.pbrain/<cmd>/prefs.md       per-command preferences
+#   $VAULT_DIR/.pbrain/<cmd>/feedback.md    per-command quality-fix log
 # A QUALITY FIX (a bug/improvement that helps everyone, not a personal pref) is
-# NOT written to the vault — it's filed as a GitHub issue against baymac/pbrain
-# (via `gh issue create`, or a prefilled issue URL when gh is unavailable), with
-# a one-line fallback note in $VAULT_DIR/.pbrain/<cmd>/quality-log.md so a
-# declined fix isn't lost or re-surfaced.
+# always LOGGED to <cmd>/feedback.md — a WRITE-ONLY local bug logbook that is
+# NEVER read back or injected into context (lib/prefs.sh injects prefs.md only),
+# so it costs nothing on future runs — and the pass then OFFERS to also raise it
+# upstream as a GitHub issue against baymac/pbrain (`gh issue create`, or a
+# prefilled issue URL when gh is unavailable). Declining the issue is fine; the
+# feedback.md entry still stands.
 # A profile-owning command (e.g. /diet-journal) folds a COMMAND preference into
 # its profile's top-level "prefs" array instead of <cmd>/prefs.md; lib/prefs.sh
 # reads that array back on the next run so the loop still closes.
@@ -38,6 +41,7 @@
 #   PBRAIN_CLAUDE_PROJECTS_DIR override the CC transcript root (default
 #                              ~/.claude/projects) — used by the batch pass + tests
 #   PBRAIN_PREFS_DIR           override the prefs ROOT    (default $VAULT_DIR/.pbrain)
+#   PBRAIN_FEEDBACK_DIR        override the feedback ROOT (default $VAULT_DIR/.pbrain)
 #
 # Like lib/prefs.sh, this NEVER exits non-zero — it is sourced into commands
 # running under `set -euo pipefail`. Call sites still append `|| true`.
@@ -54,9 +58,9 @@
 # corrections (not neutral Q&A, not one-off requests) and to stay silent when
 # nothing qualifies. It writes nothing itself; every captured pref goes through
 # an explicit per-item yes: a PREFERENCE writes to _global/prefs.md, <cmd>/prefs.md
-# or a profile's prefs array; a QUALITY FIX is filed as a GitHub issue against
-# baymac/pbrain (one-line fallback note in <cmd>/quality-log.md). Never exits
-# non-zero (call sites add `|| true`).
+# or a profile's prefs array; a QUALITY FIX is logged to the write-only
+# <cmd>/feedback.md and then optionally raised as a GitHub issue on baymac/pbrain.
+# Never exits non-zero (call sites add `|| true`).
 pbrain_emit_self_improve_batch() {
   local date prefs_dir global_file projects_dir
   date="${1:-}"
@@ -145,23 +149,29 @@ PY
   printf '%s\n' "      prefs (a profile-owning command folds it into the profile's prefs array on"
   printf '%s\n' "      the latest version IN PLACE; others use $prefs_dir/<cmd>/prefs.md)."
   printf '%s\n' "    - QUALITY FIX — a bug/improvement that helps EVERYONE (not a personal"
-  printf '%s\n' "      preference). This is a public-repo concern, so it does NOT go in the"
-  printf '%s\n' "      vault. Instead, offer to file it as a GitHub issue against baymac/pbrain:"
-  printf '%s\n' "        gh issue create --repo baymac/pbrain --title \"<terse title>\" \\"
-  printf '%s\n' "          --body \"<what's wrong + the fix, with the transcript quote as evidence>\""
-  printf '%s\n' "      If the \`gh\` CLI is unavailable or unauthenticated, hand the user the"
-  printf '%s\n' "      prefilled URL instead: https://github.com/baymac/pbrain/issues/new"
-  printf '%s\n' "      (give them the title + body to paste). Either way, also jot a ONE-LINE"
-  printf '%s\n' "      local note in $prefs_dir/<cmd>/quality-log.md (\"<date> · <title> · filed #N\""
-  printf '%s\n' "      or \"… · not filed\") so a declined fix isn't lost and isn't re-surfaced."
-  printf '%s\n' " 2. Show the user the exact line(s) you'd save (for a PREFERENCE) or the issue"
-  printf '%s\n' "    title+body you'd file (for a QUALITY FIX) AND the transcript quote they came"
-  printf '%s\n' "    from, grouped so they can approve/reject quickly."
+  printf '%s\n' "      preference). Two parts, ALWAYS do the first:"
+  printf '%s\n' "      (a) LOG it to $prefs_dir/<cmd>/feedback.md — a dated entry with the"
+  printf '%s\n' "          bug, the fix direction, and the transcript quote as evidence. This"
+  printf '%s\n' "          file is WRITE-ONLY: it is a local bug logbook, NEVER read back or"
+  printf '%s\n' "          injected into context (lib/prefs.sh injects prefs.md only, never"
+  printf '%s\n' "          feedback.md), so it costs nothing on future runs. Append, don't"
+  printf '%s\n' "          clobber; create the file if missing."
+  printf '%s\n' "      (b) THEN offer to also raise it upstream as a GitHub issue:"
+  printf '%s\n' "            gh issue create --repo baymac/pbrain --title \"<terse title>\" \\"
+  printf '%s\n' "              --body \"<what's wrong + the fix, with the transcript quote>\""
+  printf '%s\n' "          If \`gh\` is unavailable/unauthenticated, hand over the prefilled URL"
+  printf '%s\n' "          instead: https://github.com/baymac/pbrain/issues/new (give them the"
+  printf '%s\n' "          title+body to paste). Note the issue # back in the feedback.md entry"
+  printf '%s\n' "          when filed. The user may decline the issue — the feedback.md log"
+  printf '%s\n' "          still stands, so nothing is lost and it won't be re-surfaced."
+  printf '%s\n' " 2. Show the user the exact line(s) you'd save (the prefs line for a"
+  printf '%s\n' "    PREFERENCE, or the feedback.md entry + issue title/body for a QUALITY FIX)"
+  printf '%s\n' "    AND the transcript quote they came from, grouped so they can approve fast."
   printf '%s\n' " 3. Act on each ONLY on an explicit per-item yes — never auto-apply. For a"
   printf '%s\n' "    PREFERENCE, read the target file first and reconcile/replace a related line"
   printf '%s\n' "    instead of duplicating; keep any fenced JSON in a profile valid; create the"
-  printf '%s\n' "    target file if missing. For a QUALITY FIX, file the GitHub issue (or hand"
-  printf '%s\n' "    over the URL) and append the one-line quality-log note."
+  printf '%s\n' "    target file if missing. For a QUALITY FIX, append the feedback.md entry and"
+  printf '%s\n' "    (on a further yes) file the GitHub issue or hand over the URL."
   printf '%s\n' ""
   printf '%s\n' "If nothing genuine surfaces, say nothing about this pass and end normally."
   printf '%s\n' "--- END SELF-IMPROVE BATCH ---"

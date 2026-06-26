@@ -24,7 +24,7 @@
 #       plane.json, pbrain.db (sqlite3 backup), habit-suggest-seen,
 #       diet-profile.json, fitness-activities.json, plan-profile.json
 #     vault/.pbrain/     →  ~/pbrain-test-vault/.pbrain/
-#       prefs, quality-log, migrations ledger (so migrations don't re-run)
+#       prefs, feedback, migrations ledger (so migrations don't re-run)
 #     vault/life/        →  ~/pbrain-test-vault/life/
 #     vault/fitness/     →  ~/pbrain-test-vault/fitness/
 #     vault/agent-work/  →  ~/pbrain-test-vault/agent-work/
@@ -145,7 +145,7 @@ PYEOF
           fi
         done
 
-        # vault/.pbrain/ — prefs, quality-log, migrations ledger
+        # vault/.pbrain/ — prefs, feedback, migrations ledger
         if [[ -d "$real_vault/.pbrain" ]]; then
           mkdir -p "$test_vault/.pbrain"
           cp -rp "$real_vault/.pbrain/." "$test_vault/.pbrain/"

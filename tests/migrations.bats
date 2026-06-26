@@ -233,10 +233,7 @@ EOF
   [[ "$output" == *"PBRAIN_MIGRATED 0001_prefs_feedback_to_vault"* ]]
   grep -q "global rule" "$VAULT_DIR/.pbrain/_global/prefs.md"
   grep -q "journal rule" "$VAULT_DIR/.pbrain/journal/prefs.md"
-  # 0001 copies feedback in, then 0015 (same run) archives it back out of the
-  # live tree — so after a full run the content lives under backup/, not <cmd>/.
-  [ ! -f "$VAULT_DIR/.pbrain/diet-journal/feedback.md" ]
-  grep -q "diet bug" "$VAULT_DIR/.pbrain/backup/feedback-md/diet-journal/feedback.md"
+  grep -q "diet bug" "$VAULT_DIR/.pbrain/diet-journal/feedback.md"
   # originals untouched (copy, not move — ledger is per-vault)
   [ -f "$XDG_CONFIG_HOME/pbrain/prefs/journal.md" ]
   [ -f "$LEDGER/0001_prefs_feedback_to_vault.done" ]
@@ -398,32 +395,6 @@ EOF
     && [[ "$output" != *"PBRAIN_MIGRATED 0011_prefs_to_profile"* ]]
 }
 
-# ── real migration: 0015 archive feedback.md → backup ──────────────────────
-
-@test "0015 archives an existing <cmd>/feedback.md into .pbrain/backup (non-destructive)" {
-  mkdir -p "$VAULT_DIR/.pbrain/diet-journal" "$VAULT_DIR/.pbrain/journal"
-  echo "- diet quality fix" > "$VAULT_DIR/.pbrain/diet-journal/feedback.md"
-  echo "- journal pref" > "$VAULT_DIR/.pbrain/journal/prefs.md"
-  run pbrain_run_migrations
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"PBRAIN_MIGRATED 0015_archive_feedback_md"* ]]
-  # feedback.md moved out of the live tree, content preserved under backup/
-  [ ! -f "$VAULT_DIR/.pbrain/diet-journal/feedback.md" ]
-  grep -q "diet quality fix" "$VAULT_DIR/.pbrain/backup/feedback-md/diet-journal/feedback.md"
-  # a sibling prefs.md in another command dir is left untouched
-  grep -q "journal pref" "$VAULT_DIR/.pbrain/journal/prefs.md"
-  [ -f "$LEDGER/0015_archive_feedback_md.done" ]
-}
-
-@test "0015 records vacuously when no feedback.md exists" {
-  mkdir -p "$VAULT_DIR/.pbrain/journal"
-  echo "- journal pref" > "$VAULT_DIR/.pbrain/journal/prefs.md"
-  run pbrain_run_migrations
-  [ "$status" -eq 0 ]
-  [[ "$output" != *"PBRAIN_MIGRATED 0015_archive_feedback_md"* ]]
-  [ -f "$LEDGER/0015_archive_feedback_md.done" ]
-}
-
 @test "fresh user: all real migrations record vacuously in one run" {
   run pbrain_run_migrations
   [ "$status" -eq 0 ]
@@ -433,7 +404,7 @@ EOF
             0005_habits_profile_to_store 0006_food_library_to_store \
             0007_goals_project_reframe 0008_habits_categorize \
             0009_habit_scores_to_unit_scale 0010_clear_default_scored_notes \
-            0011_prefs_to_profile 0015_archive_feedback_md; do
+            0011_prefs_to_profile; do
     [ -f "$LEDGER/$id.done" ]
   done
 }
