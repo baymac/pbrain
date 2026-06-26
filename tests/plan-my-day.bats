@@ -202,6 +202,22 @@ EOF
   [[ "$output" != *"## Today's focus"* ]]
 }
 
+@test "PB-115: activity_buffers are applied to the fitness slot, incl. at-home apple_fitness" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  # The buffer must be applied (MANDATORY when an entry exists), not just mentioned.
+  [[ "$output" == *"buffer is MANDATORY"* ]]
+  # Covers an at-home session with no commute (the 2026-06-24 miss).
+  [[ "$output" == *"even"* && "$output" == *"no commute"* ]]
+  # Generic slot formula so football (commute) AND apple_fitness (prep) both pad.
+  [[ "$output" == *"slot_window"* ]]
+  [[ "$output" == *"buffer_before_min"* && "$output" == *"buffer_after_min"* ]]
+  # The concrete worked example: 25-min session -> 35-min slot.
+  [[ "$output" == *"35-min SLOT"* ]]
+}
+
 @test "PB-75: plan instructions forbid narrating internal preflight + habit-scan logic" {
   write_plans_profile
   write_libraries

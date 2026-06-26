@@ -198,11 +198,23 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            football, Apple Fitness, a class): check `variation_rules.activity_buffers`
            in the plans profile FIRST. If the activity has a named entry there
            (e.g. "football", "apple_fitness"), use its buffer values silently —
-           do NOT ask the user for commute or buffer time. Compute the full window
-           (commute_before + session + commute_after + post_home_settle) and block
-           it out, then shift the nearby meal slots to fit — meal COUNT unchanged
-           (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
-           activity has NO entry in activity_buffers.
+           do NOT ask the user for commute or buffer time.
+           ALWAYS pad the slot — the buffer is MANDATORY when an entry exists, even
+           for an at-home session with no commute. Sum WHATEVER buffer keys that
+           entry carries, around the session duration, to get the full slot:
+             slot_window = (buffer_before_min or commute_before_min or 0)
+                         + session_minutes
+                         + (buffer_after_min or commute_after_min or 0)
+                         + (post_home_settle_min or 0)
+           Worked example (the 2026-06-24 miss): apple_fitness =
+           {buffer_before_min: 5, buffer_after_min: 5} + a 25-min kickboxing
+           session => a 35-min SLOT, e.g. 14:40-15:15 (NOT a bare 25-min
+           14:45-15:10). football's commute keys feed the SAME formula. The
+           session's own start time anchors inside the slot AFTER the leading
+           buffer (so for 14:40-15:15, the workout itself starts 14:45).
+           Then block out the padded window and shift the nearby meal slots to fit
+           — meal COUNT unchanged (variation_rules.non_gym_fitness). Only ask for
+           duration/buffer when the activity has NO entry in activity_buffers.
          - Late wake-up (today's wake from 1a is later than the template's wake
            slot): shift the timeline later, ENFORCING ≥30 min between wake and
            the first work block (variation_rules.min_wake_to_work_gap_min).
