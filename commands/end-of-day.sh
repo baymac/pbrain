@@ -610,6 +610,15 @@ written today, add ONE neutral line that the summary is thinner for it (e.g.
 "No journal today, so the summary is light."). This is a note, NOT a nag — never
 push the user to go back and write them.
 
+Step 4L — DIET NUDGE (soft, non-blocking — PB-107, mirrors PB-73's planning-side
+fix): when the day had NO diet log (diet_file exists == no — Q3 and 4a are both
+skipped in that case, so without this the omission is invisible at close), emit
+ONE soft pointer: "No diet logged today — /diet-journal if you want to capture
+it." Keep it DISTINCT from the 4j completeness note (different concern) and say
+it at most once. PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says
+to skip the diet nudge, skip it. It's a breadcrumb, never a nag — do not push the
+user to go back and log retroactively. (diet_file exists == yes → say nothing.)
+
 Step 5 — Print the plan file path and ONE line of warmth. Examples:
   "Locked in. Sleep well."
   "Tomorrow's already lighter for having closed today."

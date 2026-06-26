@@ -192,3 +192,18 @@ EOD() { bash "$SH" "$@"; }
   [ "$rs" -lt "$sr" ]          # and the pull runs FIRST
   grep -q 'reminders-sync --date "$TODAY" --sweep' "$SH"   # sweeps stale one-shots at day close
 }
+
+@test "PB-107: end-of-day emits a soft diet nudge when the day has no diet log" {
+  # No diet file for the date (PBRAIN_DIET_DIR is empty in setup), so the close
+  # must carry the soft pointer instruction (mirrors PB-73's planning-side fix).
+  run EOD --date 2026-06-03
+  [ "$status" -eq 0 ]
+  # the gate state is surfaced as absent
+  [[ "$output" == *"diet_file:"* ]]
+  [[ "$output" == *"exists: no"* ]]
+  # the new Step 4L diet-nudge instruction is present, distinct from 4j, and pref-suppressible
+  [[ "$output" == *"DIET NUDGE"* ]]
+  [[ "$output" == *"/diet-journal"* ]]
+  [[ "$output" == *"DISTINCT from the 4j"* ]]
+  [[ "$output" == *"PREFERENCE OVERRIDE"* ]]
+}
