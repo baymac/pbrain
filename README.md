@@ -197,8 +197,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_SELF_IMPROVE` | self-improve capture | `prefs` — `off` disables capture entirely (back-compat master switch) |
 | `PBRAIN_SELF_IMPROVE_BATCH` | the scheduled end-of-day self-improve pass (PB-47) | `on` — `off` disables just that pass |
 | `PBRAIN_CLAUDE_PROJECTS_DIR` | where the end-of-day pass looks for Claude Code transcripts | `~/.claude/projects` |
-| `PBRAIN_PREFS_DIR` | all commands — preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT/.pbrain` |
-| `PBRAIN_FEEDBACK_DIR` | all commands — quality-fix ROOT (`<cmd>/feedback.md`) | `$VAULT/.pbrain` |
+| `PBRAIN_PREFS_DIR` | all commands — preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`; also holds the `<cmd>/quality-log.md` fallback) | `$VAULT/.pbrain` |
 | `PBRAIN_MIGRATIONS` | all commands — set `0` to disable the vault migration runner | `1` |
 | `PBRAIN_DB_FILE` | `/habits`, `/remind-blocking` (shared SQLite store: habit events + blocking-reminder queue; `/remind` does NOT use the DB) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_REMINDERS_LIST` | `/remind` (which Apple Reminders list to create/read in) | unset → system default list |
