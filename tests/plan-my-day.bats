@@ -202,6 +202,19 @@ EOF
   [[ "$output" != *"## Today's focus"* ]]
 }
 
+@test "PB-69: late-wake/compressed days keep meal count + insert the gap meal" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  # keep_meal_count is HARD: never drop a meal to absorb compression
+  [[ "$output" == *"KEEP_MEAL_COUNT IS HARD"* ]]
+  [[ "$output" == *"never by pruning meals"* ]]
+  # the >~3-4h gap guard inserts the evening protein slot
+  [[ "$output" == *"GAP GUARD"* ]]
+  [[ "$output" == *"eggs_shake"* || "$output" == *"evening protein"* ]]
+}
+
 @test "PB-75: plan instructions forbid narrating internal preflight + habit-scan logic" {
   write_plans_profile
   write_libraries

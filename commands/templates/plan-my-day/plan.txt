@@ -209,6 +209,16 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          - Invariants every day: keep the meal COUNT (keep_meal_count); absorb
            time pressure by SHRINKING work blocks (work_is_flex); protect meals
            + fitness slots.
+           KEEP_MEAL_COUNT IS HARD — even on a late-wake / compressed day (PB-69):
+           NEVER drop or silently merge a fixed meal/snack segment to make the day
+           fit. The day compresses by shrinking WORK, never by pruning meals. When
+           a late wake squeezes the timeline, carry EVERY skeleton meal anchor
+           (e.g. eggs_snack, eggs_shake) forward — shift them, don't delete them.
+           GAP GUARD: if, after shifting, any two CONSECUTIVE meal anchors end up
+           more than ~3–4h apart, insert the skeleton meal that belongs in that
+           window (the evening protein slot — eggs_snack / eggs_shake — for a
+           lunch→dinner gap), placed roughly at the midpoint, rather than leaving
+           the gap empty.
          - SKIP-FITNESS (conditional, a judgment call — never silent): ONLY if
            meals are running late AND the RECENT FITNESS ACTIVITY block shows
            the last few days were already active, *suggest* skipping today's
