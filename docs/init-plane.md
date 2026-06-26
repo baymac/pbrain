@@ -10,8 +10,8 @@ Plane is pbrain's **sole** project backend — task-based planning ([`/plan-my-w
 
 1. **Checks prerequisites** — Docker + Docker Compose running (~4 GB RAM, 2 cores).
 2. **Downloads Plane's official installer** (`setup.sh`) into `~/.config/pbrain/plane-selfhost/`.
-3. **Runs it** — Plane's own interactive menu (Install / Start / Stop / Restart / Upgrade) brings the stack up at **http://localhost**. pbrain leans on Plane's installer rather than reimplementing Docker Compose.
-4. **Moves it to a stable URL** — by default runs `vhost` right after the stack is up to put Plane at **http://plane.localhost:1800** (off port 80, no collisions), *before* you create an account so everything lives at the final URL. Skip it to stay on plain `http://localhost`.
+3. **Runs it** — Plane's own interactive menu (Install / Start / Stop / Restart / Upgrade) brings the stack up. pbrain leans on Plane's installer rather than reimplementing Docker Compose. By default `up` then lands the instance on the stable vhost (next step) in the same command — no separate step.
+4. **Moves it to a stable URL** — `up` itself does this by default (PB-113): right after the stack is up it puts Plane at **http://plane.localhost:1800** (off port 80, no collisions), *before* you create an account so everything lives at the final URL. Pass `up --no-vhost` (or `up --port 80`) to stay on plain `http://localhost`; the standalone `vhost` command remains for re-applying or reverting (`vhost --remove`).
 5. **Guides account + structure** — you create the first (admin) account, a workspace, and a project in the browser, and a Personal Access Token.
 6. **Wires pbrain → Plane** — writes `~/.config/pbrain/plane.json` (mode `0600`, never synced to your vault); the base URL is auto-detected from `plane.env` (`http://127.0.0.1:1800` after `vhost`, else `http://localhost`).
 
@@ -36,7 +36,7 @@ Run `/init-plane` and follow the wizard. The underlying subcommands (also runnab
 
 ## Named vhost on a non-80 port (the default)
 
-Plane's installer brings the stack up on `http://localhost` (port 80). The wizard then moves it — **by default** — to a stable, named URL **`http://plane.localhost:1800`**, so it never collides with another local app on port 80. The move happens right after `up` and *before* you create your account, so the workspace/project you set up all live at the final URL. The command is:
+Plane's installer brings the stack up on `http://localhost` (port 80). `up` then moves it — **by default** (PB-113) — to a stable, named URL **`http://plane.localhost:1800`**, so it never collides with another local app on port 80. The move happens inside `up`, right after the stack is up and *before* you create your account, so the workspace/project you set up all live at the final URL. To run or re-apply the move by hand (or with a custom host/port), the standalone command is:
 
 ```bash
 /init-plane vhost              # default: --host plane.localhost --port 1800
@@ -51,7 +51,7 @@ Both URLs hit the same Plane stack on the same port. Then `/project-manager test
 
 Flags: `--host` (default `plane.localhost`), `--port` (default `1800`), `--plane-home` (override env-file discovery — by default the command finds `plane.env` via `PBRAIN_PLANE_HOME` or by inspecting the running `plane-app-proxy-1` container), `--no-restart` (edit only, you restart manually), `--remove` (revert to plain `http://localhost` via the `plane.env.pbrain-bak` written on first apply, falling back to resetting the two keys if no backup is found).
 
-Prefer plain `http://localhost`? Just skip the `vhost` step during setup — everything else works the same. To debug a restart issue in isolation you can also bring Plane up on `:80` first, confirm `/project-manager test`, then run `vhost`.
+Prefer plain `http://localhost`? Run `up --no-vhost` (or `up --port 80`) — everything else works the same. To debug a restart issue in isolation you can also bring Plane up on `:80` (`up --no-vhost`), confirm `/project-manager test`, then run `vhost` to move it.
 
 ## GitHub integration (optional)
 

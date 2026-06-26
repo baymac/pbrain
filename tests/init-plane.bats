@@ -163,6 +163,63 @@ _stub_docker() {
   grep -q '"base_url": "http://localhost"' "$XDG_CONFIG_HOME/pbrain/plane.json"
 }
 
+# --- up: vhost-by-default (PB-113) --------------------------------------------
+
+_seed_setup_sh() {  # fake Plane installer so `up` can run it as a no-op
+  mkdir -p "$PBRAIN_PLANE_HOME"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$PBRAIN_PLANE_HOME/setup.sh"
+  chmod +x "$PBRAIN_PLANE_HOME/setup.sh"
+}
+
+@test "PB-113 up lands on the stable vhost by default (plane.localhost:1800)" {
+  IP config --api-key SECRET --workspace ws --project pid >/dev/null
+  _seed_setup_sh
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" up
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INIT_PLANE_VHOST"* ]]
+  grep -q '^APP_DOMAIN=plane.localhost:1800$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '^LISTEN_HTTP_PORT=1800$' "$PBRAIN_PLANE_HOME/plane.env"
+  [ -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
+  grep -q '"base_url": "http://127.0.0.1:1800"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
+@test "PB-113 up --no-vhost stays on bare http://localhost (no plane.env edit)" {
+  _seed_setup_sh
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" up --no-vhost
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INIT_PLANE_NO_VHOST"* ]]
+  [[ "$output" != *"INIT_PLANE_VHOST"* ]]
+  grep -q '^APP_DOMAIN=localhost$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '^LISTEN_HTTP_PORT=80$' "$PBRAIN_PLANE_HOME/plane.env"
+  [ ! -f "$PBRAIN_PLANE_HOME/plane.env.pbrain-bak" ]
+}
+
+@test "PB-113 up --port 80 is treated as the no-vhost escape hatch" {
+  _seed_setup_sh
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" up --port 80
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INIT_PLANE_NO_VHOST"* ]]
+  grep -q '^LISTEN_HTTP_PORT=80$' "$PBRAIN_PLANE_HOME/plane.env"
+}
+
+@test "PB-113 up --port 9000 applies a custom vhost port" {
+  IP config --api-key SECRET --workspace ws --project pid >/dev/null
+  _seed_setup_sh
+  _seed_plane_env
+  STUB="$(_stub_docker)"
+  run env PATH="$STUB:$PATH" bash "$REPO_ROOT/commands/init-plane.sh" up --port 9000
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"INIT_PLANE_VHOST"* ]]
+  grep -q '^LISTEN_HTTP_PORT=9000$' "$PBRAIN_PLANE_HOME/plane.env"
+  grep -q '"base_url": "http://127.0.0.1:9000"' "$XDG_CONFIG_HOME/pbrain/plane.json"
+}
+
 # --- github -------------------------------------------------------------------
 
 @test "github without plane.env reports INIT_PLANE_GITHUB_NO_ENV (no crash)" {
