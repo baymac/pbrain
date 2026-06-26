@@ -104,8 +104,14 @@ style") without explaining it in plain words first.
   2d — VARIATION + ANTI-PATTERNS + ANCHORS (last).
 
   Variation preferences (ask once, plainly):
-    - Non-gym fitness days: use activity_buffers (see profile-schema.txt) for
-      known activities (football, Apple Fitness) — do NOT ask for buffer/commute
+    - Gym commute + getting-ready: ask "How long is your commute to the gym
+      each way, and how long do you need after a workout to shower/get-ready?"
+      → activity_buffers.gym (commute_before/after_min + post_home_settle_min).
+      The gym slot is then a window = commute + session + commute, with the
+      get-ready time as a SEPARATE block after — captured ONCE here so the
+      planner never re-asks commute time.
+    - Other fitness days (football, Apple Fitness, classes): use activity_buffers
+      (see profile-schema.txt) for known activities — do NOT ask for buffer/commute
       time; for unknown activities ask duration including travel/buffer.
     - Late wake-ups: "If you wake up late I'll shift the whole timeline later,
       but always keep ≥30 min between waking and your first work block." →

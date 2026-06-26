@@ -216,6 +216,30 @@ EOF
   [[ "$output" != *"## Today's focus"* ]]
 }
 
+@test "PB-179: daily INSTRUCTIONS enforce exact segment durations + a gym-inclusive fitness buffer" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue   # force the full SESSION (skip the preflight gate)
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  # segment faithfulness: include every segment, use exact durations
+  [[ "$output" == *"INCLUDE EVERY SEGMENT"* ]]
+  [[ "$output" == *"EXACT"* ]]
+  # the fitness buffer rule now covers gym, not just non-gym activities
+  [[ "$output" == *"FITNESS BUFFER (applies to ANY fitness activity, gym included)"* ]]
+  [[ "$output" == *"post_home_settle"* ]]
+}
+
+@test "PB-180: daily INSTRUCTIONS forbid a full break adjacent to a long meal/rest" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue   # force the full SESSION (skip the preflight gate)
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PLAN_MY_DAY_SESSION"* ]]
+  [[ "$output" == *"NO DOUBLE-REST"* ]]
+  [[ "$output" == *"bank"* ]]
+}
+
 @test "PB-71: shower-coupled grooming habits fold into the shower/get-ready block" {
   write_plans_profile
   write_libraries

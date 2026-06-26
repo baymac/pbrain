@@ -180,29 +180,42 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
       1. Pick `workday` vs `rest_day`: compare today (`day_of_week`)
          against typical_day.rest_days. Confirm in one line ("Treating today as
          a workday — yes?"), overridable for a one-off day off. Lay that
-         template as today's baseline, wake→bed. WORK (`flex`) segments are
-         PADDED CEILINGS you may COMPRESS, never expand. But `fixed` and
-         `fitness` segments keep their stated duration — in particular the
-         gym/fitness slot already BUNDLES commute + get-ready + prep, so do NOT
-         shrink it to the fitness journal's training time (a ~60-min session
-         still occupies its 2h slot). When the session time shifts off the
-         template (e.g. gym at 14:30 vs the 11:30 slot), slide the slot AND the
-         segments that follow it (get-ready/prep, lunch) by the same offset,
-         preserving each one's duration.
+         template as today's baseline, wake→bed. INCLUDE EVERY SEGMENT — do not
+         silently drop the small ones (a 30-min nap, a get-ready slot, a snack
+         are real blocks; omitting them is a bug). Use each segment's EXACT
+         stated `duration_min` — do NOT round, pad, or shrink a `fixed`/`fitness`/
+         `rest` segment to your own guess (e.g. if lunch is 30 min in the
+         template, it is 30 in the plan, not 45; if there is a nap segment, the
+         plan has a nap row). WORK (`flex`) segments are the ONLY padded ceilings
+         you may COMPRESS (never expand) to absorb time pressure. The gym/fitness
+         slot already BUNDLES its full window (commute + session + get-ready/
+         settle — see the buffer rule in step 3), so do NOT shrink it to the
+         fitness journal's bare training time (a ~60-min session still occupies
+         its ~2h slot). When the session time shifts off the template (e.g. gym
+         at 14:30 vs the 11:30 slot), slide the slot AND the segments that follow
+         it (get-ready/prep, lunch, nap) by the same offset, preserving each
+         one's exact duration.
       2. ANCHOR today's non-negotiables FIRST (calendar events + the Step 0
          ask). Prepone/postpone the `flex`/`skippable` segments around them;
          keep `fixed` (meal/wake/bed) segments within their normal diet/
          profile variance (15–30 min).
       3. DETECT + APPLY variations:
-         - Non-gym fitness day (`fitness_today_schedule` is non-gym — e.g.
-           football, Apple Fitness, a class): check `variation_rules.activity_buffers`
-           in the plans profile FIRST. If the activity has a named entry there
-           (e.g. "football", "apple_fitness"), use its buffer values silently —
-           do NOT ask the user for commute or buffer time. Compute the full window
-           (commute_before + session + commute_after + post_home_settle) and block
-           it out, then shift the nearby meal slots to fit — meal COUNT unchanged
+         - FITNESS BUFFER (applies to ANY fitness activity, gym included):
+           check `variation_rules.activity_buffers` in the plans profile FIRST.
+           If today's activity has a named entry there (e.g. "gym", "football",
+           "apple_fitness"), use its buffer values SILENTLY — never ask the user
+           for commute or buffer time, it is encoded in the buffer. Reserve the
+           full window = commute_before + session + commute_after as ONE block,
+           and place post_home_settle_min (e.g. shower + get-ready + prep) as a
+           SEPARATE row immediately after — it is ADDITIONAL to the window, not
+           inside it. Example (gym buffer = 30/30/30): a ~1h gym session occupies
+           a 2h slot (commute+session+commute) PLUS a 30-min get-ready row after.
+           Then shift the nearby meal slots to fit — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
-           activity has NO entry in activity_buffers.
+           activity has NO entry in activity_buffers. (Gym is the canonical commute
+           activity — a profile SHOULD carry a "gym" buffer; if it is missing,
+           still reserve the typical_day gym segment's full duration, don't
+           collapse it to the bare session length.)
          - Late wake-up (today's wake from 1a is later than the template's wake
            slot): shift the timeline later, ENFORCING ≥30 min between wake and
            the first work block (variation_rules.min_wake_to_work_gap_min).
@@ -229,6 +242,11 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
       - blocks of working_style.session_length_min, separated by
         working_style.break_min breaks (rotate break_activities; never the
         same one back-to-back; respect anti_patterns),
+      - NO DOUBLE-REST: if a `flex` break would land immediately before (or
+        after) a long meal/rest segment — e.g. a 30-min break right before
+        dinner — that break is redundant (the meal IS the longer rest). TRIM it
+        to ~15 min and BANK the reclaimed minutes as a work block (work is the
+        flex variable). Don't place a full break adjacent to a meal/nap/rest.
       - laid around today's FIXED anchors: today's skeleton from 1b.5 (the
         typical_day template OR the planning_guidelines sample skeleton — its
         segments and their EXACT durations are where work fits and must be
