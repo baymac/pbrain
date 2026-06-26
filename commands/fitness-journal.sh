@@ -125,7 +125,7 @@ if [[ "${1:-}" == "profile" ]]; then
       echo "---"
       echo "INSTRUCTIONS: Present the profiles above as a short human-readable summary"
       echo "(overall profile: sleep window, steps, metrics; library: each activity with"
-      echo "occurrence + fixed days; one line per activity profile: focus + days)."
+      echo "occurrence; one line per activity profile: focus + fixed days)."
       echo "Do not dump raw JSON. Committed profiles are final — to change one, run:"
       echo "  /fitness-journal profile new [fitness-profile|fitness-library|activity <name>]"
       exit 0
@@ -313,11 +313,11 @@ short batches (not one wall of questions):
   - What activities do you do (or want to track)? Examples: gym, football,
     basketball, swimming, running, cycling, yoga, climbing, Apple Fitness+,
     home workouts…
-  - For each: how many times per week (or per month)? Which FIXED days of the
-    week? Assign non-conflicting days — gym defaults to 4x/week (e.g.
-    Mon/Tue/Thu/Fri), spread other activities across the remaining days; two
-    activities only share a day if the user explicitly wants that. Also ask
-    equipment access, usual location, typical start time, typical duration.
+  - For each: how many times per week (or per month)? (This is the LIBRARY
+    catalogue — occurrence only. The FIXED days of the week are captured later,
+    in step 2's per-activity profile, which is the sole owner of the schedule.)
+    Also ask equipment access, usual location, typical start time, typical
+    duration.
   - What do you want to LOG for each activity (its KPIs)? Suggest sensible
     defaults and let the user trim or add: gym → sets (exercise/reps/weight);
     swimming → distance (km) + duration (min); running → distance + duration +
@@ -363,7 +363,7 @@ Step 2 — Write BOTH files (mkdir -p "$STORE" first), committed v1:
   {"created": "$TODAY", "activities": [
     {"id": "<slug>", "name": "<Name>", "shortcut": "<2-3 letters>",
      "occurrence": {"per": "week", "times": N},
-     "days": ["Mon", "Thu"], "equipment": "...", "location": "...",
+     "equipment": "...", "location": "...",
      "typical_time": "HH:MM", "duration_min": N, "notes": "...",
      "kpis": [{"id": "<slug>", "label": "<Display>",
                "type": "sets|number|distance|duration|rating|text",
@@ -464,11 +464,18 @@ templates.
 
 GENERAL FLOW (per activity)
 
-  1. Ask 4–7 targeted assessment + goal questions. Pick what makes sense for
-     the activity — guidance below.
+  1. Ask 4–7 targeted assessment + goal questions, AND ask which FIXED days of
+     the week this activity lands on — the per-activity profile is the sole
+     owner of the schedule, so days are captured HERE, not in the library.
+     Assign non-conflicting days — gym defaults to 4x/week (e.g. Mon/Tue/Thu/
+     Fri), spread other activities across the remaining days; two activities
+     only share a day if the user explicitly wants that. Let the user override
+     any assignment. Pick the other questions by what makes sense for the
+     activity — guidance below.
   2. Write the profile file at the given profile_path (mkdir -p the parent
-     dir first). Pull occurrence + fixed days + equipment from the LIBRARY
-     above into the frontmatter — do not re-ask what the library already knows.
+     dir first). Put the fixed days you just captured into the frontmatter's
+     \`days:\` field; pull occurrence + equipment from the LIBRARY above — do
+     not re-ask those (the library does NOT carry days — only this profile does).
   3. Tell the user it is saved and move to the next activity.
 
 PER-ACTIVITY GUIDANCE (starting points, adapt to the user)
@@ -478,7 +485,8 @@ PER-ACTIVITY GUIDANCE (starting points, adapt to the user)
     - Top 3 body parts / muscle groups they most want to strengthen.
     - Any weak or underdeveloped areas they have been avoiding.
     - Any injuries, pain points, or movements to avoid.
-    - Session length. (Days/week + equipment come from the library.)
+    - Session length. (Frequency + equipment come from the library; fixed days
+    you ask here and write to this profile.)
     - Experience level (months/years lifting) + current main lifts if known.
     - Primary goal: hypertrophy / strength / general fitness / sport support.
     - Do they want a structured reference plan to follow, or do they prefer to
@@ -538,8 +546,8 @@ PROFILE FILE FORMAT (every activity)
   ---
   activity: {Activity}
   created: $TODAY
-  days: [{fixed days from the library, e.g. Mon, Thu}]
-  occurrence: {e.g. "4/week"}
+  days: [{fixed days captured in this interview, e.g. Mon, Thu}]
+  occurrence: {from the library, e.g. "4/week"}
   equipment: {from the library}
   focus_areas: [{top 2–3 focus areas}]
   version: 1
@@ -976,8 +984,8 @@ Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above say
 Step 2 — TODAY'S PICTURE, then ONE targeted question (no menu dump). From
   date_human, preselected_today ($PRESELECTED) and RECENT SESSIONS, give a tight
   situational read of where the user stands today — for example:
-  - the weekday + whether it's a fixed training day ($DOW; fixed days from the
-    library/activity profiles);
+  - the weekday + whether it's a fixed training day ($DOW; fixed days come from
+    the per-activity profiles);
   - what's owed or carried over (e.g. yesterday's session was skipped, so Day B
     is still owed; or the gym block/day sequence puts the next session at Day C);
   - the most recent relevant session (e.g. "you played football last night").
