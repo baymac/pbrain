@@ -604,16 +604,22 @@ def web_base(cfg):
 
 
 def browse_url(cfg, pid, sequence_id):
-    """PB-134: the canonical, terminal-friendly browse URL for an issue — the SINGLE
-    source of truth so agents never hand-assemble (and mis-shape) issue links.
+    """PB-134: the canonical browse URL for an issue — the SINGLE source of truth so
+    agents never hand-assemble (and mis-shape) issue links.
 
-        web_base(cfg) + "/browse/" + project_short(cfg, pid) + "-" + seq + "/"
+        link_base(cfg) + "/browse/" + project_short(cfg, pid) + "-" + seq + "/"
 
-    e.g. http://plane.localhost:1800/pb/browse/PB-134/ — the SHORT ref form (not the
-    long .../projects/<uuid>/issues/<uuid> shape) precisely so it fits one terminal
-    line and the whole link is clickable. Returns "" when no web base is resolvable
-    (callers fall back to the bare ref). Pure."""
-    base = web_base(cfg)
+    e.g. http://plane.localhost:1800/pb/browse/PB-134/ (web), or
+    plane://pb/browse/PB-134/ (deep link) when the desktop app is installed — the
+    SHORT ref form (not the long .../projects/<uuid>/issues/<uuid> shape) precisely
+    so it fits one line and the whole link is clickable.
+
+    App-aware (PB-134 + PB-148): routed through link_base, so it emits the plane://
+    deep link when /Applications/Plane.app is present (opens the issue in the app)
+    and the http web_base otherwise (browser-openable). Same gate every other saved
+    link uses, so chat-emitted and vault-written links stay consistent. Returns ""
+    when no base is resolvable (callers fall back to the bare ref). Pure."""
+    base = link_base(cfg)
     if not base or sequence_id in (None, ""):
         return ""
     return "%s/browse/%s-%s/" % (base, project_short(cfg, pid), sequence_id)

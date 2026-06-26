@@ -79,6 +79,7 @@ STEP 4 — REPORT
   One compact line: new PB-id · type · priority · labels · (sub-issues, estimate,
   deadline if set) · link. Relay any PLANE_ERROR plainly; never fake a created issue.
   LINK (PB-134): use the `url` field the create step emits (PM_ISSUE carries the
-  canonical browse url, e.g. http://…/pb/browse/PB-134/) — relay THAT, do NOT
-  hand-assemble a URL from project/issue UUIDs. Print it as a markdown link
+  canonical browse url, e.g. http://…/pb/browse/PB-134/ — or a plane://…/browse/PB-134/
+  deep link when the Plane desktop app is installed; it's app-aware) — relay THAT, do
+  NOT hand-assemble a URL from project/issue UUIDs. Print it as a markdown link
   [PB-134](url) (or bare on its own line); never jam trailing punctuation against it.

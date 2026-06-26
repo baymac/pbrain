@@ -71,6 +71,9 @@ import sys, importlib.util, os
 spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 os.environ.pop("PBRAIN_PLANE_WEB_BASE", None)
+# pin the deep link OFF so the web-form assertions hold regardless of whether
+# /Applications/Plane.app happens to exist on the machine running the suite.
+os.environ["PBRAIN_PLANE_DEEPLINK"] = "0"
 cfg = {"base_url":"http://127.0.0.1:1800","workspace":"pb",
        "projects":[{"id":"P1","shortcut":"pb","name":"pbrain"}]}
 # canonical short browse form, loopback swapped to the vanity host, trailing slash
@@ -89,6 +92,29 @@ del os.environ["PBRAIN_PLANE_WEB_BASE"]
 # _issue_card carries the same canonical url so `find` relays it (no guessing)
 card = m._issue_card(cfg, "P1", {"id":"u1","sequence_id":134,"name":"x"}, "PB")
 assert card["url"] == "http://plane.localhost:1800/pb/browse/PB-134/", card["url"]
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ]
+  [[ "$output" == *ok* ]]
+}
+
+@test "PB-134 browse_url is app-aware: plane:// deep link when the app is installed" {
+  run python3 - "$PLANE" <<'PYEOF'
+import sys, importlib.util, os
+spec = importlib.util.spec_from_file_location("plane", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+os.environ.pop("PBRAIN_PLANE_WEB_BASE", None)
+cfg = {"base_url":"http://127.0.0.1:1800","workspace":"pb",
+       "projects":[{"id":"P1","shortcut":"pb","name":"pbrain"}]}
+# app present -> plane:// deep link, same workspace slug + short ref + trailing slash
+os.environ["PBRAIN_PLANE_DEEPLINK"] = "1"
+assert m.browse_url(cfg, "P1", 134) == "plane://pb/browse/PB-134/", m.browse_url(cfg, "P1", 134)
+# _issue_card inherits the deep link too (every emitter goes through browse_url)
+card = m._issue_card(cfg, "P1", {"id":"u1","sequence_id":134,"name":"x"}, "PB")
+assert card["url"] == "plane://pb/browse/PB-134/", card["url"]
+# app absent -> http web link (browser-openable fallback), unchanged
+os.environ["PBRAIN_PLANE_DEEPLINK"] = "0"
+assert m.browse_url(cfg, "P1", 134) == "http://plane.localhost:1800/pb/browse/PB-134/", m.browse_url(cfg, "P1", 134)
 print("ok")
 PYEOF
   [ "$status" -eq 0 ]
