@@ -58,7 +58,29 @@ STORE="$(pbrain_profile_store "$DIET_DIR")"
 FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
 
 TODAY="$(date +%Y-%m-%d)"
-DOW="$(date +%a)"
+
+# Optional target date — log/backfill a PAST day (e.g. at /end-of-day backfill)
+# with `--date YYYY-MM-DD` or a bare YYYY-MM-DD positional. Defaults to today.
+# The chosen date drives OUT_FILE, the frontmatter `date:`, the save path, and
+# the meal-time fitness anchoring (that date's fitness session, not today's).
+# Mirrors /end-of-day, /habits, /laptop-tracking. Unrecognised args are kept so
+# the `profile` subcommand below still sees its positional $1/$2/$3.
+_dj_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --date) TODAY="${2:-$TODAY}"; shift 2 2>/dev/null || shift ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) TODAY="$1"; shift ;;
+    *) _dj_args+=("$1"); shift ;;
+  esac
+done
+set -- "${_dj_args[@]+"${_dj_args[@]}"}"
+unset _dj_args
+if ! [[ "$TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "Bad date '$TODAY' — expected YYYY-MM-DD." >&2; exit 1
+fi
+
+# Day-of-week for the target date (not necessarily today). macOS `date -j`.
+DOW="$(date -j -f "%Y-%m-%d" "$TODAY" +%a 2>/dev/null || date +%a)"
 OUT_FILE="$DIET_DIR/$TODAY.md"
 
 mkdir -p "$DIET_DIR"

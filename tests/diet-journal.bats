@@ -151,6 +151,54 @@ EOF
   [[ "$output" == *"post-workout protein"* ]]
 }
 
+# ── --date (backfill a past day) ─────────────────────────────────────────────
+
+@test "--date drives the entry date and output path" {
+  write_profile
+  run DIETJ --date 2026-06-26
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DIET_JOURNAL_SESSION"* ]]
+  [[ "$output" == *"date: 2026-06-26"* ]]
+  [[ "$output" == *"output_file: $DIET/2026-06-26.md"* ]]
+}
+
+@test "bare YYYY-MM-DD positional also drives the date" {
+  write_profile
+  run DIETJ 2026-06-26
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"date: 2026-06-26"* ]]
+}
+
+@test "no --date defaults to today" {
+  write_profile
+  run DIETJ
+  [[ "$output" == *"date: $TODAY"* ]]
+  [[ "$output" == *"output_file: $DIET/$TODAY.md"* ]]
+}
+
+@test "--date routes a past day's existing entry to update mode" {
+  write_profile
+  mkdir -p "$DIET"
+  echo "entry" > "$DIET/2026-06-26.md"
+  run DIETJ --date 2026-06-26
+  [[ "$output" == *"DIET_JOURNAL_UPDATE"* ]]
+  [[ "$output" == *"date: 2026-06-26"* ]]
+}
+
+@test "bad --date is rejected" {
+  write_profile
+  run DIETJ --date not-a-date
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Bad date"* ]]
+}
+
+@test "profile subcommand still works alongside the new arg parsing" {
+  write_profile
+  run DIETJ profile show
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DIET_PROFILE_SHOW"* ]]
+}
+
 # ── profile subcommand ───────────────────────────────────────────────────────
 
 @test "profile new mints a draft and commit freezes it" {
