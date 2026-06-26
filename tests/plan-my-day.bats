@@ -431,6 +431,42 @@ EOF
   [[ "$output" == *"fitness_today_schedule: Gym — typically 17:00"* ]]
 }
 
+@test "PB-175: library days drive the schedule when no per-activity profile exists" {
+  # Regression: the schedule reader used to take days ONLY from per-activity
+  # profile files under .profile/activities/. With a library-only setup (the
+  # common case), the library's own days array must drive the match — otherwise
+  # the planner reports "nothing scheduled" while the habits rollup (which reads
+  # the library) correctly shows the activity.
+  write_goals_profile
+  write_libraries
+  local dow3 other
+  dow3="$(date +%a)"
+  # A day that is NOT today, to prove non-matching activities stay silent.
+  other="$([ "$dow3" = "Mon" ] && echo Tue || echo Mon)"
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking/.profile"   # NOTE: no activities/ dir
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/.profile/fitness-library.v1.md" <<EOF
+---
+type: fitness-library
+version: 1
+committed: true
+---
+# Fitness library
+\`\`\`json
+{"created": "$TODAY", "activities": [
+  {"id": "strength", "name": "Strength (home)", "days": ["$dow3"],
+   "typical_time": "06:30", "duration_min": 40},
+  {"id": "swim", "name": "Pool swim", "days": ["$other"],
+   "typical_time": "06:30", "duration_min": 60}]}
+\`\`\`
+EOF
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  # Today's library activity surfaces from the library days (no per-activity file).
+  [[ "$output" == *"fitness_today_schedule: Strength (home) — typically 06:30 — ~40 min"* ]]
+  # The other-day activity must NOT appear.
+  [[ "$output" != *"Pool swim"* ]]
+}
+
 @test "existing plan today (with a glance) routes to the UPDATE path" {
   write_goals_profile
   write_libraries

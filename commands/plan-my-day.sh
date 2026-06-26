@@ -643,6 +643,7 @@ dow3 = dow.strip().lower()[:3]
 act_store = os.path.join(fit_store, "activities")
 
 meta = {}
+lib_days = {}   # PB-175: the library carries authoritative per-activity `days`
 lib_best = None
 for f in glob.glob(os.path.join(fit_store, "fitness-library.v*.md")):
     m = re.match(r".*\.v(\d+)\.md$", f)
@@ -656,6 +657,9 @@ if lib_best:
         for a in data.get("activities", []):
             slug = a.get("id") or re.sub(r"[^a-z0-9]+", "-", str(a.get("name", "")).lower()).strip("-")
             meta[slug] = (str(a.get("name", slug)), a.get("typical_time"), a.get("duration_min"))
+            days = a.get("days")
+            if isinstance(days, list):
+                lib_days[slug] = [str(d).strip().lower()[:3] for d in days if str(d).strip()]
     except Exception:
         pass
 
@@ -678,11 +682,19 @@ for f in glob.glob(os.path.join(act_store, "*.v*.md")):
     if slug not in best or ver > best[slug][0]:
         best[slug] = (ver, fm.group(1))
 
-for slug, (_v, front) in sorted(best.items()):
+# Resolve each slug's scheduled days: a per-activity profile wins when it
+# provides `days:`; otherwise fall back to the library's `days` array (PB-175 —
+# the library is the authoritative day source when no per-activity profile
+# exists, which is the common library-only setup). Without this fallback the
+# planner reported "nothing scheduled today" while the habits rollup — which
+# does read the library days — correctly showed the activity.
+sched_days = dict(lib_days)   # start from the library
+for slug, (_v, front) in best.items():
     dm = re.search(r"^days:\s*\[(.*?)\]\s*$", front, re.MULTILINE)
-    if not dm:
-        continue
-    days = [d.strip().strip("\"").lower()[:3] for d in dm.group(1).split(",") if d.strip()]
+    if dm:
+        sched_days[slug] = [d.strip().strip("\"").lower()[:3] for d in dm.group(1).split(",") if d.strip()]
+
+for slug, days in sorted(sched_days.items()):
     if dow3 in days:
         name, ttime, dur = meta.get(slug, (slug, None, None))
         bits = [name]
