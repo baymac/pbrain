@@ -11,6 +11,22 @@ forward right now — that way each daily plan is anchored on what matters to
 you, not just a generic to-do list. We'll do this in order: first your goals,
 then how you like to work, then the shape of a normal day."
 
+Step 1.5 — SIBLING-PROFILE NUDGE (soft, non-blocking — mirrors the PB-58
+runtime preflight philosophy). /plan-my-day plans the LIFE structure around
+three sibling profiles, and is materially better when they exist:
+  - /fitness-journal → your wake time + which workout slots into the day
+  - /diet-journal → your meal times (so meals anchor the schedule)
+  - /habits → the habit rollup it schedules daily reminders against
+Mention this ONCE, plainly, and DO NOT block on it: "Heads up — plan-my-day
+works best alongside your fitness, diet, and habits profiles (they give it
+your wake/meal times and habit reminders). You don't need them to start; I'll
+plan fine without them and nudge you per-day. Want to set any up first, or
+shall we build your plans profile now?" Honor a standing preference that says
+to skip this nudge (injected USER PREFERENCES block, global or per-command) —
+if present, skip it. Then continue to Step 2 regardless of their answer; if
+they choose to build a sibling profile first, point them at that command and
+resume here afterwards.
+
 Step 2 — Interview the user. IN ORDER (2a → 2b → 2c → 2d). This order is
 deliberate — the focus list comes FIRST so everything after it has something
 to anchor on. HARD RULE: never open with several abstract asks at once (do NOT
@@ -53,8 +69,10 @@ style") without explaining it in plain words first.
   - Energy peak: morning / afternoon / night / mixed?
   - Usual sleep timing: what time do you normally wake, and what bedtime are
     you aiming for? (Needed to bound the day — wake gates the first block, bed
-    gates the last. If a fitness profile already records this, confirm it in
-    passing instead of re-asking.)
+    gates the last.) If a fitness profile ALREADY records wake/sleep, confirm
+    it in passing instead of re-asking; if it does NOT exist yet (the usual
+    first-run case), just ask here — and note that setting up /fitness-journal
+    later will keep this in sync automatically.
   - Anything that wrecks your day if it slips?
   - Any other /plan-my-day preferences (e.g. "always surface carry-forward
     tasks first", "keep Sundays block-free")?
