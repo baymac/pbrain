@@ -207,8 +207,9 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            slot): shift the timeline later, ENFORCING ≥30 min between wake and
            the first work block (variation_rules.min_wake_to_work_gap_min).
          - Invariants every day: keep the meal COUNT (keep_meal_count); absorb
-           time pressure by SHRINKING work blocks (work_is_flex); protect meals
-           + fitness slots.
+           time pressure by FLEXING the work-block COUNT — drop whole blocks
+           (work_is_flex), do NOT shrink a block below session_length_min (the
+           final wind-down block excepted); protect meals + fitness slots.
          - SKIP-FITNESS (conditional, a judgment call — never silent): ONLY if
            meals are running late AND the RECENT FITNESS ACTIVITY block shows
            the last few days were already active, *suggest* skipping today's
@@ -226,9 +227,17 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     banked in the 1b backfill. The user will give feedback if they want it
     different — don't make them supply the number. COMPUTE the block layout
     from those gaps and SHOW it before going further:
-      - blocks of working_style.session_length_min, separated by
+      - FULL blocks of working_style.session_length_min, separated by
         working_style.break_min breaks (rotate break_activities; never the
-        same one back-to-back; respect anti_patterns),
+        same one back-to-back; respect anti_patterns). Each work block is a
+        FIXED session_length_min unit — NEVER shorten a block to fit the
+        leftover space in a gap. The NUMBER of blocks flexes to fit the day;
+        the SIZE does not. When a gap between two anchors cannot hold a full
+        session_length_min block plus its break, DROP the block (leave the
+        gap as rest/transition) rather than squeezing a partial block in.
+        The ONLY block that may run short is the final wind-down block (the
+        last block before last_block_end / wind-down) — every mid-day block
+        holds its full session length,
       - laid around today's FIXED anchors: today's skeleton from 1b.5 (the
         typical_day template OR the planning_guidelines sample skeleton — its
         segments and their EXACT durations are where work fits and must be
@@ -298,10 +307,11 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      slot stays 2h, the get-ready+prep segment between the workout and lunch
      stays at its stated length; you shift segment START times to fit today but
      never silently compress or drop a segment. Keep the meal COUNT, protect
-     meal + fitness slots, and absorb time pressure by SHRINKING work blocks
-     (work is the flex variable), never by collapsing a skeleton segment or
-     dropping a meal. Fitness may be dropped ONLY via the explicit 1b.5 skip
-     suggestion the user accepted.
+     meal + fitness slots, and absorb time pressure by DROPPING whole work
+     blocks (the block COUNT is the flex variable) — never by shrinking a
+     block below session_length_min (only the final wind-down block may run
+     short), collapsing a skeleton segment, or dropping a meal. Fitness may
+     be dropped ONLY via the explicit 1b.5 skip suggestion the user accepted.
   b2. BLOCK-COUPLED HABITS (PB-71) — some tracked habits naturally happen AS PART
      of another anchor, not on their own. SHOWER-COUPLED GROOMING (Shampoo,
      Microneedling, and similar) belongs inside the shower / get-ready / recovery
@@ -322,7 +332,9 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      / meal / decompress rows. Backfilled rows tile cleanly too.
   e. WORK BLOCKS: as many session_length_min blocks as 1c settled on, placed
      into the gaps the life anchors leave, each a GENERIC PLACEHOLDER row
-     ("Block N — focus work", Tie "—"), break rows woven between consecutive
+     ("Block N — focus work", Tie "—"). Emit each block at its FULL
+     session_length_min width (1c never shortened them); only the final
+     wind-down block may render short. Break rows woven between consecutive
      blocks (rotating break_activities). No break before the first block or
      after the last. Work is never an anchor row. /plan-my-work labels these
      blocks with real tasks later — do NOT name tasks here.
