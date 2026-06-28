@@ -226,9 +226,10 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     banked in the 1b backfill. The user will give feedback if they want it
     different — don't make them supply the number. COMPUTE the block layout
     from those gaps and SHOW it before going further:
-      - blocks of working_style.session_length_min, separated by
-        working_style.break_min breaks (rotate break_activities; never the
-        same one back-to-back; respect anti_patterns),
+      - blocks of working_style.session_length_min, separated by breaks of
+        EXACTLY working_style.break_min (never stretched to fill a gap — see
+        the break-sizing invariant in rule e; rotate break_activities; never
+        the same one back-to-back; respect anti_patterns),
       - laid around today's FIXED anchors: today's skeleton from 1b.5 (the
         typical_day template OR the planning_guidelines sample skeleton — its
         segments and their EXACT durations are where work fits and must be
@@ -319,13 +320,24 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      real time. The plan spans wake → bed.
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
      no gaps, no overlapping rows. Fill holes with explicit rest / transition
-     / meal / decompress rows. Backfilled rows tile cleanly too.
+     / meal / decompress rows. Backfilled rows tile cleanly too. RESIDUAL
+     before a FIXED anchor (a gap left over after a capped break — see rule e):
+     bank it as work FIRST — an extra or short "Block N — focus work" row (work
+     is the flex variable, same cap-and-bank discipline as PB-180, opposite
+     direction) — and ONLY when the leftover is too short to be useful work,
+     emit ONE explicitly-labelled transition / rest row of its TRUE remaining
+     length. NEVER fold residual into a break to make the gap disappear.
   e. WORK BLOCKS: as many session_length_min blocks as 1c settled on, placed
      into the gaps the life anchors leave, each a GENERIC PLACEHOLDER row
      ("Block N — focus work", Tie "—"), break rows woven between consecutive
      blocks (rotating break_activities). No break before the first block or
      after the last. Work is never an anchor row. /plan-my-work labels these
-     blocks with real tasks later — do NOT name tasks here.
+     blocks with real tasks later — do NOT name tasks here. BREAK-SIZING
+     INVARIANT: a break row is EXACTLY working_style.break_min — never stretched
+     past it to absorb a gap, never doubled, never merged with adjacent filler
+     into one oversized "break". If the gap before the next fixed anchor exceeds
+     break_min, cap the break at break_min and hand the remainder to rule d
+     (bank as work, else an honest transition row) — never inflate the break.
   f. 24h times (HH:MM–HH:MM) on every row. REQUIRED rows: wake/morning-start,
      workout (if any), every meal slot, walk (if anchored), wind-down, bed.
   g. Every row's Tie column maps to a current_focus item name, a category
