@@ -1,1 +1,18 @@
-{"_doc":"/fitness-journal PB-117 — clock decides planned vs completed. Persona reports a session at a time that is at/PAST time_now and describes it as done. Expected: status: completed, BOTH ## Planned and ## Logged present with real actuals. The same emitted block (with time_now) supports this; the clock just resolves the other branch. tracking_kind=vault-file.","command":"fitness-journal","feature":"clock","tags":["clock","completed","past"],"persona_mode":"scripted","dump":"did my apple fitness workout earlier — 20 min kickboxing, 10 strength, 5 cooldown","session_time_offset_min":-90,"expect_status":"completed","expect":"completed","display":"fitness/clock — past time + done → completed (both sections)"}
+{
+ "_doc": "/fitness-journal PB-117 — clock decides planned vs completed. Persona reports a session at a time that is at/PAST time_now and describes it as done. Expected: status: completed, BOTH ## Planned and ## Logged present with real actuals. The same emitted block (with time_now) supports this; the clock just resolves the other branch. tracking_kind=vault-file.",
+ "command": "fitness-journal",
+ "feature": "clock",
+ "tags": [
+  "clock",
+  "completed",
+  "past"
+ ],
+ "persona_mode": "scripted",
+ "dump": "did my apple fitness workout earlier — 20 min kickboxing, 10 strength, 5 cooldown",
+ "session_time_offset_min": -90,
+ "expect_status": "completed",
+ "expect": "completed",
+ "display": "fitness/clock — past time + done → completed (both sections)",
+ "engine": "fitness-clock.bash",
+ "run_fn": "e2e_run_fitness_clock"
+}

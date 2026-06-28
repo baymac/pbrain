@@ -1,1 +1,19 @@
-{"_doc":"/fitness-journal PB-117 — clock decides planned vs completed. Persona states a session at a time that is in the FUTURE relative to time_now (the script's authoritative local clock). Expected: status: planned, ## Planned only, NO ## Logged actuals — even though the dump is phrased in the present tense ('I am doing ... at <future>'). The agent must NOT fabricate actuals for a session that has not happened. tracking_kind=vault-file.","command":"fitness-journal","feature":"clock","tags":["clock","planned","future","no-fabrication"],"persona_mode":"scripted","dump":"i am doing fitness, apple fitness workout","session_time_offset_min":120,"expect_status":"planned","expect":"planned","display":"fitness/clock — future time → planned (no fabricated actuals)"}
+{
+ "_doc": "/fitness-journal PB-117 — clock decides planned vs completed. Persona states a session at a time that is in the FUTURE relative to time_now (the script's authoritative local clock). Expected: status: planned, ## Planned only, NO ## Logged actuals — even though the dump is phrased in the present tense ('I am doing ... at <future>'). The agent must NOT fabricate actuals for a session that has not happened. tracking_kind=vault-file.",
+ "command": "fitness-journal",
+ "feature": "clock",
+ "tags": [
+  "clock",
+  "planned",
+  "future",
+  "no-fabrication"
+ ],
+ "persona_mode": "scripted",
+ "dump": "i am doing fitness, apple fitness workout",
+ "session_time_offset_min": 120,
+ "expect_status": "planned",
+ "expect": "planned",
+ "display": "fitness/clock — future time → planned (no fabricated actuals)",
+ "engine": "fitness-clock.bash",
+ "run_fn": "e2e_run_fitness_clock"
+}

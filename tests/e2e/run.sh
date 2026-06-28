@@ -116,6 +116,14 @@ for row in "${PLAN[@]}"; do
     fi
   else
     engine="$(reg "$cmd" engine)"; run_fn="$(reg "$cmd" run_fn)"
+    # Scenario-level engine override (scripted only): a feature that needs a
+    # different driver than its command's default declares its own engine/run_fn
+    # in the scenario JSON (e.g. fitness-journal/clock → fitness-clock.bash).
+    # Same idea as persona_mode living in the scenario. Both must be present.
+    sc_engine="$(sc "$scen" engine)"; sc_run_fn="$(sc "$scen" run_fn)"
+    if [[ -n "$sc_engine" && -n "$sc_run_fn" ]]; then
+      engine="$sc_engine"; run_fn="$sc_run_fn"
+    fi
   fi
   echo "▶ $cmd/$feat  $(basename "$scen" .json)  × $persona  [$mode]"
   # Each run in a subshell so a driver's set/exit can't poison the loop.

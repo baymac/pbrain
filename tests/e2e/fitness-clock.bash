@@ -23,7 +23,13 @@
 # The artifact (the real dated markdown) is the tracking channel, shown in the
 # union HTML report alongside the chat. tracking_kind=vault-file.
 #
-# Shares lib.bash with the other e2e drivers; loaded by tests/e2e-fitness.bats.
+# Shares lib.bash with the other e2e drivers. Sourced directly here (like every
+# other driver) so it works both when loaded by tests/e2e-fitness.bats AND when
+# dispatched by run.sh via the scenario's engine override (PB-190); re-sourcing
+# lib.bash is idempotent.
+
+set -uo pipefail
+source "$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/lib.bash"
 
 E2E_FDIR=""        # fitness daily-tracking dir (real, under the temp vault)
 E2E_STORE=""       # the .profile store under it
