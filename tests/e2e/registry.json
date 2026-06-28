@@ -23,6 +23,13 @@
       "tracking_kind": "vault-file",
       "default_personas": ["fast", "cautious"],
       "default_mode": "scripted"
+    },
+    "plan-my-day": {
+      "engine": "plan-my-day.bash",
+      "run_fn": "e2e_run_pmd",
+      "tracking_kind": "vault-file",
+      "default_personas": ["cautious"],
+      "default_mode": "scripted"
     }
   }
 }

@@ -1,0 +1,28 @@
+{
+  "_doc": "PB-187 break-cap, end-to-end. Fixture: break_min=30, session=90, a FIXED workout anchor at 16:15 (2h padded slot). After the 13:15 lunch, one 90-min block (13:15-14:45) + a capped 30-min break (14:45-15:15) leaves a 60-min residual before the 16:15 anchor. The fixed rules (PB-187) say: cap the break at break_min and BANK the residual as work — so 15:15-16:15 is 'Block 5 - focus work', NOT an inflated 60-min break. The driver runs the REAL plan-my-day.sh (asserts the emitted session carries the break-cap + residual-as-work rules), writes the real dated plan file with these rows, then asserts: every break row <= 30, the row ending at 16:15 is a focus-work block, and the day tiles gap-free. tracking_kind=vault-file -> the report shows the real Today-at-a-glance table.",
+  "command": "plan-my-day",
+  "feature": "break-discipline",
+  "display": "plan-my-day — break capped at break_min, residual banked as work (PB-187)",
+  "expect": "planned",
+  "personas": ["cautious"],
+
+  "break_min": 30,
+  "session_min": 90,
+  "fixed_anchor_start": "16:15",
+
+  "daily_anchors": {"wake_time": "07:30", "workout_time": "16:15", "lunch_time": "12:30", "dinner_time": "20:30", "walk_time": null, "bed_target": "23:30"},
+
+  "typical_day": {"padded": true, "rest_days": ["sat", "sun"],
+    "workday": [
+      {"slot": "wake", "start": "07:30", "end": "08:00", "duration_min": 30, "category": "wake", "flex": "fixed"},
+      {"slot": "work_am", "start": "09:00", "end": "12:30", "duration_min": 210, "category": "work", "flex": "flex"},
+      {"slot": "lunch", "start": "12:30", "end": "13:15", "duration_min": 45, "category": "meal", "flex": "fixed"},
+      {"slot": "work_pm", "start": "13:45", "end": "15:15", "duration_min": 90, "category": "work", "flex": "flex"},
+      {"slot": "gym", "start": "16:15", "end": "18:15", "duration_min": 120, "category": "fitness", "flex": "fixed"},
+      {"slot": "dinner", "start": "20:30", "end": "21:15", "duration_min": 45, "category": "meal", "flex": "fixed"},
+      {"slot": "bed", "start": "23:30", "end": "23:30", "duration_min": 0, "category": "bed", "flex": "fixed"}],
+    "rest_day": [
+      {"slot": "wake", "start": "08:30", "end": "09:00", "duration_min": 30, "category": "wake", "flex": "fixed"}]},
+
+  "rows_tsv": "07:30–08:00\tWake + morning start\tRest\n08:00–09:30\tBlock 1 — focus work\t—\n09:30–10:00\tBreak — short walk\tRest\n10:00–11:30\tBlock 2 — focus work\t—\n11:30–12:00\tBreak — stretch\tRest\n12:00–12:30\tBlock 3 — focus work (short)\t—\n12:30–13:15\tLunch\tEating\n13:15–14:45\tBlock 4 — focus work\t—\n14:45–15:15\tBreak — coffee\tRest\n15:15–16:15\tBlock 5 — focus work (short)\t—\n16:15–18:15\tWorkout (gym)\tFit body\n18:15–19:45\tBlock 6 — focus work\t—\n19:45–20:30\tWind-down / transition\tRest\n20:30–21:15\tDinner\tEating\n21:15–23:30\tEvening wind-down → bed\tRest"
+}

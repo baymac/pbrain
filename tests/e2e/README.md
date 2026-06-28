@@ -16,6 +16,18 @@ behaviour, not a mocked script.
   `harness.bash`). Tracking = the Plane write-journal.
 - `/journal` — the daily journal loop (`tests/e2e-journal.bats`, driver
   `journal.bash`). Tracking = the real dated vault markdown file.
+- `/fitness-journal` — clock + sleep scenarios (driver `fitness-journal.bash`,
+  `live.bash` for the two-real-model mode). Tracking = the real dated vault file.
+- `/plan-my-day` — break-discipline scenarios (driver `plan-my-day.bash`).
+  Tracking = the real dated `life/daily-planning/<date>.md`. The break-cap
+  scenario (`scenarios/plan-my-day/break-discipline/preanchor-gap.json`) verifies
+  PB-187 end to end: it runs the real `plan-my-day.sh` (asserting the emitted
+  `PLAN_MY_DAY_SESSION` carries the break-cap + residual-as-work rules), lays the
+  day around a fixed anchor that leaves a residual gap, and asserts every break
+  row is ≤ `break_min`, the residual is banked as work, and the day tiles
+  gap-free. Because the day layout is LLM-generated via `plan.txt`, this is the
+  only way to exercise that discipline (the `tests/plan-my-day.bats` unit suite
+  covers the mechanical paths only).
 
 ## Framework vs per-command driver
 
