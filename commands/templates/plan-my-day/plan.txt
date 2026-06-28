@@ -198,9 +198,18 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            football, Apple Fitness, a class): check `variation_rules.activity_buffers`
            in the plans profile FIRST. If the activity has a named entry there
            (e.g. "football", "apple_fitness"), use its buffer values silently —
-           do NOT ask the user for commute or buffer time. Compute the full window
-           (commute_before + session + commute_after + post_home_settle) and block
-           it out, then shift the nearby meal slots to fit — meal COUNT unchanged
+           do NOT ask the user for commute or buffer time. BRACKET the session
+           with BOTH halves of the buffer — the slot is:
+             START = kickoff − commute_before (a.k.a. buffer_before)
+             END   = session-end + commute_after + post_home_settle
+                     (a.k.a. buffer_after)
+           i.e. block out the FULL window on BOTH sides, never just the front.
+           The block must NOT end at session-end whenever the activity has an
+           activity_buffers entry — the after-buffer (commute home + shower/
+           settle) is mandatory, not optional. (Worked example: a 21:00–23:00
+           football match with football's 30/30/30 buffers → slot 20:30–00:00,
+           NOT 20:30–23:00.) Then shift the nearby meal/wind-down rows to AFTER
+           the buffered slot END (not session-end) — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
            activity has NO entry in activity_buffers.
          - Late wake-up (today's wake from 1a is later than the template's wake
