@@ -159,3 +159,47 @@ write-journal per step).
 bash tests/e2e/queue.bash                  # run + write the HTML report, print its path
 PBRAIN_E2E_OPEN=1 bash tests/e2e/queue.bash # also open it (macOS)
 ```
+
+## plan-my-day live e2e (PB-186) — `plan-my-day-live.sh`
+
+A standalone, real-vault, agent-to-agent e2e for `/plan-my-day`. Because
+`/plan-my-day` AUTO-PLANS (it derives the day from the user's real profile,
+fitness journal, diet meal times, habits and calendar — the user only does a
+light morning check-in), a faithful test runs the REAL command against a
+faithful copy of the user's data.
+
+Pipeline: SNAPSHOT the real `$VAULT_DIR` + `~/.config/pbrain` into a throwaway
+dir (real vault untouched; Plane/reminders/DB neutralized) → apply migration
+`0015` on the copy (so `block_layout_policy` + `break_minutes` exist) → delete
+ONLY today's `daily-planning/<date>.md` in the copy → REPLAY: run the real
+`plan-my-day.sh plan` and converse two real models (a SKILL model following the
+emitted instructions + a PERSONA model answering the morning check-in from a
+scenario) until the plan is written → ASSERT the generated `## Today at a glance`
+table against the policy (work blocks fixed at `session_length_min`, trimmed only
+at end-of-day or a hard anchor; breaks within `break_minutes` min..max, never
+padded) → REPORT a clean standalone HTML (conversation bubbles + day timeline +
+rules-check) and open it.
+
+The football time, meal slots and buffers are NOT supplied by the scenario —
+they come from the copied fitness journal / diet profile, exactly as a real
+morning run does. Skips cleanly (not a pass) if the `claude` CLI is absent.
+
+```
+bash tests/e2e/plan-my-day-live.sh run                 # full pipeline + open report
+bash tests/e2e/plan-my-day-live.sh run --no-open       # don't auto-open
+bash tests/e2e/plan-my-day-live.sh run --scenario tests/e2e/scenarios/plan-my-day/today-replay.json
+PBRAIN_E2E_MODEL=claude-haiku-4-5-20251001 bash tests/e2e/plan-my-day-live.sh run  # cheaper smoke run
+```
+
+It applies migrations 0015 (break band + fixed-block policy) and 0016 (diet
+meal durations + post-meal nap) on the copy, so the assert enforces: fixed
+work blocks, breaks within break_minutes min..max, meals capped at their
+diet-profile duration (default 30, never longer — not even "lunch out"), a
+post-meal nap treated as a break (unless a fixed nap is configured), no
+pre-activity padding (only commute reserved), no future-✓ fabrication, no
+mega-rest. (Per-day block priority + conflict-raising is tracked separately as
+PB-194, not covered here.)
+
+Pieces: `plan-my-day-live.sh` (orchestrator), `plan-my-day-assert.py` (the
+policy check), `plan-my-day-report.py` (the HTML renderer), and the scenario at
+`scenarios/plan-my-day/today-replay.json`.

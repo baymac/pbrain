@@ -169,8 +169,12 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          17:00 lunch), they do not compress.
       3. Apply the variation guidance the guidelines themselves state (non-gym
          fitness day → use activity_buffers from the plans profile if available, else ask; shift meals;
-         late-wake day → ≥30 min between wake and first work block; keep the
-         meal count; work is the flex variable that shrinks to absorb pressure).
+         late-wake day → at least variation_rules.min_wake_to_work_gap_min
+         between wake and the first work block (the slow-start/wake gap — use the
+         profile value, do NOT hardcode); keep the
+         meal count; the BREAK is the flex variable — default break_minutes.median,
+         shrink toward min ONLY to bank a full block under real time pressure —
+         work blocks stay fixed, trimmed only at end-of-day or a hard anchor).
       ONLY if planning_guidelines carries NO such skeleton: plan today from
       scratch, and ONCE, non-blocking, add: "Want to add a typical-day template?
       It makes daily planning sharper — run /plan-my-day profile new
@@ -198,17 +202,52 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            football, Apple Fitness, a class): check `variation_rules.activity_buffers`
            in the plans profile FIRST. If the activity has a named entry there
            (e.g. "football", "apple_fitness"), use its buffer values silently —
-           do NOT ask the user for commute or buffer time. Compute the full window
-           (commute_before + session + commute_after + post_home_settle) and block
-           it out, then shift the nearby meal slots to fit — meal COUNT unchanged
+           do NOT ask the user for commute or buffer time.
+           EMIT EXACTLY THIS SEQUENCE around the activity (no extra rows):
+             1) … work blocks right up to the combined block's start …
+             2) COMBINED ACTIVITY BLOCK = commute_before + SESSION + commute_after
+                (ONE row, NO standalone commute rows).
+                · SESSION = the fitness session's OWN duration from today's
+                  fitness journal (its `duration_min` / stated length, e.g. a 2h
+                  match = 120). This is NOT working_style.session_length_min (that
+                  is the 90-min WORK block length — do not use it for the match).
+                · commute_before_min / commute_after_min come EXACTLY from
+                  activity_buffers — never round or invent them (30 is 30, not 25).
+                E.g. football match duration_min 120 with commute 30/30 → a 3h
+                block 30+120+30 = 180, labeled "Football — commute + match +
+                commute". It STARTS at kickoff − commute_before (21:00 − 30 =
+                20:30) and ENDS at match_end + commute_after (23:00 + 30 = 23:30).
+                Sanity-check the block length = commute_before + duration_min +
+                commute_after before writing it.
+             3) post_home_settle BLOCK (post_home_settle_min, e.g. 30 min: shower
+                / get-ready / prep) — POST-activity only.
+             4) the following MEAL — e.g. DINNER. ALWAYS keep it (keep_meal_count);
+                only drop it if the user explicitly says they're skipping it today.
+             5) wind-down, then sleep.
+           DO NOT emit any pre-activity row — no "prep / pack / kit up / wrap up
+           / get-ready / head out / pre-match settle" row BEFORE the combined
+           block. There is NONE: packing and travel are already inside
+           commute_before. Work runs right up to the block start with nothing
+           between (a trimmed block may butt against it). Putting a prep/pack row
+           before the block is WRONG.
+           Shift nearby meal slots to fit — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
            activity has NO entry in activity_buffers.
+           (Full example: … work to 20:30, then 20:30–23:30 "Football — commute +
+           match + commute", 23:30–00:00 settle (shower+prep), 00:00–00:30 Dinner,
+           then wind-down → sleep. NO prep row before 20:30; dinner is NOT dropped.)
          - Late wake-up (today's wake from 1a is later than the template's wake
-           slot): shift the timeline later, ENFORCING ≥30 min between wake and
-           the first work block (variation_rules.min_wake_to_work_gap_min).
-         - Invariants every day: keep the meal COUNT (keep_meal_count); absorb
-           time pressure by SHRINKING work blocks (work_is_flex); protect meals
-           + fitness slots.
+           slot): shift the timeline later, ENFORCING at least
+           variation_rules.min_wake_to_work_gap_min between wake and the first
+           work block (the slow-start/wake gap — read the profile value, never
+           assume 30; it is the wake gap on EVERY day, not only late-wake ones).
+         - Invariants every day: keep the meal COUNT (keep_meal_count); breaks
+           default to break_minutes.median, and absorb time pressure by shrinking
+           a break toward min ONLY to bank a full block (never below min, never
+           above max, never pad); work blocks stay FIXED at session_length_min and
+           are trimmed only at end-of-day or a hard anchor — if a full block still
+           won't fit after a justified break-shrink, drop it rather than lay a
+           short mid-day block; protect meals + fitness slots.
          - SKIP-FITNESS (conditional, a judgment call — never silent): ONLY if
            meals are running late AND the RECENT FITNESS ACTIVITY block shows
            the last few days were already active, *suggest* skipping today's
@@ -220,25 +259,85 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          moved to X for the 3pm call, lunch nudged to Y. Good, or change it?"
       Carry this skeleton into 1c (it defines the fixed/flex gaps work fills).
   1c — FOCUS HOURS. Do NOT ask the user how many focused hours they want.
+    ┌─ FIVE HARD RULES (the plan is WRONG if any is broken) ────────────────┐
+    │ 1. EVERY work block is EXACTLY session_length_min minutes long (e.g.   │
+    │    90). NOT 120, not 60. To use more time, add ANOTHER block — never   │
+    │    make a block longer. A block is shorter ONLY when trimmed to butt   │
+    │    against the end-of-day or a hard anchor (commute/event).            │
+    │ 2. A fitness activity is ONE combined block = commute_before +        │
+    │    session + commute_after, using the EXACT buffer values (30 is 30,   │
+    │    never 25). No standalone commute rows; THEN a separate              │
+    │    post_home_settle block. Work runs to the block START; no pre-       │
+    │    activity prep/settle filler.                                        │
+    │ 3. EVERY break is break_minutes.median by DEFAULT (e.g. 30). Most      │
+    │    breaks are median. Longer (toward max) only when off/tired or at    │
+    │    wind-down. A day of all-min breaks is WRONG.                        │
+    │ 4. When the NEXT block is anchor-trimmed (sub-full, butts a meal/      │
+    │    event), shrink THIS break to min and add the reclaimed minutes to   │
+    │    that block (break 30→15, block 30→45). Always.                      │
+    │ 5. KEEP EVERY MEAL in diet_meal_times (incl. the Snack / pre-activity  │
+    │    fuel) — keep_meal_count. Only drop a meal the user skips today or a │
+    │    block's own notes mark skippable. Never silently drop the snack.    │
+    └───────────────────────────────────────────────────────────────────────┘
     DERIVE the available focus hours from today's skeleton: the gaps the LIFE
     anchors leave (typical_day work segments + variation_rules + daily_anchors),
     capped by working_style.work_hours_per_day and minus any work already
     banked in the 1b backfill. The user will give feedback if they want it
     different — don't make them supply the number. COMPUTE the block layout
     from those gaps and SHOW it before going further:
-      - blocks of working_style.session_length_min, separated by
-        working_style.break_min breaks (rotate break_activities; never the
-        same one back-to-back; respect anti_patterns),
+      - FIXED work blocks of working_style.block_layout_policy.work_block_minutes
+        (= session_length_min), separated by breaks (rotate break_activities;
+        never the same one back-to-back; respect anti_patterns). Follow
+        working_style.block_layout_policy LITERALLY:
+          · SQUEEZE work: fit as MANY full work blocks as the gaps allow.
+            A work block is its fixed full length — do NOT shrink a mid-day
+            block to fit leftover space.
+          · BREAKS are `median` by DEFAULT and stay within working_style.break_minutes
+            {min, median, max}. MOST breaks are exactly `median` — do NOT default
+            to `min`; a day full of min-length breaks is WRONG. Shrink a break
+            BELOW median (toward, never under, `min`) ONLY when there is a real
+            reason, e.g.:
+              (a) the NEXT work block is being TRIMMED by a hard anchor (e.g. it
+                  butts against lunch/an event and is shorter than full) — then
+                  you MUST shrink THIS break to `min` and add the reclaimed
+                  minutes to that block. (Break 30→15 gives the next block +15,
+                  e.g. a lunch-trimmed block 30→45.) Do NOT leave a median break
+                  in front of a sub-full anchor-trimmed block;
+              (b) the next block is immediately followed by a long non-work
+                  stretch (a big event, the activity window) — that is already a
+                  long rest, so this break shrinks (don't double-rest);
+              (c) the user EXPLICITLY asked for fixed focus hours and more block
+                  time must fit — shrink breaks to honor that explicit ask.
+            Lengthen a break toward `max` only when the user is off/tired or it is
+            toward end-of-day / wind-down. NEVER below `min`, NEVER above `max`,
+            and NEVER pad a break to fill a gap (break_never_extend) — reclaimed
+            space becomes work, not rest.
+          · A GAP BEFORE A MEAL/ANCHOR IS NOT A BREAK. When a work block ends
+            and the next anchor (lunch, a meal, an event) is more than `max`
+            minutes away, do NOT lay one big "break → transition to lunch" row.
+            Instead EXTEND the work (run a full block, or a block trimmed to butt
+            against the meal) right up to the anchor, leaving at most a single
+            ≤`max` break if one is warranted. The meal/rest itself is the rest —
+            a flex break right before a long meal shrinks toward `min` (or drops
+            entirely) and the time becomes work, never a double-rest.
+          · TRIM a work block ONLY at block_layout_policy.trim_only_at moments:
+            end_of_day (the final wind-down block) or right before a hard_anchor
+            (a fixed-time event like an evening match/call) where a full block
+            won't fit. A trimmed block butts up against the anchor; you do not
+            insert an extended break to "use up" the gap.
+          · If, after shrinking the break to min, a full block still won't fit
+            before the next anchor, DROP it (rest/transition) rather than laying
+            a short mid-day block,
       - laid around today's FIXED anchors: today's skeleton from 1b.5 (the
         typical_day template OR the planning_guidelines sample skeleton — its
         segments and their EXACT durations are where work fits and must be
         preserved), calendar events (zero variance), the fitness session
         (`fitness_today_schedule` or the user's stated time) — NOTE: the
         fitness journal's duration is the TRAINING time only; the workout's
-        PLANNING slot is the skeleton's gym/activity slot, which bundles
-        commute + get-ready + post-workout prep around it (so a ~60-min
-        session can occupy a 2h+ slot), and the skeleton's own get-ready/prep
-        segment then sits between the workout and lunch — meal times
+        PLANNING slot is ONE combined block = commute_before + session +
+        commute_after (so a ~60-min gym session occupies a 2h block, a 2h match
+        a 3h block), followed by a SEPARATE post_home_settle block (shower /
+        get-ready / prep) — meal times
         (`diet_meal_times`, shifted around the workout per the diet profile),
         habit reminder times (🔔 in the rollup), working_style.focus_hours
         preferred, nothing past working_style.last_block_end,
@@ -292,16 +391,34 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      never among them. Maximum 15–30 min variance from a profile/diet anchor
      time. If a needed anchor has no profile/diet time, ask the user or use a
      sensible default from the skeleton — do not invent false precision.
+     MEAL DURATIONS: each meal occupies its diet-profile duration — the `(Nm)`
+     shown next to each time in `diet_meal_times` (e.g. "Lunch 14:30 (30m)").
+     With NO diet profile, assume 30 min per meal. NEVER give a meal MORE than
+     its configured duration (default 30) — not even when the user says they're
+     eating OUT or names a big meal. "Lunch out" / "dinner outside" is still a
+     30-min meal slot; if travel to the venue is real, that is a SEPARATE short
+     commute/transition row, not a longer meal. Do not stretch a 30-min lunch to
+     40/45/60.
+     POST-MEAL NAP/REST IS A BREAK: a nap or rest after a meal counts as a break
+     and obeys break_minutes {min, median, max} (default median, may shrink to
+     min, never above max) — UNLESS `diet_meal_times` shows a fixed post_meal_nap
+     (then place it at exactly that length and NEVER shrink it). A nap is never a
+     free-form slot of arbitrary length.
      SKELETON & FLEX (from 1b.5, whenever a skeleton exists — a typical_day
      template OR a planning_guidelines sample skeleton): the skeleton is the
      one reshaped in 1b.5. FOLLOW ITS EXACT SEGMENT DURATIONS / GAPS — a 2h gym
      slot stays 2h, the get-ready+prep segment between the workout and lunch
      stays at its stated length; you shift segment START times to fit today but
      never silently compress or drop a segment. Keep the meal COUNT, protect
-     meal + fitness slots, and absorb time pressure by SHRINKING work blocks
-     (work is the flex variable), never by collapsing a skeleton segment or
-     dropping a meal. Fitness may be dropped ONLY via the explicit 1b.5 skip
-     suggestion the user accepted.
+     meal + fitness slots, and absorb time pressure by FLEXING THE BREAK (the
+     break is the flex variable: default break_minutes.median, shrink toward min
+     ONLY to bank a full block / before a long-rest stretch, never below min,
+     never above max, never pad a gap) —
+     work blocks stay FIXED at session_length_min, trimmed only at end-of-day or
+     right before a hard anchor; if a full block still won't fit after the break
+     shrinks to min, drop it rather than lay a short mid-day block. Never collapse
+     a skeleton segment or drop a meal. Fitness may be dropped ONLY via the
+     explicit 1b.5 skip suggestion the user accepted.
   b2. BLOCK-COUPLED HABITS (PB-71) — some tracked habits naturally happen AS PART
      of another anchor, not on their own. SHOWER-COUPLED GROOMING (Shampoo,
      Microneedling, and similar) belongs inside the shower / get-ready / recovery
@@ -317,15 +434,39 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
   c. The table ALWAYS starts at the user's actual wake time today (from 1a) —
      NEVER at current_time. Everything from 1b is backfilled as ✓ rows at its
      real time. The plan spans wake → bed.
+     WAKE / MORNING ROUTINE: the first row is a wake + morning-routine block of
+     variation_rules.min_wake_to_work_gap_min (e.g. 60 min) — the full slow start
+     before any work, not a token 30.
+     HONOR PER-BLOCK NOTES: each typical_day block may carry a `notes` field with
+     conditional guidance (e.g. "skip if wake after 11:00", "shorten when tired",
+     "drop on a late start"). READ each block's notes and apply them when the
+     stated condition holds today — skip / shorten / shift that block accordingly.
+     A block skipped because its own notes said so is NOT a dropped meal/anchor.
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
-     no gaps, no overlapping rows. Fill holes with explicit rest / transition
-     / meal / decompress rows. Backfilled rows tile cleanly too.
+     no gaps, NO OVERLAPPING ROWS. Each row's end MUST equal the next row's start.
+     A work block adjacent to a meal/anchor ENDS EXACTLY at that anchor's start —
+     never run a block past it (lunch at 14:30 → the prior block ends 14:30, e.g.
+     13:15–14:30, NOT 13:30–15:00 which overlaps lunch). Backfilled rows tile
+     cleanly too. BUT do NOT
+     invent filler to fill a hole: there is NO standalone "lunch prep / meal prep
+     / wind-up chores / get-ready / pre-X settle" row. A hole between work and an
+     anchor is WORK (extend a block or trim it to the anchor); meal-prep and
+     shower belong to the POST-ACTIVITY settle block only, never a separate early
+     row. The only non-work fillers allowed are a real break (within
+     break_minutes), the wake/morning-routine block, wind-down, or a genuine
+     rest the profile calls for.
   e. WORK BLOCKS: as many session_length_min blocks as 1c settled on, placed
      into the gaps the life anchors leave, each a GENERIC PLACEHOLDER row
-     ("Block N — focus work", Tie "—"), break rows woven between consecutive
-     blocks (rotating break_activities). No break before the first block or
-     after the last. Work is never an anchor row. /plan-my-work labels these
-     blocks with real tasks later — do NOT name tasks here.
+     ("Block N — focus work", Tie "—"). Emit each block at its FULL
+     session_length_min width — a block renders short ONLY when 1c trimmed it at
+     end-of-day or right before a hard anchor (never mid-day). Break rows woven
+     between consecutive blocks (rotating break_activities); each break defaults
+     to break_minutes.median and is shrunk toward min ONLY where 1c had a real
+     reason (banked a full block / a long-rest stretch follows) — most breaks are
+     median, never longer than max, never padded to fill a gap. No break before
+     the first block or after the last. Work is never
+     an anchor row. /plan-my-work labels these blocks with real tasks later — do
+     NOT name tasks here.
   f. 24h times (HH:MM–HH:MM) on every row. REQUIRED rows: wake/morning-start,
      workout (if any), every meal slot, walk (if anchored), wind-down, bed.
   g. Every row's Tie column maps to a current_focus item name, a category

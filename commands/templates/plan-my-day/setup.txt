@@ -62,9 +62,13 @@ style") without explaining it in plain words first.
   daily blocks"), then ask in a small batch:
   - Typical weekday: which hours are your IMPORTANT focus hours?
   - How many total work hours per day do you realistically want?
-  - Preferred work-session length? (45 / 60 / 90 / 120 min)
-  - Break preference: how long between sessions, what restful activities
-    do you actually like (the rotation the plan uses)?
+  - Preferred work-session length? (45 / 60 / 90 / 120 min) — work blocks are
+    FIXED at this; the plan squeezes in as many as fit and flexes the BREAK, not
+    the block.
+  - Break preference: ONE typical break length (this becomes your median; the
+    plan may shrink it to ~half to bank more work, and never stretches it past
+    ~1.5× or pads it to fill a gap) + what restful activities you actually like
+    (the rotation the plan uses).
   - When must the LAST work block of the day end?
   - Energy peak: morning / afternoon / night / mixed?
   - Usual sleep timing: what time do you normally wake, and what bedtime are
