@@ -280,8 +280,12 @@ Rules of engagement for this run:
   1. EVERY work block is EXACTLY session_length_min minutes (e.g. 90) — NEVER
      120 or 60. Want more work time? Add ANOTHER 90-min block. A block is
      shorter ONLY when trimmed to butt against end-of-day or a hard anchor.
-  2. Before a fitness activity, reserve ONLY its commute_before_min commute —
-     no prep/shower/wrap-up/settle block; work runs right up to commute-start.
+  2. A fitness activity is ONE combined block = commute_before + session +
+     commute_after (e.g. football 2h match becomes a 3h block 30+120+30, labeled
+     like Football - commute + match + commute) with NO standalone commute rows,
+     THEN a SEPARATE post_home_settle block (shower/get-ready/prep) after it,
+     then the meal/dinner, wind-down, sleep. Work runs right up to the combined
+     block START - no pre-activity prep/settle filler.
   3. EVERY break is break_minutes.median by DEFAULT (e.g. 30) and MOST breaks
      ARE median. Use a shorter break (toward, not below, min) ONLY to bank a
      full block under time pressure or right before a long rest/anchor — NOT as

@@ -202,26 +202,32 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            football, Apple Fitness, a class): check `variation_rules.activity_buffers`
            in the plans profile FIRST. If the activity has a named entry there
            (e.g. "football", "apple_fitness"), use its buffer values silently —
-           do NOT ask the user for commute or buffer time. Compute the full window
-           (commute_before + session + commute_after + post_home_settle) and block
-           it out, then shift the nearby meal slots to fit — meal COUNT unchanged
+           do NOT ask the user for commute or buffer time.
+           ONE COMBINED ACTIVITY BLOCK + A SEPARATE SETTLE BLOCK:
+             • Lay the activity as a SINGLE combined block =
+               commute_before + session + commute_after (NO standalone commute
+               rows). E.g. football with a 2h match → a 3h block 30+120+30,
+               labeled "Football — commute + match + commute". The block STARTS
+               at session_start − commute_before (e.g. kickoff 21:00, commute_before
+               30 → block starts 20:30) and ENDS at session_end + commute_after.
+             • THEN a SEPARATE post_home_settle block right after it
+               (post_home_settle_min, e.g. 30 min: shower / get-ready / prep meal)
+               — settle is POST-activity, never folded into the combined block and
+               never a pre-activity reservation.
+             • THEN the following meal (e.g. dinner), then wind-down, then sleep.
+           Shift nearby meal slots to fit — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
            activity has NO entry in activity_buffers.
-           RESERVE ONLY THE REAL BUFFER — WORK UP TO IT. The pre-activity
-           reservation is EXACTLY `commute_before_min` (e.g. football = 30 min →
-           commute runs kickoff−30 to kickoff). That commute is a HARD ANCHOR.
-           Everything between the last pre-activity meal and commute-start is
-           WORK, not prep: lay full work blocks there and, if a full block won't
-           fit before the commute, lay ONE block trimmed to butt against
-           commute-start (a trimmed block is allowed at a hard anchor). Do NOT
-           invent a "kit prep / get-ready / travel / wrap up / shower" filler
-           block that swallows that gap — SHOWER/SETTLE IS A POST-ACTIVITY thing
-           (post_home_settle, after you get back), NEVER a pre-activity reservation.
-           Kit prep folds into the commute or the trimmed block's tail; it never
-           displaces work. The ONLY thing reserved before the activity is the
-           commute_before_min commute. (Example: meal ends 19:30, football 21:00,
-           commute_before 30 → commute 20:30–21:00, and 19:30–20:30 is a 60-min
-           trimmed work block, NOT an hour of "kit prep / shower / wrap up".)
+           WORK RUNS UP TO THE COMBINED BLOCK'S START. The combined block's start
+           is the HARD ANCHOR. Everything between the last pre-activity meal and
+           that start is WORK: lay full work blocks, and if a full block won't fit
+           before the block start, lay ONE block trimmed to butt against it. Do
+           NOT invent a "kit prep / get-ready / travel / wrap up / pre-match
+           settle" filler before the block — there is none; the commute is already
+           inside the combined block. (Example: dinner-prep aside, football match
+           21:00–23:00, commute 30 each way, settle 30 → combined block 20:30–23:30
+           "Football — commute + match + commute", then 23:30–00:00 settle
+           (shower + prep), then the meal; work runs right up to 20:30.)
          - Late wake-up (today's wake from 1a is later than the template's wake
            slot): shift the timeline later, ENFORCING at least
            variation_rules.min_wake_to_work_gap_min between wake and the first
@@ -250,9 +256,11 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     │    90). NOT 120, not 60. To use more time, add ANOTHER block — never   │
     │    make a block longer. A block is shorter ONLY when trimmed to butt   │
     │    against the end-of-day or a hard anchor (commute/event).            │
-    │ 2. The ONLY thing reserved before a fitness activity is its            │
-    │    commute_before_min commute. No "prep / shower / wrap-up / settle /  │
-    │    kit" block before it — work runs right up to commute-start.         │
+    │ 2. A fitness activity is ONE combined block = commute_before +        │
+    │    session + commute_after (e.g. 30+120+30 = 3h), no standalone        │
+    │    commute rows, THEN a separate post_home_settle block after it.      │
+    │    Work runs right up to the combined block's START; no pre-activity   │
+    │    prep/settle filler.                                                 │
     │ 3. EVERY break is break_minutes.median by DEFAULT (e.g. 30). Most      │
     │    breaks are median. Use a shorter break (toward, not below, min)     │
     │    ONLY to bank a full block under real time pressure or right before  │
@@ -310,10 +318,10 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
         preserved), calendar events (zero variance), the fitness session
         (`fitness_today_schedule` or the user's stated time) — NOTE: the
         fitness journal's duration is the TRAINING time only; the workout's
-        PLANNING slot is the skeleton's gym/activity slot, which bundles
-        commute + get-ready + post-workout prep around it (so a ~60-min
-        session can occupy a 2h+ slot), and the skeleton's own get-ready/prep
-        segment then sits between the workout and lunch — meal times
+        PLANNING slot is ONE combined block = commute_before + session +
+        commute_after (so a ~60-min gym session occupies a 2h block, a 2h match
+        a 3h block), followed by a SEPARATE post_home_settle block (shower /
+        get-ready / prep) — meal times
         (`diet_meal_times`, shifted around the workout per the diet profile),
         habit reminder times (🔔 in the rollup), working_style.focus_hours
         preferred, nothing past working_style.last_block_end,

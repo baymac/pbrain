@@ -42,14 +42,16 @@ MEAL_RE_TOP = re.compile(r'\b(lunch|dinner|breakfast|meal|fuel|eat|snack|shake)\
 # (e.g. football/gym commute_before_min). Anything a "buffer/prep/travel/kit"
 # row reserves beyond this — when work could have filled it — is padding that
 # steals work time (the PB-186 follow-up bug).
-def max_commute_before():
+def _buf_max(key, alt=None):
     vals = []
     for a in buffers.values():
         if isinstance(a, dict):
-            v = a.get("commute_before_min") or a.get("buffer_before_min")
+            v = a.get(key) or (a.get(alt) if alt else None)
             if isinstance(v, (int, float)): vals.append(int(v))
     return max(vals) if vals else None
-COMMUTE_BEFORE = max_commute_before()
+COMMUTE_BEFORE = _buf_max("commute_before_min", "buffer_before_min")
+COMMUTE_AFTER  = _buf_max("commute_after_min", "buffer_after_min")
+SETTLE_MIN     = _buf_max("post_home_settle_min")
 
 # Pull rows from the "Today at a glance" table. Two formats are tolerated:
 #   (a) markdown:  | HH:MM–HH:MM | action | tie |
@@ -305,36 +307,60 @@ if len(breaks) >= 3 and below_median * 2 > len(breaks):
     problems.append("most breaks (" + str(below_median) + "/" + str(len(breaks)) +
                     ") are below median " + str(bmed) + " — median should be the common case, not min")
 
-# Padded pre-activity buffer detection. The only legitimate pre-activity
-# reservation is COMMUTE_BEFORE (+ an explicit commute row). Any OTHER non-work,
-# non-meal row sitting in the window between the last work-capable slot and the
-# activity's commute — kit prep / get-ready / travel / snack / buffer / "settle"
-# — is padding that should have been work.
-PAD_RE = re.compile(r'\b(kit prep|get[- ]?ready|prep|buffer|travel|warm[- ]?up|snack|shake|settle|wind[- ]?down)\b', re.I)
+# Combined-activity-block model. A fitness activity is ONE block =
+# commute_before + session + commute_after (no standalone commute rows), THEN a
+# separate post_home_settle block. We (1) find the combined activity block,
+# (2) check it folds in the commute (not a bare session), (3) flag standalone
+# commute rows, (4) expect a settle block after it, (5) flag pre-activity filler
+# between the last work/meal and the block start.
+PAD_RE = re.compile(r'\b(kit prep|get[- ]?ready|prep|buffer|travel|warm[- ]?up|snack|shake)\b', re.I)
 COMMUTE_RE = re.compile(r'\bcommute\b', re.I)
 MEAL_RE = re.compile(r'\b(lunch|dinner|breakfast|meal|fuel|eat)\b', re.I)
-# Find the ACTIVITY start row (football match / gym session) to bound the
-# "pre-activity" window. Require it to be the actual session — a long row tied to
-# a fitness category — not an incidental mention like "rest pre-football" or a
-# commute row. Prefer the match/session row (tie = Fit body, duration >= 60).
-act_idx = None
-for i, (s, e, a, t) in enumerate(rows):
-    if COMMUTE_RE.search(a):
-        continue
-    al = a.lower()
-    # the real session row: explicit match/session wording, or a Fit-body-tied
-    # row of session length; exclude "pre-..."/"settle"/"rest" framing.
-    looks_session = (re.search(r'\b(match|session|workout|kickoff)\b', al)
-                     or (re.search(r'\b(football|gym)\b', al)
-                         and not re.search(r'\b(pre|rest|settle|prep|fuel|meal|commute)\b', al)))
-    if looks_session:
-        act_idx = i; break
+SETTLE_RE = re.compile(r'\b(settle|shower|get[- ]?ready|recover|freshen|post[- ]?match|post[- ]?game)\b', re.I)
+ACTIVITY_RE = re.compile(r'\b(football|match|gym|workout|class|session|kickoff)\b', re.I)
 
-if COMMUTE_BEFORE is not None and act_idx is not None:
-    # The pre-activity window is ONLY the stretch AFTER the last forward work
-    # block (or meal) before the activity — i.e. the gap the model should fill
-    # with work up to commute-start. A morning "ease-in" row before any work is
-    # NOT pre-activity padding, so scan starts at the last work/meal index.
+# The combined activity block: the activity row with the LARGEST duration (the
+# bare-session vs combined distinction is exactly what we check), excluding pure
+# commute/settle rows.
+act_idx = None; act_dur = -1
+for i, (s, e, a, t) in enumerate(rows):
+    if is_done(a):
+        continue
+    if not ACTIVITY_RE.search(a):
+        continue
+    if SETTLE_RE.search(a) and not re.search(r'\b(match|session|workout|kickoff)\b', a, re.I):
+        continue
+    d = dur(s, e)
+    if d > act_dur:
+        act_dur = d; act_idx = i
+
+if act_idx is not None and COMMUTE_BEFORE is not None:
+    s_a, e_a, a_a, t_a = rows[act_idx]
+    cb = COMMUTE_BEFORE or 0; ca = COMMUTE_AFTER or 0; settle = SETTLE_MIN or 0
+    # (2) the combined block must fold in BOTH commutes: its duration should be at
+    # least commute_before + commute_after + a plausible session (>=45). A bare
+    # session (no commute folded) shows up as dur < session + cb + ca.
+    min_expected = cb + ca + 45
+    if act_dur + 1 < min_expected:
+        problems.append("activity block '" + a_a[:28] + "' = " + str(act_dur) +
+                        "min looks like a bare session — it must be ONE combined block = commute_before(" +
+                        str(cb) + ") + session + commute_after(" + str(ca) + "); a 2h match should be ~" +
+                        str(cb + 120 + ca) + "min, not " + str(act_dur))
+    # (3) no standalone commute rows anywhere (commute is folded into the block).
+    for i, (s, e, a, t) in enumerate(rows):
+        if is_done(a) or i == act_idx:
+            continue
+        if COMMUTE_RE.search(a) and not ACTIVITY_RE.search(a):
+            problems.append("standalone commute row '" + a[:28] + "' — commute must be folded INTO the combined activity block, not a separate row")
+    # (4) a post_home_settle block should follow the combined block.
+    if settle:
+        nxt = rows[act_idx + 1] if act_idx + 1 < len(rows) else None
+        has_settle = bool(nxt) and SETTLE_RE.search(nxt[2] or "")
+        if not has_settle:
+            problems.append("missing post-activity settle: a " + str(settle) +
+                            "min settle block (shower/get-ready/prep) should follow the activity block")
+    # (5) pre-activity filler: between the last forward work/meal and the block
+    # start, only work belongs (work runs up to the block start = the hard anchor).
     win_start = 0
     for i, (s, e, a, t) in enumerate(rows):
         if i >= act_idx:
@@ -344,23 +370,18 @@ if COMMUTE_BEFORE is not None and act_idx is not None:
     for i, (s, e, act, tie) in enumerate(rows):
         if i <= win_start or i >= act_idx:
             continue
-        if is_done(act):                 # already-done rows are history, not padding
+        if is_done(act):
             continue
         k = classify(act, tie)
-        if k in ("work", "break"):       # legit work/break handled above
+        if k in ("work", "break", "winddown"):
             continue
-        if k == "winddown":              # genuine wind-down is fine
-            continue
-        if COMMUTE_RE.search(act) or MEAL_RE.search(act):   # commute + meals are legit
+        if MEAL_RE.search(act):
             continue
         d = dur(s, e)
-        # No keyword gate any more: an anchor row this long in the pre-activity
-        # window, that isn't a meal/commute/wind-down, is stolen work time.
-        if d > COMMUTE_BEFORE + 10:       # 10-min grace
+        if d > 10:   # any real non-work filler before the block start is stolen work
             kind_note = "padding" if PAD_RE.search(act) else "idle/rest filler"
             problems.append("pre-activity '" + act[:28] + "' = " + str(d) +
-                            "min — only " + str(COMMUTE_BEFORE) +
-                            "min commute is reserved before the activity; the rest should be work (" + kind_note + ")")
+                            "min before the activity block — work should run right up to the block start (" + kind_note + ")")
 
 print(json.dumps({
     "ok": not problems, "problems": problems,
