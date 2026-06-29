@@ -65,7 +65,7 @@ committed: true
 \`\`\`json
 {"created": "$TODAY", "activities": [
   {"id": "gym", "name": "Gym", "occurrence": {"per": "week", "times": 4},
-   "days": ["Mon", "Tue", "Thu", "Fri"], "equipment": "full gym",
+   "equipment": "full gym",
    "typical_time": "17:00", "duration_min": 75, "notes": "",
    "kpis": [{"id": "sets", "label": "Sets", "type": "sets", "unit": null}]}]}
 \`\`\`
@@ -88,7 +88,7 @@ committed: true
 \`\`\`json
 {"created": "$TODAY", "activities": [
   {"id": "swimming", "name": "Swimming", "occurrence": {"per": "week", "times": 2},
-   "days": ["Mon", "Tue", "Thu", "Fri"], "equipment": "pool",
+   "equipment": "pool",
    "typical_time": "07:00", "duration_min": 45, "notes": ""}]}
 \`\`\`
 EOF
@@ -446,6 +446,26 @@ EOF
 @test "fresh setup library template includes a kpis field" {
   run FIT
   [[ "$output" == *"FITNESS_JOURNAL_SETUP_PROFILE"* && "$output" == *'"kpis":'* ]]
+}
+
+@test "fresh setup library schema does NOT carry days; days live in step-2 profile (PB-178)" {
+  run FIT
+  [[ "$output" == *"FITNESS_JOURNAL_SETUP_PROFILE"* ]]
+  # The LIBRARY is a pure catalogue — its JSON schema must not emit a days field.
+  [[ "$output" != *'"days"'* ]]
+  # Step 1 asks occurrence only, not fixed days.
+  [[ "$output" == *"occurrence only"* ]]
+}
+
+@test "step-2 per-activity setup asks fixed days and owns the schedule (PB-178)" {
+  write_overall_profile
+  write_library
+  run FIT
+  [[ "$output" == *"FITNESS_JOURNAL_SETUP_ACTIVITY_PROFILES"* ]]
+  # The per-activity profile is where fixed days are captured now.
+  [[ "$output" == *"FIXED days"* ]]
+  [[ "$output" == *"sole owner of the schedule"* ]]
+  [[ "$output" == *"does NOT carry days"* ]]
 }
 
 # ── profile subcommand ───────────────────────────────────────────────────────
