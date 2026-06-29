@@ -66,6 +66,7 @@ def _buf_max(key, alt=None):
 COMMUTE_BEFORE = _buf_max("commute_before_min", "buffer_before_min")
 COMMUTE_AFTER  = _buf_max("commute_after_min", "buffer_after_min")
 SETTLE_MIN     = _buf_max("post_home_settle_min")
+SESSION_MIN    = pol.get("session_min")   # today's actual fitness session length (from journal)
 
 # Pull rows from the "Today at a glance" table. Two formats are tolerated:
 #   (a) markdown:  | HH:MM–HH:MM | action | tie |
@@ -188,7 +189,7 @@ for (s, e, act, tie) in rows:
 # chores / get-ready / pre-X settle" row is invented filler; that time should be
 # work (or it belongs to the POST-activity settle). The post-activity settle row
 # (right after the combined activity block) is the ONE allowed settle/prep row.
-FILLER_RE = re.compile(r'\b(lunch prep|meal prep|food prep|wind[- ]?up|chores?\b.*prep|prep\b.*(?:lunch|meal|dinner)|get[- ]?ready|pre[- ]?(?:match|lunch|dinner|game))\b', re.I)
+FILLER_RE = re.compile(r'\b(lunch prep|meal prep|food prep|wind[- ]?up|chores?|get[- ]?ready|kit up|pack(?:ing)?)\b', re.I)
 SETTLE_OK_RE = re.compile(r'\b(settle|shower|recover|post[- ]?match|post[- ]?game)\b', re.I)
 for i, (s, e, act, tie) in enumerate(rows):
     if is_done(act):
@@ -197,12 +198,17 @@ for i, (s, e, act, tie) in enumerate(rows):
         continue
     if SETTLE_OK_RE.search(act):         # the post-activity settle is fine
         continue
-    # FILLER check runs BEFORE the meal exemption: "lunch prep" contains "lunch"
-    # but is prep filler, not a meal.
-    if FILLER_RE.search(act):
-        problems.append("filler row '" + act[:32] + "' — no standalone prep/chores/get-ready row; that time is work, and meal-prep/shower belong to the post-activity settle")
+    if re.search(r'\b(wake|morning routine|slow start)\b', act, re.I):
+        continue                         # the wake/morning-routine block is fine
+    # A real MEAL row (snack/fuel/lunch/dinner as the subject) is fine — exempt it
+    # FIRST so "Snack — pre-match fuel" isn't mistaken for prep filler.
+    if MEAL_RE_TOP.search(act) and not re.search(r'\bprep\b', act, re.I):
         continue
-    # (a plain meal row is fine — nothing to flag here)
+    # What's left and matches filler terms (prep/chores/get-ready/kit/pack) is
+    # invented filler — that time is work; meal-prep/shower belong to the settle.
+    if FILLER_RE.search(act):
+        problems.append("filler row '" + act[:32] + "' — no standalone prep/chores/get-ready/kit row; that time is work, and meal-prep/shower belong to the post-activity settle")
+        continue
 
 # GUARD C — meal duration: a meal occupies its configured duration, else the
 # 30-min default, and NEVER more unless explicitly set longer for that slot.
@@ -270,7 +276,9 @@ if not blocks and forward_work:
 # plan's span must appear (keep_meal_count). Catches a dropped DINNER after a
 # late activity. A meal "appears" if some row's action mentions the slot name.
 if meal_times and rows:
-    span_start = min(mins(s) for s, e, a, t in rows)
+    # span_start = the FIRST row's start (plan is in chronological order). Do NOT
+    # use min(): a 00:00 bed/sleep row at the END of day would wrongly become 0.
+    span_start = mins(rows[0][0])
     span_end = max((mins(e) + (24 * 60 if mins(e) < mins(s) else 0)) for s, e, a, t in rows)
     plan_lc = plan.lower()
     # Skippable-meal exemption is DRIVEN BY PROFILE NOTES, not hardcoded: a meal
@@ -357,8 +365,15 @@ for bk in breaks:
         below_median += 1
         idx = bk["idx"]
         nxt = rows[idx + 1] if idx + 1 < len(rows) else None
-        next_is_full_block = bool(nxt) and classify(nxt[2], nxt[3]) == "work" and dur(nxt[0], nxt[1]) == sess
-        if not (next_is_full_block or anchor_or_longrest_near(idx)):
+        next_is_work = bool(nxt) and classify(nxt[2], nxt[3]) == "work"
+        next_is_full_block = next_is_work and dur(nxt[0], nxt[1]) == sess
+        # Also justified: the next block is anchor-trimmed (sub-full and the row
+        # after it is an anchor/wind-down) — shrinking THIS break banked time into
+        # that trimmed block (exactly rule 4). Don't double-flag it.
+        after = rows[idx + 2] if idx + 2 < len(rows) else None
+        next_is_trimmed = (next_is_work and dur(nxt[0], nxt[1]) < sess
+                           and bool(after) and classify(after[2], after[3]) in ("anchor", "winddown"))
+        if not (next_is_full_block or next_is_trimmed or anchor_or_longrest_near(idx)):
             problems.append(label + ": break " + str(bk["dur"]) + "min is below median " +
                             str(bmed) + " with no reason (no full block banked, no anchor/long-rest near) — breaks default to median")
     # If the NEXT work block is anchor-trimmed (sub-full and butts an anchor),
@@ -412,15 +427,22 @@ for i, (s, e, a, t) in enumerate(rows):
 if act_idx is not None and COMMUTE_BEFORE is not None:
     s_a, e_a, a_a, t_a = rows[act_idx]
     cb = COMMUTE_BEFORE or 0; ca = COMMUTE_AFTER or 0; settle = SETTLE_MIN or 0
-    # (2) the combined block must fold in BOTH commutes: its duration should be at
-    # least commute_before + commute_after + a plausible session (>=45). A bare
-    # session (no commute folded) shows up as dur < session + cb + ca.
-    min_expected = cb + ca + 45
-    if act_dur + 1 < min_expected:
-        problems.append("activity block '" + a_a[:28] + "' = " + str(act_dur) +
-                        "min looks like a bare session — it must be ONE combined block = commute_before(" +
-                        str(cb) + ") + session + commute_after(" + str(ca) + "); a 2h match should be ~" +
-                        str(cb + 120 + ca) + "min, not " + str(act_dur))
+    if SESSION_MIN:
+        # EXACT check: the combined block must equal commute_before + session +
+        # commute_after, using the real buffer values (no invented 25+25).
+        expected = cb + int(SESSION_MIN) + ca
+        if abs(act_dur - expected) > 1:
+            problems.append("activity block '" + a_a[:28] + "' = " + str(act_dur) +
+                            "min but should be EXACTLY commute_before(" + str(cb) + ") + session(" +
+                            str(SESSION_MIN) + ") + commute_after(" + str(ca) + ") = " + str(expected) +
+                            "min — use the exact buffer commute values, do not invent/round them")
+    else:
+        # Fallback when the session length is unknown: at least cb+ca+45.
+        min_expected = cb + ca + 45
+        if act_dur + 1 < min_expected:
+            problems.append("activity block '" + a_a[:28] + "' = " + str(act_dur) +
+                            "min looks like a bare session — it must be ONE combined block = commute_before(" +
+                            str(cb) + ") + session + commute_after(" + str(ca) + ")")
     # (3) no standalone commute rows anywhere (commute is folded into the block).
     for i, (s, e, a, t) in enumerate(rows):
         if is_done(a) or i == act_idx:

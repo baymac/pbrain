@@ -523,6 +523,29 @@ fi
 FITNESS_TODAY="$(cat "$FITNESS_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 DAILY_TODAY="$(cat "$DAILY_DIR/$TODAY.md" 2>/dev/null || echo "MISSING")"
 
+# One-line summary of TODAY's fitness session (activity · duration · time), pulled
+# from the dated journal so the planner uses the REAL session length for the
+# combined activity block (not the 90-min work-block length). PB-186.
+FITNESS_TODAY_SUMMARY="$(python3 - "$FITNESS_DIR/$TODAY.md" <<'PYEOF' 2>/dev/null || true
+import re, sys
+try:
+    t = open(sys.argv[1]).read()
+except Exception:
+    sys.exit(0)
+act = (re.search(r'^activity:\s*(.+)$', t, re.M) or re.search(r'^focus:\s*(.+)$', t, re.M))
+dur = re.search(r'duration_min:\s*(\d+)', t) or re.search(r'\*\*Duration\*\*\s*(\d+)', t)
+when = re.search(r'\bWhen\*?\*?\s*(\d{1,2}:\d{2})', t) or re.search(r'^when:\s*(\d{1,2}:\d{2})', t, re.M)
+if not (act or dur or when):
+    sys.exit(0)
+parts = []
+if act: parts.append(act.group(1).strip())
+if dur: parts.append(dur.group(1) + " min session")
+if when: parts.append("at " + when.group(1))
+print(" · ".join(parts))
+PYEOF
+)"
+[[ -n "${FITNESS_TODAY_SUMMARY//[[:space:]]/}" ]] || FITNESS_TODAY_SUMMARY="(no dated fitness session today)"
+
 # PB-58: PREFLIGHT (fast) pass. These flags are CHEAP (file reads + existence
 # tests, all already done above) — everything below this block is the heavy
 # ~27k-token context build. On the first (no-`--continue`) invocation, surface
@@ -1061,6 +1084,7 @@ diet_today_exists: $DIET_TODAY_EXISTS
 gratitude_today_exists: $GRATITUDE_TODAY_EXISTS
 fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
 fitness_today_activity: ${TODAY_FITNESS_ACTIVITY:-(no fitness entry / focus not set)}
+fitness_today_session: $FITNESS_TODAY_SUMMARY   # activity · REAL session duration · time — use this duration for the combined activity block, NOT session_length_min
 typical_day_present: $TYPICAL_DAY_PRESENT
 
 === PLANS PROFILE (the planning lens — current_focus, working_style, typical_day, daily_anchors, variation_rules, anti_patterns) ===

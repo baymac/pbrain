@@ -208,7 +208,24 @@ if os.path.isdir(dstore):
         meal_default=dd.get("meal_minutes_default",30)
         post_nap=dd.get("post_meal_nap") or {}
         meal_times=dd.get("meal_times") or {}
+# Today's fitness session (duration + start time) from the remapped fitness file,
+# so the assert can verify the combined block = commute_before + session + commute_after.
+import datetime, glob
+sess_min=None; sess_start=None; sess_activity=None
+fdir=os.path.join(vault,"fitness/daily-tracking")
+ffiles=sorted(glob.glob(os.path.join(fdir,"20*-*-*.md")))
+# prefer the file whose name matches the system date (the remap target)
+fcand=[f for f in ffiles if os.path.basename(f).startswith(os.environ.get("PMD_TODAY",""))] or ffiles[-1:] if ffiles else []
+if fcand:
+    ft=open(fcand[0]).read()
+    m1=re.search(r'duration_min:\s*(\d+)', ft) or re.search(r'\*\*Duration\*\*\s*(\d+)', ft)
+    if m1: sess_min=int(m1.group(1))
+    m2=re.search(r'When\*?\*?\s*(\d{1,2}:\d{2})', ft) or re.search(r'\bWhen\b[^0-9]*(\d{1,2}:\d{2})', ft)
+    if m2: sess_start=m2.group(1)
+    m3=re.search(r'activity:\s*(\w+)', ft) or re.search(r'focus:\s*(\w+)', ft)
+    if m3: sess_activity=m3.group(1).lower()
 out={"session": ws.get("session_length_min",90),
+     "session_min": sess_min, "session_start": sess_start, "session_activity": sess_activity,
      "break": ws.get("break_minutes") or {"min":15,"median":30,"max":45},
      "policy": ws.get("block_layout_policy") or {},
      "activity_buffers": vr.get("activity_buffers") or {},
@@ -257,7 +274,10 @@ PLAN_FILE=""
 replay() {
   PLAN_FILE="$PBRAIN_VAULT/life/daily-planning/$TODAY.md"
   local block
-  block="$(bash "$REPO_ROOT/commands/plan-my-day.sh" plan 2>/dev/null)"
+  # Use `plan --continue` to get the FULL PLAN_MY_DAY_SESSION block (heavy context
+  # incl. fitness_today_session with the real match duration). A bare `plan` only
+  # emits the cheap preflight nudge — the skill would then improvise the session.
+  block="$(bash "$REPO_ROOT/commands/plan-my-day.sh" plan --continue 2>/dev/null)"
   [[ -n "$block" ]] || { echo "plan-my-day emitted nothing" >&2; return 1; }
 
   # Persona answers come from the scenario file (deterministic morning replay).
@@ -280,23 +300,27 @@ Rules of engagement for this run:
 - The user AUTO-PLANS: take the day's fixed anchors (fitness session + its time,
   meal times, calendar) from the context already in the instructions — do NOT ask
   the user to supply the football/workout time; it comes from the fitness journal.
-- THREE HARD RULES (the plan is WRONG if any breaks):
+- FIVE HARD RULES (the plan is WRONG if any breaks):
   1. EVERY work block is EXACTLY session_length_min minutes (e.g. 90) — NEVER
      120 or 60. Want more work time? Add ANOTHER 90-min block. A block is
      shorter ONLY when trimmed to butt against end-of-day or a hard anchor.
-  2. A fitness activity is ONE combined block = commute_before + session +
-     commute_after (e.g. football 2h match becomes a 3h block 30+120+30, labeled
-     like Football - commute + match + commute) with NO standalone commute rows,
-     THEN a SEPARATE post_home_settle block (shower/get-ready/prep), THEN the
-     following meal DINNER (always keep it unless the user skips it today), then
-     wind-down, sleep. Work runs right up to the combined block START. Emit NO
-     pre-activity row before the block (no prep/pack/kit/wrap/get-ready/head-out)
-     - packing+travel are inside commute_before. Do NOT drop dinner.
+  2. A fitness activity is ONE combined block = commute_before + SESSION +
+     commute_after. SESSION = the match's OWN duration from the fitness journal
+     (a 2h match = 120), NOT the 90-min work-block length. commute values are
+     EXACT from the buffers (30 is 30, NEVER 25). So a 2h match with 30/30
+     commute = a 3h block 30+120+30 = 180, labeled like Football - commute +
+     match + commute, NO standalone commute rows, THEN a SEPARATE
+     post_home_settle block, THEN the following meal DINNER, then wind-down,
+     sleep. Work runs to the block START. Emit NO pre-activity row before it.
   3. EVERY break is break_minutes.median by DEFAULT (e.g. 30) and MOST breaks
-     ARE median. Use a shorter break (toward, not below, min) ONLY to bank a
-     full block under time pressure or right before a long rest/anchor — NOT as
-     a habit. A day of all-min (e.g. all-15-min) breaks is WRONG. Longer (toward
-     max) only when off/tired or at wind-down.
+     ARE median. A day of all-min (e.g. all-15-min) breaks is WRONG. Longer
+     (toward max) only when off/tired or at wind-down.
+  4. When the NEXT block is anchor-trimmed (sub-full, butts a meal/event),
+     shrink THIS break to min and add the reclaimed minutes to that block
+     (break 30->15, block 30->45). Always.
+  5. KEEP EVERY MEAL in the diet meal times, INCLUDING the Snack / pre-activity
+     fuel — never silently drop the snack or dinner. Only drop a meal the user
+     skips today or a block's notes mark skippable.
 - Also honor block_layout_policy + meal rules: squeeze in as many full blocks as
   fit; never pad a gap; meals 30 min.
 - MEALS are 30 min (or the diet-profile duration), NEVER longer — not even
@@ -374,12 +398,30 @@ USER: $persona_out"
 # ---------------------------------------------------------------------------
 VERDICT_JSON=""
 assert_plan() {
-  local policy; policy="$(read_policy)"
+  local policy; policy="$(PMD_TODAY="$TODAY" read_policy)"
   # Run the assert logic from its own .py (NOT an inline heredoc — a heredoc
   # inside $(...) trips bash 3.2's quote scanner on the python apostrophes).
   # Pass 'now' (HH:MM) so the assert can reject ✓-done rows that claim completion
-  # of FUTURE time (a model fabricating a done-day to dodge planning).
-  local now_hhmm; now_hhmm="$(date +%H:%M)"
+  # of FUTURE time. In a REPLAY, "now" is when the user runs pmd — AFTER the
+  # scenario's banked morning — so derive it from the end of the last ✓-done row
+  # (fallback: wall clock). This keeps the future-✓ guard meaningful without
+  # falsely flagging the replay's legitimately-banked morning.
+  local now_hhmm
+  now_hhmm="$(python3 - "$PLAN_FILE" <<'PY' 2>/dev/null
+import re,sys
+t=open(sys.argv[1]).read()
+ends=[]
+for line in t.splitlines():
+    if "|" not in line: continue
+    if not re.search(r'[✓☑✔]', line): continue
+    m=re.search(r'(\d{1,2}:\d{2})\s*[–\-—]\s*(\d{1,2}:\d{2})', line)
+    if m: ends.append(m.group(2))
+if ends:
+    last=max(ends, key=lambda x:(int(x.split(":")[0]),int(x.split(":")[1])))
+    print(last)
+PY
+)"
+  [[ "$now_hhmm" =~ ^[0-9]{1,2}:[0-9]{2}$ ]] || now_hhmm="$(date +%H:%M)"
   VERDICT_JSON="$(python3 "$HERE/plan-my-day-assert.py" "$PLAN_FILE" "$policy" "$now_hhmm")"
   [[ -n "$VERDICT_JSON" ]] || { echo "verdict computation failed" >&2; return 1; }
   local ok; ok="$(python3 -c 'import json,sys;print(json.load(sys.stdin)["ok"])' <<<"$VERDICT_JSON")"

@@ -205,12 +205,20 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            do NOT ask the user for commute or buffer time.
            EMIT EXACTLY THIS SEQUENCE around the activity (no extra rows):
              1) … work blocks right up to the combined block's start …
-             2) COMBINED ACTIVITY BLOCK = commute_before + session + commute_after
-                (ONE row, NO standalone commute rows). E.g. football 2h match →
-                a 3h block 30+120+30, labeled "Football — commute + match +
-                commute". It STARTS at session_start − commute_before (kickoff
-                21:00, commute_before 30 → starts 20:30) and ENDS at session_end +
-                commute_after (23:00 + 30 → 23:30).
+             2) COMBINED ACTIVITY BLOCK = commute_before + SESSION + commute_after
+                (ONE row, NO standalone commute rows).
+                · SESSION = the fitness session's OWN duration from today's
+                  fitness journal (its `duration_min` / stated length, e.g. a 2h
+                  match = 120). This is NOT working_style.session_length_min (that
+                  is the 90-min WORK block length — do not use it for the match).
+                · commute_before_min / commute_after_min come EXACTLY from
+                  activity_buffers — never round or invent them (30 is 30, not 25).
+                E.g. football match duration_min 120 with commute 30/30 → a 3h
+                block 30+120+30 = 180, labeled "Football — commute + match +
+                commute". It STARTS at kickoff − commute_before (21:00 − 30 =
+                20:30) and ENDS at match_end + commute_after (23:00 + 30 = 23:30).
+                Sanity-check the block length = commute_before + duration_min +
+                commute_after before writing it.
              3) post_home_settle BLOCK (post_home_settle_min, e.g. 30 min: shower
                 / get-ready / prep) — POST-activity only.
              4) the following MEAL — e.g. DINNER. ALWAYS keep it (keep_meal_count);
@@ -251,21 +259,25 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          moved to X for the 3pm call, lunch nudged to Y. Good, or change it?"
       Carry this skeleton into 1c (it defines the fixed/flex gaps work fills).
   1c — FOCUS HOURS. Do NOT ask the user how many focused hours they want.
-    ┌─ THREE HARD RULES (the plan is WRONG if any is broken) ───────────────┐
+    ┌─ FIVE HARD RULES (the plan is WRONG if any is broken) ────────────────┐
     │ 1. EVERY work block is EXACTLY session_length_min minutes long (e.g.   │
     │    90). NOT 120, not 60. To use more time, add ANOTHER block — never   │
     │    make a block longer. A block is shorter ONLY when trimmed to butt   │
     │    against the end-of-day or a hard anchor (commute/event).            │
     │ 2. A fitness activity is ONE combined block = commute_before +        │
-    │    session + commute_after (e.g. 30+120+30 = 3h), no standalone        │
-    │    commute rows, THEN a separate post_home_settle block after it.      │
-    │    Work runs right up to the combined block's START; no pre-activity   │
-    │    prep/settle filler.                                                 │
+    │    session + commute_after, using the EXACT buffer values (30 is 30,   │
+    │    never 25). No standalone commute rows; THEN a separate              │
+    │    post_home_settle block. Work runs to the block START; no pre-       │
+    │    activity prep/settle filler.                                        │
     │ 3. EVERY break is break_minutes.median by DEFAULT (e.g. 30). Most      │
-    │    breaks are median. Use a shorter break (toward, not below, min)     │
-    │    ONLY to bank a full block under real time pressure or right before  │
-    │    a long rest/anchor — NOT as a habit. A day of all-min breaks is     │
-    │    WRONG. Longer (toward max) only when off/tired or at wind-down.     │
+    │    breaks are median. Longer (toward max) only when off/tired or at    │
+    │    wind-down. A day of all-min breaks is WRONG.                        │
+    │ 4. When the NEXT block is anchor-trimmed (sub-full, butts a meal/      │
+    │    event), shrink THIS break to min and add the reclaimed minutes to   │
+    │    that block (break 30→15, block 30→45). Always.                      │
+    │ 5. KEEP EVERY MEAL in diet_meal_times (incl. the Snack / pre-activity  │
+    │    fuel) — keep_meal_count. Only drop a meal the user skips today or a │
+    │    block's own notes mark skippable. Never silently drop the snack.    │
     └───────────────────────────────────────────────────────────────────────┘
     DERIVE the available focus hours from today's skeleton: the gaps the LIFE
     anchors leave (typical_day work segments + variation_rules + daily_anchors),
