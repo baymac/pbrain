@@ -216,6 +216,7 @@ out={"session": ws.get("session_length_min",90),
      "meal_times": meal_times,
      "post_meal_nap": post_nap,
      "wake_gap_min": vr.get("min_wake_to_work_gap_min"),
+     "block_notes": {b.get("slot",""): b.get("notes","") for b in (d.get("typical_day",{}).get("workday") or []) if isinstance(b, dict)},
      "day_priorities": (d.get("day_priorities") or {})}
 print(json.dumps(out))
 PY

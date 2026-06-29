@@ -285,8 +285,12 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
             to `min`; a day full of min-length breaks is WRONG. Shrink a break
             BELOW median (toward, never under, `min`) ONLY when there is a real
             reason, e.g.:
-              (a) a FUTURE hard anchor would otherwise force the NEXT work block
-                  to be trimmed — shrink THIS break to preserve a full block;
+              (a) the NEXT work block is being TRIMMED by a hard anchor (e.g. it
+                  butts against lunch/an event and is shorter than full) — then
+                  you MUST shrink THIS break to `min` and add the reclaimed
+                  minutes to that block. (Break 30→15 gives the next block +15,
+                  e.g. a lunch-trimmed block 30→45.) Do NOT leave a median break
+                  in front of a sub-full anchor-trimmed block;
               (b) the next block is immediately followed by a long non-work
                   stretch (a big event, the activity window) — that is already a
                   long rest, so this break shrinks (don't double-rest);
@@ -418,9 +422,23 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
   c. The table ALWAYS starts at the user's actual wake time today (from 1a) —
      NEVER at current_time. Everything from 1b is backfilled as ✓ rows at its
      real time. The plan spans wake → bed.
+     WAKE / MORNING ROUTINE: the first row is a wake + morning-routine block of
+     variation_rules.min_wake_to_work_gap_min (e.g. 60 min) — the full slow start
+     before any work, not a token 30.
+     HONOR PER-BLOCK NOTES: each typical_day block may carry a `notes` field with
+     conditional guidance (e.g. "skip if wake after 11:00", "shorten when tired",
+     "drop on a late start"). READ each block's notes and apply them when the
+     stated condition holds today — skip / shorten / shift that block accordingly.
+     A block skipped because its own notes said so is NOT a dropped meal/anchor.
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
-     no gaps, no overlapping rows. Fill holes with explicit rest / transition
-     / meal / decompress rows. Backfilled rows tile cleanly too.
+     no gaps, no overlapping rows. Backfilled rows tile cleanly too. BUT do NOT
+     invent filler to fill a hole: there is NO standalone "lunch prep / meal prep
+     / wind-up chores / get-ready / pre-X settle" row. A hole between work and an
+     anchor is WORK (extend a block or trim it to the anchor); meal-prep and
+     shower belong to the POST-ACTIVITY settle block only, never a separate early
+     row. The only non-work fillers allowed are a real break (within
+     break_minutes), the wake/morning-routine block, wind-down, or a genuine
+     rest the profile calls for.
   e. WORK BLOCKS: as many session_length_min blocks as 1c settled on, placed
      into the gaps the life anchors leave, each a GENERIC PLACEHOLDER row
      ("Block N — focus work", Tie "—"). Emit each block at its FULL

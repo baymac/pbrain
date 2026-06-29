@@ -26,6 +26,19 @@ meal_default = int(pol.get("meal_default", 30))      # default/cap when unset
 post_meal_nap = pol.get("post_meal_nap", {}) or {}   # {after, minutes, fixed}
 meal_times = pol.get("meal_times", {}) or {}         # {slot: HH:MM} from diet profile
 wake_gap_min = pol.get("wake_gap_min")               # min wake→first-work gap (slow start)
+block_notes = pol.get("block_notes", {}) or {}       # {slot: notes} from typical_day
+
+# Derive a per-slot "skip if wake after HH:MM" condition from the block notes,
+# instead of hardcoding breakfast/11:00 — the rule lives in the user's profile.
+def skip_after_min(slot):
+    note = ""
+    for k, v in block_notes.items():
+        if k.lower() == slot.lower():
+            note = v or ""; break
+    m = re.search(r'skip\s+if\s+wake\s+(?:is\s+)?(?:after|past)\s+(\d{1,2}:\d{2})', note, re.I)
+    if m:
+        h, mm = m.group(1).split(":"); return int(h) * 60 + int(mm)
+    return None
 
 # 'now' (HH:MM) — optional; enables the future-✓ guard. None disables it.
 NOW_MIN = None
@@ -171,6 +184,26 @@ for (s, e, act, tie) in rows:
         problems.append("mega-rest: '" + act[:30] + "' = " + str(d) +
                         "min exceeds the " + str(MAX_REST_BLOCK) + "min plausible rest cap — that is unplanned work time (padding)")
 
+# GUARD G — no standalone prep/chore filler. A "lunch prep / meal prep / wind-up
+# chores / get-ready / pre-X settle" row is invented filler; that time should be
+# work (or it belongs to the POST-activity settle). The post-activity settle row
+# (right after the combined activity block) is the ONE allowed settle/prep row.
+FILLER_RE = re.compile(r'\b(lunch prep|meal prep|food prep|wind[- ]?up|chores?\b.*prep|prep\b.*(?:lunch|meal|dinner)|get[- ]?ready|pre[- ]?(?:match|lunch|dinner|game))\b', re.I)
+SETTLE_OK_RE = re.compile(r'\b(settle|shower|recover|post[- ]?match|post[- ]?game)\b', re.I)
+for i, (s, e, act, tie) in enumerate(rows):
+    if is_done(act):
+        continue
+    if classify(act, tie) in ("work", "break", "winddown"):
+        continue
+    if SETTLE_OK_RE.search(act):         # the post-activity settle is fine
+        continue
+    # FILLER check runs BEFORE the meal exemption: "lunch prep" contains "lunch"
+    # but is prep filler, not a meal.
+    if FILLER_RE.search(act):
+        problems.append("filler row '" + act[:32] + "' — no standalone prep/chores/get-ready row; that time is work, and meal-prep/shower belong to the post-activity settle")
+        continue
+    # (a plain meal row is fine — nothing to flag here)
+
 # GUARD C — meal duration: a meal occupies its configured duration, else the
 # 30-min default, and NEVER more unless explicitly set longer for that slot.
 # A row is a MEAL only if it's about eating — not a prep/wrap/travel row that
@@ -240,11 +273,17 @@ if meal_times and rows:
     span_start = min(mins(s) for s, e, a, t in rows)
     span_end = max((mins(e) + (24 * 60 if mins(e) < mins(s) else 0)) for s, e, a, t in rows)
     plan_lc = plan.lower()
+    # Skippable-meal exemption is DRIVEN BY PROFILE NOTES, not hardcoded: a meal
+    # whose typical_day block note says "skip if wake after HH:MM" is not flagged
+    # when today's wake (span_start) is past that time.
     for slot, t in meal_times.items():
         try:
             mt = mins(t)
         except Exception:
             continue
+        sa = skip_after_min(slot)
+        if sa is not None and span_start > sa:
+            continue   # profile says this meal is skippable on a late wake, and it is late
         # require any meal whose nominal time is at/after the day's start — a meal
         # later than the plan's end is exactly the dropped-late-dinner case we want
         # to catch (it should shift later and still appear, not vanish).
@@ -322,6 +361,20 @@ for bk in breaks:
         if not (next_is_full_block or anchor_or_longrest_near(idx)):
             problems.append(label + ": break " + str(bk["dur"]) + "min is below median " +
                             str(bmed) + " with no reason (no full block banked, no anchor/long-rest near) — breaks default to median")
+    # If the NEXT work block is anchor-trimmed (sub-full and butts an anchor),
+    # this break MUST have been shrunk to min to bank that time into the block.
+    if bk["dur"] > bmin:
+        idx = bk["idx"]
+        nxt = rows[idx + 1] if idx + 1 < len(rows) else None
+        if nxt and classify(nxt[2], nxt[3]) == "work":
+            nb_dur = dur(nxt[0], nxt[1])
+            after = rows[idx + 2] if idx + 2 < len(rows) else None
+            nb_trimmed = nb_dur < sess and bool(after) and classify(after[2], after[3]) in ("anchor", "winddown")
+            if nb_trimmed:
+                problems.append(label + ": break " + str(bk["dur"]) +
+                                "min sits before an anchor-trimmed block (" + str(nb_dur) +
+                                "min) — shrink the break to " + str(bmin) +
+                                " and add the reclaimed time to that block")
 
 # Smell check: if there are several breaks and the MAJORITY are below median,
 # the planner is min-defaulting instead of using median.
