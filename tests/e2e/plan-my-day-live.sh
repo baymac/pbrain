@@ -212,6 +212,7 @@ out={"session": ws.get("session_length_min",90),
      "activity_buffers": vr.get("activity_buffers") or {},
      "meal_minutes": meal_minutes, "meal_default": meal_default,
      "post_meal_nap": post_nap,
+     "wake_gap_min": vr.get("min_wake_to_work_gap_min"),
      "day_priorities": (d.get("day_priorities") or {})}
 print(json.dumps(out))
 PY

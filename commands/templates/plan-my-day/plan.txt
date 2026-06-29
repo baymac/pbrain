@@ -169,7 +169,9 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          17:00 lunch), they do not compress.
       3. Apply the variation guidance the guidelines themselves state (non-gym
          fitness day → use activity_buffers from the plans profile if available, else ask; shift meals;
-         late-wake day → ≥30 min between wake and first work block; keep the
+         late-wake day → at least variation_rules.min_wake_to_work_gap_min
+         between wake and the first work block (the slow-start/wake gap — use the
+         profile value, do NOT hardcode); keep the
          meal count; the BREAK is the flex variable — default break_minutes.median,
          shrink toward min ONLY to bank a full block under real time pressure —
          work blocks stay fixed, trimmed only at end-of-day or a hard anchor).
@@ -221,8 +223,10 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            commute_before 30 → commute 20:30–21:00, and 19:30–20:30 is a 60-min
            trimmed work block, NOT an hour of "kit prep / shower / wrap up".)
          - Late wake-up (today's wake from 1a is later than the template's wake
-           slot): shift the timeline later, ENFORCING ≥30 min between wake and
-           the first work block (variation_rules.min_wake_to_work_gap_min).
+           slot): shift the timeline later, ENFORCING at least
+           variation_rules.min_wake_to_work_gap_min between wake and the first
+           work block (the slow-start/wake gap — read the profile value, never
+           assume 30; it is the wake gap on EVERY day, not only late-wake ones).
          - Invariants every day: keep the meal COUNT (keep_meal_count); breaks
            default to break_minutes.median, and absorb time pressure by shrinking
            a break toward min ONLY to bank a full block (never below min, never

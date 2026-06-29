@@ -24,6 +24,7 @@ buffers = pol.get("activity_buffers", {}) or {}
 meal_minutes = pol.get("meal_minutes", {}) or {}     # {slot: minutes} (user-set)
 meal_default = int(pol.get("meal_default", 30))      # default/cap when unset
 post_meal_nap = pol.get("post_meal_nap", {}) or {}   # {after, minutes, fixed}
+wake_gap_min = pol.get("wake_gap_min")               # min wake→first-work gap (slow start)
 
 # 'now' (HH:MM) — optional; enables the future-✓ guard. None disables it.
 NOW_MIN = None
@@ -228,6 +229,26 @@ forward_work = any(
 )
 if not blocks and forward_work:
     problems.append("parser found 0 forward work blocks though the plan has focus/pbrain work — labeling/format not asserted (treat as FAIL, not vacuous pass)")
+
+# GUARD E — slow-start / wake gap: the first FORWARD work block must start at
+# least wake_gap_min after the day's wake. (A banked ✓ morning that already
+# includes work means the user worked early by choice — only check the gap when
+# the first work block is forward/planned and a wake row exists.)
+if wake_gap_min:
+    wake_start = None
+    for (s, e, a, t) in rows:
+        if re.search(r'\bwake\b|morning routine|morning slow start|slow start', a, re.I):
+            wake_start = mins(s); break
+    first_fwd_work = None
+    for b in blocks:
+        # blocks already exclude ✓-done rows
+        first_fwd_work = mins(b["start"]); break
+    if wake_start is not None and first_fwd_work is not None:
+        gap = first_fwd_work - wake_start
+        if 0 <= gap < int(wake_gap_min):
+            problems.append("slow-start too short: first work block starts " + str(gap) +
+                            "min after wake, but min_wake_to_work_gap_min is " + str(wake_gap_min) +
+                            " — the wake/slow-start gap must be at least that")
 
 last_work_idx = max((b["idx"] for b in blocks), default=-1)
 for b in blocks:
