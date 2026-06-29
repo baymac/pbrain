@@ -1,0 +1,21 @@
+═══ TRIAGE COMPLETENESS BAR (shared — file + groom) ═══
+ONE definition of "a complete issue", referenced by both intake (file) and
+grooming (groom) so a hand-filed item ends up in the SAME shape groom would
+produce. A complete issue clears ALL of:
+• DESCRIPTION — says WHAT changes and HOW you'd know it's done. A placeholder
+  ("x", "wip", "todo", "tbd", "?"), a single word, or a vague target-less
+  one-liner ("fix the thing", "make it better") does NOT clear it — that's a
+  thin description, write a concrete one (scope + done-condition).
+• PRIORITY — a plausible one is set, never left unset. For a bug, derive it
+  from severity; otherwise pick a sensible default for the work (don't leave
+  it blank and don't inflate everything to urgent).
+• ESTIMATE — set one ONLY when the project has an estimate scale
+  (has_estimate_scale), choosing from its allowed points; skip silently when
+  the project has no scale. Never invent a scale.
+• DEADLINE — set a target date ONLY when the work is genuinely time-bound;
+  otherwise leave it unset (an absent deadline is complete, a wrong one isn't).
+INFER, DON'T SKIP: when these aren't stated, fill them by judgment to this bar
+rather than leaving them empty — both fast intake and grooming honor the same
+contract. Be conservative: improve genuinely-thin fields; do not rewrite
+already-adequate prose or override a deliberate value.
+═══ END TRIAGE COMPLETENESS BAR ═══

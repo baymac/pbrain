@@ -224,6 +224,27 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"PM_FAST = yes"* ]]
 }
 
+@test "PB-139 file + groom share one triage completeness bar; fast path infers (no skip)" {
+  PM setup --base-url http://127.0.0.1:9 --api-key SECRET --workspace ws --project pid >/dev/null
+  # The shared snippet is the single source of truth.
+  [ -f "$REPO_ROOT/commands/templates/project-manager/_triage-bar.txt" ]
+  # file (both paths) renders the shared bar...
+  run PM file "add a dark mode toggle" --project pid --fast
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRIAGE COMPLETENESS BAR"* ]]
+  # ...and the FAST path no longer skips estimate/priority — it infers them.
+  [[ "$output" != *"no sub-issues/estimate/deadline unless the dump stated"* ]]
+  [[ "$output" == *"INFER the whole TRIAGE COMPLETENESS BAR"* ]]
+  # groom's drive block injects the SAME bar the same way the .sh does.
+  bar="$(cat "$REPO_ROOT/commands/templates/project-manager/_triage-bar.txt")"
+  run env GROOM_DATA_FILE=/tmp/g.md PM_SELF="bash pm" TRIAGE_BAR="$bar" \
+    envsubst '$GROOM_DATA_FILE $PM_SELF $TRIAGE_BAR' \
+    < "$REPO_ROOT/commands/templates/project-manager/groom-drive.txt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"TRIAGE COMPLETENESS BAR"* ]]
+  [[ "$output" != *'${TRIAGE_BAR}'* ]]   # fully expanded, no stray var
+}
+
 @test "an unknown first token routes to the NL router (not an error)" {
   # With the router, free text is an instruction, not an error: configured →
   # PM_ROUTE with the words echoed back.
