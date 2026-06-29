@@ -275,16 +275,19 @@ Rules of engagement for this run:
 - The user AUTO-PLANS: take the day's fixed anchors (fitness session + its time,
   meal times, calendar) from the context already in the instructions — do NOT ask
   the user to supply the football/workout time; it comes from the fitness journal.
-- TWO HARD RULES (the plan is WRONG if either breaks):
+- THREE HARD RULES (the plan is WRONG if any breaks):
   1. EVERY work block is EXACTLY session_length_min minutes (e.g. 90) — NEVER
      120 or 60. Want more work time? Add ANOTHER 90-min block. A block is
      shorter ONLY when trimmed to butt against end-of-day or a hard anchor.
   2. Before a fitness activity, reserve ONLY its commute_before_min commute —
      no prep/shower/wrap-up/settle block; work runs right up to commute-start.
-- Otherwise honor working_style.block_layout_policy + break_minutes LITERALLY
-  (squeeze in as many full blocks as fit; every break stays WITHIN
-  break_minutes min..max — default median, may shrink to min but NEVER below it
-  (no 5/10-min breaks if min is 15), never above max, never pad to fill a gap).
+  3. EVERY break is break_minutes.median by DEFAULT (e.g. 30) and MOST breaks
+     ARE median. Use a shorter break (toward, not below, min) ONLY to bank a
+     full block under time pressure or right before a long rest/anchor — NOT as
+     a habit. A day of all-min (e.g. all-15-min) breaks is WRONG. Longer (toward
+     max) only when off/tired or at wind-down.
+- Also honor block_layout_policy + meal rules: squeeze in as many full blocks as
+  fit; never pad a gap; meals 30 min.
 - MEALS are 30 min (or the diet-profile duration), NEVER longer — not even
   'lunch out' / a big meal. A post-meal nap/rest is a BREAK (within
   break_minutes), unless a fixed nap is configured.

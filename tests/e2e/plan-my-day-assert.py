@@ -242,12 +242,47 @@ for b in blocks:
     elif not (is_last or abuts_anchor):
         problems.append(label + ": mid-day block " + str(b["dur"]) + "min < session " + str(sess) + " and not at end/hard-anchor (shrunk for no reason)")
 
+# Helper: is there a hard anchor / long non-work stretch / wind-down soon after
+# row index i (within `lookahead` rows)? Justifies a below-median break.
+def anchor_or_longrest_near(i, lookahead=3):
+    for j in range(i + 1, min(i + 1 + lookahead, len(rows))):
+        s2, e2, a2, t2 = rows[j]
+        k2 = classify(a2, t2)
+        if k2 in ("winddown",):
+            return True
+        if k2 == "anchor":
+            # a real activity/event or a long (>= session) non-work stretch
+            if re.search(r'\b(football|gym|match|class|event|commute|appointment|call|meeting)\b', a2, re.I):
+                return True
+            if dur(s2, e2) >= sess:
+                return True
+    return False
+
+below_median = 0
 for bk in breaks:
     label = bk["action"][:32]
     if bk["dur"] > bmax:
         problems.append(label + ": break " + str(bk["dur"]) + "min > max " + str(bmax) + " (break extended/padded)")
     if bk["dur"] < bmin:
         problems.append(label + ": break " + str(bk["dur"]) + "min < min " + str(bmin) + " (break too short)")
+    # A break BELOW median must be justified: a full block follows it (the
+    # reclaimed minutes helped bank it) OR a hard anchor / long rest / wind-down
+    # is near. A gratuitous below-median break (between two full mid-day blocks,
+    # no anchor in sight) is the "lots of 15-min breaks" smell.
+    if bmin <= bk["dur"] < bmed:
+        below_median += 1
+        idx = bk["idx"]
+        nxt = rows[idx + 1] if idx + 1 < len(rows) else None
+        next_is_full_block = bool(nxt) and classify(nxt[2], nxt[3]) == "work" and dur(nxt[0], nxt[1]) == sess
+        if not (next_is_full_block or anchor_or_longrest_near(idx)):
+            problems.append(label + ": break " + str(bk["dur"]) + "min is below median " +
+                            str(bmed) + " with no reason (no full block banked, no anchor/long-rest near) — breaks default to median")
+
+# Smell check: if there are several breaks and the MAJORITY are below median,
+# the planner is min-defaulting instead of using median.
+if len(breaks) >= 3 and below_median * 2 > len(breaks):
+    problems.append("most breaks (" + str(below_median) + "/" + str(len(breaks)) +
+                    ") are below median " + str(bmed) + " — median should be the common case, not min")
 
 # Padded pre-activity buffer detection. The only legitimate pre-activity
 # reservation is COMMUTE_BEFORE (+ an explicit commute row). Any OTHER non-work,
