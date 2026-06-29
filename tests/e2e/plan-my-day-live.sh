@@ -162,12 +162,16 @@ PY
 # 2. MIGRATE — apply 0015 on the copy
 # ---------------------------------------------------------------------------
 migrate() {
-  ( set +e
-    source "$REPO_ROOT/lib/migrations/0015_plan_break_triplet_block_policy.sh"
-    export VAULT_DIR="$PBRAIN_VAULT"
-    if migration_applicable; then migration_apply; log "migration 0015 applied on copy"
-    else log "migration 0015 already satisfied on copy"; fi
-  )
+  local mig
+  for mig in 0015_plan_break_triplet_block_policy 0016_diet_meal_durations 0017_plan_day_priorities; do
+    [[ -f "$REPO_ROOT/lib/migrations/$mig.sh" ]] || continue
+    ( set +e
+      source "$REPO_ROOT/lib/migrations/$mig.sh"
+      export VAULT_DIR="$PBRAIN_VAULT"
+      if migration_applicable; then migration_apply; log "migration ${mig%%_*} applied on copy"
+      else log "migration ${mig%%_*} already satisfied"; fi
+    )
+  done
 }
 
 # Pull the policy + break triplet + session length from the (migrated) copy.
@@ -186,10 +190,29 @@ for fn in os.listdir(store):
 d=json.loads(re.search(r'```json\s*(\{.*?\})\s*```',open(best).read(),re.S).group(1))
 ws=d.get("working_style",{})
 vr=d.get("variation_rules",{})
+# Diet meal config (durations + nap) from the latest committed diet profile.
+meal_minutes={}; meal_default=30; post_nap={}
+dstore=os.path.join(vault,"fitness/diet-tracking/.profile")
+if os.path.isdir(dstore):
+    db=None;dn=-1
+    for fn in os.listdir(dstore):
+        mm=re.match(r"diet-profile\.v(\d+)\.md$",fn)
+        if not mm: continue
+        h=open(os.path.join(dstore,fn)).read(400)
+        if re.search(r"^committed:\s*true",h,re.M) and int(mm.group(1))>dn:
+            dn=int(mm.group(1));db=os.path.join(dstore,fn)
+    if db:
+        dd=json.loads(re.search(r'```json\s*(\{.*?\})\s*```',open(db).read(),re.S).group(1))
+        meal_minutes=dd.get("meal_minutes") or {}
+        meal_default=dd.get("meal_minutes_default",30)
+        post_nap=dd.get("post_meal_nap") or {}
 out={"session": ws.get("session_length_min",90),
      "break": ws.get("break_minutes") or {"min":15,"median":30,"max":45},
      "policy": ws.get("block_layout_policy") or {},
-     "activity_buffers": vr.get("activity_buffers") or {}}
+     "activity_buffers": vr.get("activity_buffers") or {},
+     "meal_minutes": meal_minutes, "meal_default": meal_default,
+     "post_meal_nap": post_nap,
+     "day_priorities": (d.get("day_priorities") or {})}
 print(json.dumps(out))
 PY
 }
@@ -262,6 +285,9 @@ Rules of engagement for this run:
   (squeeze in as many full blocks as fit; every break stays WITHIN
   break_minutes min..max — default median, may shrink to min but NEVER below it
   (no 5/10-min breaks if min is 15), never above max, never pad to fill a gap).
+- MEALS are 30 min (or the diet-profile duration), NEVER longer — not even
+  'lunch out' / a big meal. A post-meal nap/rest is a BREAK (within
+  break_minutes), unless a fixed nap is configured.
 - DO NOT use any tools (no Bash, no Write, no file reads). You already have the
   full instruction block above — everything you need is in it.
 - When you have enough to lay the day, OUTPUT the finished plan as plain text,

@@ -637,10 +637,17 @@ try:
 except Exception:
     sys.exit(0)
 times = p.get("meal_times") or {}
-print(", ".join(f"{k} {v}" for k, v in times.items()))
+mins = p.get("meal_minutes") or {}
+dflt = p.get("meal_minutes_default", 30)
+# Each meal as "Slot HH:MM (Nm)" so the planner uses the real per-meal duration.
+print(", ".join(f"{k} {v} ({int(mins.get(k, dflt))}m)" for k, v in times.items()))
+nap = p.get("post_meal_nap") or {}
+if nap.get("after") and nap.get("minutes"):
+    fx = " FIXED — do not shrink" if nap.get("fixed") else " (treat as a break, within break_minutes)"
+    print(f"post_meal_nap: after {nap['after']}, {nap['minutes']}m{fx}")
 PYEOF
 )"
-[[ -n "${DIET_MEAL_TIMES//[[:space:]]/}" ]] || DIET_MEAL_TIMES="(no diet profile — use the plans-profile daily_anchors / typical_day meal times)"
+[[ -n "${DIET_MEAL_TIMES//[[:space:]]/}" ]] || DIET_MEAL_TIMES="(no diet profile — assume 30 min per meal; a post-meal nap/rest is a break within break_minutes)"
 
 # Today's scheduled fitness activity + its typical time, from the fitness
 # store (activity profiles carry fixed days; the library carries times).

@@ -191,6 +191,15 @@ bash tests/e2e/plan-my-day-live.sh run --scenario tests/e2e/scenarios/plan-my-da
 PBRAIN_E2E_MODEL=claude-haiku-4-5-20251001 bash tests/e2e/plan-my-day-live.sh run  # cheaper smoke run
 ```
 
+It applies migrations 0015 (break band + fixed-block policy) and 0016 (diet
+meal durations + post-meal nap) on the copy, so the assert enforces: fixed
+work blocks, breaks within break_minutes min..max, meals capped at their
+diet-profile duration (default 30, never longer — not even "lunch out"), a
+post-meal nap treated as a break (unless a fixed nap is configured), no
+pre-activity padding (only commute reserved), no future-✓ fabrication, no
+mega-rest. (Per-day block priority + conflict-raising is tracked separately as
+PB-194, not covered here.)
+
 Pieces: `plan-my-day-live.sh` (orchestrator), `plan-my-day-assert.py` (the
 policy check), `plan-my-day-report.py` (the HTML renderer), and the scenario at
 `scenarios/plan-my-day/today-replay.json`.

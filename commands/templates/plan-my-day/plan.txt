@@ -349,6 +349,19 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      never among them. Maximum 15–30 min variance from a profile/diet anchor
      time. If a needed anchor has no profile/diet time, ask the user or use a
      sensible default from the skeleton — do not invent false precision.
+     MEAL DURATIONS: each meal occupies its diet-profile duration — the `(Nm)`
+     shown next to each time in `diet_meal_times` (e.g. "Lunch 14:30 (30m)").
+     With NO diet profile, assume 30 min per meal. NEVER give a meal MORE than
+     its configured duration (default 30) — not even when the user says they're
+     eating OUT or names a big meal. "Lunch out" / "dinner outside" is still a
+     30-min meal slot; if travel to the venue is real, that is a SEPARATE short
+     commute/transition row, not a longer meal. Do not stretch a 30-min lunch to
+     40/45/60.
+     POST-MEAL NAP/REST IS A BREAK: a nap or rest after a meal counts as a break
+     and obeys break_minutes {min, median, max} (default median, may shrink to
+     min, never above max) — UNLESS `diet_meal_times` shows a fixed post_meal_nap
+     (then place it at exactly that length and NEVER shrink it). A nap is never a
+     free-form slot of arbitrary length.
      SKELETON & FLEX (from 1b.5, whenever a skeleton exists — a typical_day
      template OR a planning_guidelines sample skeleton): the skeleton is the
      one reshaped in 1b.5. FOLLOW ITS EXACT SEGMENT DURATIONS / GAPS — a 2h gym

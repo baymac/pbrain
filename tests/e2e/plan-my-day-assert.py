@@ -21,6 +21,9 @@ pol = json.loads(sys.argv[2])
 sess = int(pol["session"]); br = pol["break"]
 bmin, bmed, bmax = int(br["min"]), int(br["median"]), int(br["max"])
 buffers = pol.get("activity_buffers", {}) or {}
+meal_minutes = pol.get("meal_minutes", {}) or {}     # {slot: minutes} (user-set)
+meal_default = int(pol.get("meal_default", 30))      # default/cap when unset
+post_meal_nap = pol.get("post_meal_nap", {}) or {}   # {after, minutes, fixed}
 
 # 'now' (HH:MM) — optional; enables the future-✓ guard. None disables it.
 NOW_MIN = None
@@ -102,11 +105,10 @@ def classify(action, tie=""):
         return "break"
     if WIND_RE.search(a):
         return "winddown"
-    # Explicit work block wins outright (but a "Block … for football" oddity is
-    # excluded by the meal/activity check below).
+    # An explicit "Block N" / "focus work" row IS work, even if its label mentions
+    # an anchor in passing (e.g. "Work block 1 (trimmed, lunch hard stop)").
     if STRONG_WORK_RE.search(a):
-        if not re.search(r'\b(lunch|dinner|breakfast|nap|commute|football|gym|match)\b', a):
-            return "work"
+        return "work"
     # Weak signal (pbrain/project tie) counts as work ONLY when the row isn't a
     # life-anchor/routine row.
     if (WEAK_WORK_RE.search(a) or t == "pbrain" or WEAK_WORK_RE.search(t)) and not NONWORK_RE.search(a):
@@ -164,6 +166,58 @@ for (s, e, act, tie) in rows:
     if d > MAX_REST_BLOCK:
         problems.append("mega-rest: '" + act[:30] + "' = " + str(d) +
                         "min exceeds the " + str(MAX_REST_BLOCK) + "min plausible rest cap — that is unplanned work time (padding)")
+
+# GUARD C — meal duration: a meal occupies its configured duration, else the
+# 30-min default, and NEVER more unless explicitly set longer for that slot.
+# A row is a MEAL only if it's about eating — not a prep/wrap/travel row that
+# merely mentions a meal ("Wrap + prep for lunch out" is NOT a meal).
+MEAL_ONLY_RE = re.compile(r'\b(lunch|dinner|breakfast|brunch|meal)\b', re.I)
+NOT_MEAL_RE = re.compile(r'\b(prep|wrap|travel|commute|get[- ]?ready|head out|leave for|pre[- ])\b', re.I)
+def meal_cap_for(action):
+    a = action.lower()
+    for slot, mins in meal_minutes.items():
+        if slot.lower() in a:
+            try:
+                return int(mins)               # user-configured duration for this slot
+            except Exception:
+                return meal_default
+    return meal_default
+for (s, e, act, tie) in rows:
+    if is_done(act):
+        continue
+    if classify(act, tie) in ("work", "break", "winddown"):
+        continue                         # a work/break row that merely mentions "lunch" is not a meal
+    if not MEAL_ONLY_RE.search(act) or NOT_MEAL_RE.search(act):
+        continue                         # prep/wrap/travel-for-lunch rows are not the meal itself
+    # skip "pre-football meal/fuel" style rows that are really fuel snacks
+    d = dur(s, e); cap = meal_cap_for(act)
+    if d > cap:
+        problems.append("meal too long: '" + act[:30] + "' = " + str(d) +
+                        "min > " + str(cap) + "min — meals are " + str(cap) +
+                        "min (set a longer duration in the diet profile to allow more)")
+
+# GUARD D — post-meal nap/rest is a BREAK and obeys break_minutes, UNLESS the
+# diet profile pins a fixed nap (then it must be exactly that length).
+NAP_RE = re.compile(r'\bnap\b', re.I)
+nap_fixed = bool(post_meal_nap.get("fixed")) and post_meal_nap.get("minutes")
+nap_fixed_min = int(post_meal_nap["minutes"]) if nap_fixed else None
+for i, (s, e, act, tie) in enumerate(rows):
+    if is_done(act):
+        continue
+    # a nap, OR a rest/settle directly after a meal row
+    prev_is_meal = i > 0 and MEAL_ONLY_RE.search(rows[i-1][2] or "")
+    if not (NAP_RE.search(act) or (prev_is_meal and REST_RE.search(act))):
+        continue
+    d = dur(s, e)
+    if nap_fixed_min is not None:
+        if d != nap_fixed_min:
+            problems.append("nap: '" + act[:24] + "' = " + str(d) +
+                            "min but a FIXED " + str(nap_fixed_min) + "min nap is set — must match exactly, never shrink")
+    else:
+        if d > bmax:
+            problems.append("post-meal nap/rest: '" + act[:24] + "' = " + str(d) +
+                            "min > break max " + str(bmax) + " — a nap is a break, keep it within " +
+                            str(bmin) + ".." + str(bmax))
 
 # Guard against a vacuous pass: if the plan clearly contains FORWARD focus work
 # (a non-✓ "Block N / focus work" row) but the parser found NO work blocks,
