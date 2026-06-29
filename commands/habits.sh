@@ -1132,7 +1132,7 @@ if [[ "$SUB" == "mark" ]]; then
   shift || true
   M_NAME=""; M_DATE="$TODAY"; M_COUNT="1"; M_NOTE=""; M_AMOUNT=""
   M_GOOD=""; M_BAD=""; M_SLIPS=""; M_ATIME=""; M_AHOURS=""
-  M_ITEMS=""; M_SESSION=""; M_FOCUS=""; M_DONE=""; M_STATUS="done"
+  M_ITEMS=""; M_SESSION=""; M_FOCUS=""; M_DONE=""; M_STATUS="done"; M_TIMES=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|--id) M_NAME="${2:-}"; shift 2 2>/dev/null || shift ;;
@@ -1151,6 +1151,7 @@ if [[ "$SUB" == "mark" ]]; then
       --status) M_STATUS="${2:-done}"; shift 2 2>/dev/null || shift ;;
       --skip)   M_STATUS="skipped"; shift ;;   # sugar for --status skipped
       --note)   M_NOTE="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --time|--times) M_TIMES="${2:-}"; shift 2 2>/dev/null || shift ;;  # PB-138: explicit HH:MM[,HH:MM] for limit habits
       *) shift ;;
     esac
   done
@@ -1163,7 +1164,7 @@ if [[ "$SUB" == "mark" ]]; then
     exit 0
   fi
   pbrain_habit_mark "$M_DATE" "$M_NAME" "$M_COUNT" "$M_NOTE" "$M_AMOUNT" \
-    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION" "$M_FOCUS" "$M_DONE" "$M_STATUS"
+    "$M_GOOD" "$M_BAD" "$M_SLIPS" "$M_ATIME" "$M_AHOURS" "$M_ITEMS" "$M_SESSION" "$M_FOCUS" "$M_DONE" "$M_STATUS" "$M_TIMES"
   exit 0
 fi
 

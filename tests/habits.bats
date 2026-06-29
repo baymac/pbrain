@@ -449,7 +449,7 @@ import sys
 t = sys.stdin.read()
 # a section heading per part, plain 6-column tables under each
 assert "## Fitness activity" in t and "## Cleanliness" in t and "## Other" in t, t
-assert "| Habit | Criteria | Progress | Done | Count | Note |" in t, t
+assert "| Habit | Criteria | Progress | Done | Count | Times | Note |" in t, t
 # fitness-activity (order 1) section before cleanliness (order 4); uncategorized (Other) last
 assert t.index("## Fitness activity") < t.index("## Cleanliness") < t.index("## Other"), t
 # each habit lands under its section
@@ -673,7 +673,7 @@ PY
   [ "$status" -eq 0 ]
   [ -f "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md" ]
   body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
-  [[ "$body" == *"| Habit | Criteria | Progress | Done | Count | Note |"* ]]
+  [[ "$body" == *"| Habit | Criteria | Progress | Done | Count | Times | Note |"* ]]
   [[ "$body" == *"Brush at night"* ]]
   [[ "$body" == *"weekly ≥2"* ]]
   [[ "$body" == *"weekly ≤2"* ]]
@@ -944,9 +944,54 @@ assert h["measure_target"] is None, h
 
 @test "daily limit Progress reads today-vs-cap, not a weekly sum" {
   HABITS add --name "Smokes" --type daily --direction at_most --target 0 --priority high >/dev/null
-  HABITS mark --name "Smokes" --date 2026-06-03 --count 3 --note "3 cigs" >/dev/null
+  HABITS mark --name "Smokes" --date 2026-06-03 --count 3 --note "3 cigs" --time "09:00" >/dev/null
   body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
-  [[ "$body" == *"| Smokes | daily (limit) | 3/0 day | x | 3 | 3 cigs |"* ]]
+  [[ "$body" == *"| Smokes | daily (limit) | 3/0 day | x | 3 | 09:00 | 3 cigs |"* ]]
+}
+
+@test "PB-138 limit habit: explicit --time wins and folds thoughts into Note" {
+  HABITS add --name "Doomscroll" --type daily --direction at_most --target 0 --priority high >/dev/null
+  HABITS mark --name "Doomscroll" --date 2026-06-03 --time "21:15" --note "couldn't sleep" >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"| Doomscroll | daily (limit) |"* ]]
+  [[ "$body" == *"| 21:15 | couldn't sleep |"* ]]   # Times + Note both set
+}
+
+@test "PB-138 limit habit: multiple times accumulate comma-separated, sorted" {
+  HABITS add --name "Snack" --type daily --direction at_most --target 0 --priority medium >/dev/null
+  HABITS mark --name "Snack" --date 2026-06-03 --time "21:15" >/dev/null
+  HABITS mark --name "Snack" --date 2026-06-03 --time "14:30" >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  [[ "$body" == *"| 14:30, 21:15 |"* ]]   # both times, time-of-day order
+}
+
+@test "PB-138 limit habit: time is inferred from the log moment when none given" {
+  HABITS add --name "TV" --type daily --direction at_most --target 0 --priority low >/dev/null
+  HABITS mark --name "TV" --date 2026-06-03 >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  # The Times cell for TV's row is a non-empty HH:MM (inferred from now).
+  echo "$body" | python3 -c '
+import sys, re
+t = sys.stdin.read()
+row = next(l for l in t.splitlines() if l.strip().startswith("| TV "))
+cells = [c.strip() for c in row.strip().strip("|").split("|")]
+# columns: Habit Criteria Progress Done Count Times Note  -> Times is index 5
+assert re.match(r"^\d{1,2}:\d{2}$", cells[5]), "Times not an inferred clock time: %r (%r)" % (cells[5], cells)
+'
+}
+
+@test "PB-138 build habit gets NO time recorded (Times stays blank)" {
+  HABITS add --name "Pushups" --type daily --direction at_least --target 1 --priority high >/dev/null
+  HABITS mark --name "Pushups" --date 2026-06-03 --time "07:00" >/dev/null
+  body="$(cat "$PBRAIN_HABIT_TRACK_DIR/2026-06-03.md")"
+  # Even if a time is passed, a build habit ignores it — its Times cell is empty.
+  echo "$body" | python3 -c '
+import sys
+t = sys.stdin.read()
+row = next(l for l in t.splitlines() if l.strip().startswith("| Pushups "))
+cells = [c.strip() for c in row.strip().strip("|").split("|")]
+assert cells[5] == "", "build habit should have blank Times, got %r" % cells[5]
+'
 }
 
 @test "refresh recomputes a stale Progress cell from the DB without touching marks" {
