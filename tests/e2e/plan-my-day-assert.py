@@ -24,6 +24,7 @@ buffers = pol.get("activity_buffers", {}) or {}
 meal_minutes = pol.get("meal_minutes", {}) or {}     # {slot: minutes} (user-set)
 meal_default = int(pol.get("meal_default", 30))      # default/cap when unset
 post_meal_nap = pol.get("post_meal_nap", {}) or {}   # {after, minutes, fixed}
+meal_times = pol.get("meal_times", {}) or {}         # {slot: HH:MM} from diet profile
 wake_gap_min = pol.get("wake_gap_min")               # min wake→first-work gap (slow start)
 
 # 'now' (HH:MM) — optional; enables the future-✓ guard. None disables it.
@@ -231,6 +232,27 @@ forward_work = any(
 )
 if not blocks and forward_work:
     problems.append("parser found 0 forward work blocks though the plan has focus/pbrain work — labeling/format not asserted (treat as FAIL, not vacuous pass)")
+
+# GUARD F — meal count: every diet-profile meal whose time falls within the
+# plan's span must appear (keep_meal_count). Catches a dropped DINNER after a
+# late activity. A meal "appears" if some row's action mentions the slot name.
+if meal_times and rows:
+    span_start = min(mins(s) for s, e, a, t in rows)
+    span_end = max((mins(e) + (24 * 60 if mins(e) < mins(s) else 0)) for s, e, a, t in rows)
+    plan_lc = plan.lower()
+    for slot, t in meal_times.items():
+        try:
+            mt = mins(t)
+        except Exception:
+            continue
+        # require any meal whose nominal time is at/after the day's start — a meal
+        # later than the plan's end is exactly the dropped-late-dinner case we want
+        # to catch (it should shift later and still appear, not vanish).
+        if mt < span_start - 30:
+            continue
+        if slot.lower() not in plan_lc:
+            problems.append("missing meal: '" + slot + "' (" + t +
+                            ") is in the diet profile but absent from the plan — meals are kept (keep_meal_count) unless the user skips them")
 
 # GUARD E — slow-start / wake gap: the first FORWARD work block must start at
 # least wake_gap_min after the day's wake. (A banked ✓ morning that already

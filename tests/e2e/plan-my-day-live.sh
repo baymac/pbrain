@@ -201,16 +201,19 @@ if os.path.isdir(dstore):
         h=open(os.path.join(dstore,fn)).read(400)
         if re.search(r"^committed:\s*true",h,re.M) and int(mm.group(1))>dn:
             dn=int(mm.group(1));db=os.path.join(dstore,fn)
+    meal_times={}
     if db:
         dd=json.loads(re.search(r'```json\s*(\{.*?\})\s*```',open(db).read(),re.S).group(1))
         meal_minutes=dd.get("meal_minutes") or {}
         meal_default=dd.get("meal_minutes_default",30)
         post_nap=dd.get("post_meal_nap") or {}
+        meal_times=dd.get("meal_times") or {}
 out={"session": ws.get("session_length_min",90),
      "break": ws.get("break_minutes") or {"min":15,"median":30,"max":45},
      "policy": ws.get("block_layout_policy") or {},
      "activity_buffers": vr.get("activity_buffers") or {},
      "meal_minutes": meal_minutes, "meal_default": meal_default,
+     "meal_times": meal_times,
      "post_meal_nap": post_nap,
      "wake_gap_min": vr.get("min_wake_to_work_gap_min"),
      "day_priorities": (d.get("day_priorities") or {})}
@@ -283,9 +286,11 @@ Rules of engagement for this run:
   2. A fitness activity is ONE combined block = commute_before + session +
      commute_after (e.g. football 2h match becomes a 3h block 30+120+30, labeled
      like Football - commute + match + commute) with NO standalone commute rows,
-     THEN a SEPARATE post_home_settle block (shower/get-ready/prep) after it,
-     then the meal/dinner, wind-down, sleep. Work runs right up to the combined
-     block START - no pre-activity prep/settle filler.
+     THEN a SEPARATE post_home_settle block (shower/get-ready/prep), THEN the
+     following meal DINNER (always keep it unless the user skips it today), then
+     wind-down, sleep. Work runs right up to the combined block START. Emit NO
+     pre-activity row before the block (no prep/pack/kit/wrap/get-ready/head-out)
+     - packing+travel are inside commute_before. Do NOT drop dinner.
   3. EVERY break is break_minutes.median by DEFAULT (e.g. 30) and MOST breaks
      ARE median. Use a shorter break (toward, not below, min) ONLY to bank a
      full block under time pressure or right before a long rest/anchor — NOT as

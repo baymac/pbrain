@@ -203,31 +203,31 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            in the plans profile FIRST. If the activity has a named entry there
            (e.g. "football", "apple_fitness"), use its buffer values silently —
            do NOT ask the user for commute or buffer time.
-           ONE COMBINED ACTIVITY BLOCK + A SEPARATE SETTLE BLOCK:
-             • Lay the activity as a SINGLE combined block =
-               commute_before + session + commute_after (NO standalone commute
-               rows). E.g. football with a 2h match → a 3h block 30+120+30,
-               labeled "Football — commute + match + commute". The block STARTS
-               at session_start − commute_before (e.g. kickoff 21:00, commute_before
-               30 → block starts 20:30) and ENDS at session_end + commute_after.
-             • THEN a SEPARATE post_home_settle block right after it
-               (post_home_settle_min, e.g. 30 min: shower / get-ready / prep meal)
-               — settle is POST-activity, never folded into the combined block and
-               never a pre-activity reservation.
-             • THEN the following meal (e.g. dinner), then wind-down, then sleep.
+           EMIT EXACTLY THIS SEQUENCE around the activity (no extra rows):
+             1) … work blocks right up to the combined block's start …
+             2) COMBINED ACTIVITY BLOCK = commute_before + session + commute_after
+                (ONE row, NO standalone commute rows). E.g. football 2h match →
+                a 3h block 30+120+30, labeled "Football — commute + match +
+                commute". It STARTS at session_start − commute_before (kickoff
+                21:00, commute_before 30 → starts 20:30) and ENDS at session_end +
+                commute_after (23:00 + 30 → 23:30).
+             3) post_home_settle BLOCK (post_home_settle_min, e.g. 30 min: shower
+                / get-ready / prep) — POST-activity only.
+             4) the following MEAL — e.g. DINNER. ALWAYS keep it (keep_meal_count);
+                only drop it if the user explicitly says they're skipping it today.
+             5) wind-down, then sleep.
+           DO NOT emit any pre-activity row — no "prep / pack / kit up / wrap up
+           / get-ready / head out / pre-match settle" row BEFORE the combined
+           block. There is NONE: packing and travel are already inside
+           commute_before. Work runs right up to the block start with nothing
+           between (a trimmed block may butt against it). Putting a prep/pack row
+           before the block is WRONG.
            Shift nearby meal slots to fit — meal COUNT unchanged
            (variation_rules.non_gym_fitness). Only ask for duration/buffer when the
            activity has NO entry in activity_buffers.
-           WORK RUNS UP TO THE COMBINED BLOCK'S START. The combined block's start
-           is the HARD ANCHOR. Everything between the last pre-activity meal and
-           that start is WORK: lay full work blocks, and if a full block won't fit
-           before the block start, lay ONE block trimmed to butt against it. Do
-           NOT invent a "kit prep / get-ready / travel / wrap up / pre-match
-           settle" filler before the block — there is none; the commute is already
-           inside the combined block. (Example: dinner-prep aside, football match
-           21:00–23:00, commute 30 each way, settle 30 → combined block 20:30–23:30
-           "Football — commute + match + commute", then 23:30–00:00 settle
-           (shower + prep), then the meal; work runs right up to 20:30.)
+           (Full example: … work to 20:30, then 20:30–23:30 "Football — commute +
+           match + commute", 23:30–00:00 settle (shower+prep), 00:00–00:30 Dinner,
+           then wind-down → sleep. NO prep row before 20:30; dinner is NOT dropped.)
          - Late wake-up (today's wake from 1a is later than the template's wake
            slot): shift the timeline later, ENFORCING at least
            variation_rules.min_wake_to_work_gap_min between wake and the first
