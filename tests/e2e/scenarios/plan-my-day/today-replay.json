@@ -1,0 +1,17 @@
+{
+  "_doc": "Morning replay for the plan-my-day live e2e (PB-186). The skill AUTO-PLANS: today's football session + its 21:00 time, the meal slots, and the buffers come from the copied fitness journal / diet profile / plans profile — NOT from these answers. These are only the light morning check-in replies the user gave 'since waking up', in the order the skill asks. Edit this file to replay a different day.",
+  "display": "plan-my-day — replay today (slow morning, football 21:00 from fitness journal)",
+  "target_date": "2026-06-28",
+  "_target_date_note": "The day this replay reconstructs (Sunday, football). The pipeline remaps this day's dated files (fitness session, daily journal) onto the system's current date in the throwaway copy, so the real `date`-driven plan-my-day finds the football session no matter when the test runs.",
+  "checkin_answers": [
+    "woke around 10:30, slow start, slept ok-ish",
+    "energy maybe 6/10, bit groggy from the late wake",
+    "already banked some pbrain entries + chores this morning, count those",
+    "lunch will be outside today — palak khichdi + a chicken plate, around 14:30",
+    "yeah football tonight as scheduled, keep the usual pre-match fuel and buffers",
+    "no other hard calendar events, just want as much focus work as fits before the match",
+    "looks good, lay it out"
+  ],
+  "expect": "fixed-blocks-flex-breaks",
+  "notes": "PASS = work blocks are full session_length_min (trimmed only at end-of-day or right before the football hard anchor); breaks stay within break_minutes min..max (default median, may shrink toward min, never padded/extended)."
+}

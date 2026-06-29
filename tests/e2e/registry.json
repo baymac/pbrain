@@ -15,15 +15,6 @@
       "default_personas": ["fast", "cautious"],
       "default_mode": "scripted"
     },
-    "plan-my-day": {
-      "engine": "plan-my-day.bash",
-      "run_fn": "e2e_run_planday_live",
-      "live_engine": "plan-my-day.bash",
-      "live_run_fn": "e2e_run_planday_live",
-      "tracking_kind": "vault-file",
-      "default_personas": ["fast"],
-      "default_mode": "live"
-    },
     "fitness-journal": {
       "engine": "fitness-journal.bash",
       "run_fn": "e2e_run_fitness",

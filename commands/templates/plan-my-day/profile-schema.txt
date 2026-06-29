@@ -6,9 +6,18 @@
 ```json
 {"created": "YYYY-MM-DD",
  "working_style": {"session_length_min": 90, "break_min": 30,
+   "break_minutes": {"min": 15, "median": 30, "max": 45},
+   "block_layout_policy": {"work_block_minutes": 90, "work_blocks_fixed": true,
+     "trim_only_at": ["end_of_day", "hard_anchor"], "squeeze": "max",
+     "break_default": "median", "break_may_shrink_to": "min", "break_never_extend": true},
    "break_activities": ["..."], "work_hours_per_day": 7,
    "focus_hours": "9-12,15-17", "last_block_end": "HH:MM",
    "energy_peak": "...", "day_wreckers": ["..."], "other_prefs": ["..."]},
+ // NOTE: ask the user for ONE break duration (their median). Derive
+ //   break_minutes.min = round(median/2), .max = round(median*1.5).
+ //   break_min stays as a back-compat alias = median. Work blocks are FIXED
+ //   at session_length_min — squeeze in as many as possible; shrink the BREAK
+ //   (toward min) to bank work; trim a block only at end_of_day or a hard_anchor.
  "planning_guidelines": "Prose: how /plan-my-day will plan the day...",
  "current_focus": [
    {"id": "<library-id>", "lib": "work|goals", "name": "...",
