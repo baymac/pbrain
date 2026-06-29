@@ -156,6 +156,27 @@ rows3 = [(s, e, act) for (s, e, act, tie) in rows]
 
 problems = []
 
+# GUARD 0 — OVERLAP: consecutive rows must not overlap. A block that ends AFTER
+# the next row starts (e.g. Block 2 13:30–15:00 while lunch starts 14:30) runs
+# into that anchor — it must end exactly at the next anchor's start. (Skip the
+# day-wrap at midnight, where end < start legitimately.)
+for i in range(len(rows) - 1):
+    s1, e1, a1, t1 = rows[i]
+    s2, e2, a2, t2 = rows[i + 1]
+    try:
+        e1m, s2m, s1m = mins(e1), mins(s2), mins(s1)
+    except Exception:
+        continue
+    if e1m < s1m:        # this row wraps past midnight — skip
+        continue
+    if e1m > s2m:        # overlap
+        nxt_kind = classify(a2, t2)
+        if nxt_kind == "work" or MEAL_RE_TOP.search(a2) or nxt_kind in ("anchor", "winddown"):
+            problems.append("overlap: '" + a1[:24] + "' ends " + e1 + " but '" + a2[:24] +
+                            "' starts " + s2 + " — a block adjacent to an anchor/meal must END at that anchor's start (trim it)")
+        else:
+            problems.append("overlap: '" + a1[:24] + "' (" + e1 + ") overlaps '" + a2[:24] + "' (" + s2 + ")")
+
 # GUARD A — fabricated completion: a ✓-done row may only cover PAST time. A ✓
 # row whose end is in the future means the model claimed it already happened to
 # dodge planning (e.g. "14:30–21:00 ✓ Rest" recorded at 20:00).

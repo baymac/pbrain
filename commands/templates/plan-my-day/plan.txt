@@ -443,7 +443,11 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      stated condition holds today — skip / shorten / shift that block accordingly.
      A block skipped because its own notes said so is NOT a dropped meal/anchor.
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
-     no gaps, no overlapping rows. Backfilled rows tile cleanly too. BUT do NOT
+     no gaps, NO OVERLAPPING ROWS. Each row's end MUST equal the next row's start.
+     A work block adjacent to a meal/anchor ENDS EXACTLY at that anchor's start —
+     never run a block past it (lunch at 14:30 → the prior block ends 14:30, e.g.
+     13:15–14:30, NOT 13:30–15:00 which overlaps lunch). Backfilled rows tile
+     cleanly too. BUT do NOT
      invent filler to fill a hole: there is NO standalone "lunch prep / meal prep
      / wind-up chores / get-ready / pre-X settle" row. A hole between work and an
      anchor is WORK (extend a block or trim it to the anchor); meal-prep and
