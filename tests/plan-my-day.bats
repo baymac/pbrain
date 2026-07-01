@@ -458,12 +458,14 @@ EOF
   [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"TODAY'S PLAN (current)"* && "$output" == *"plan content"* ]]
 }
 
-@test "UPDATE path emits diet_today_exists so the end-of-session diet nudge can fire (PB-73)" {
+@test "UPDATE path emits diet_today_exists so the end-of-pass diet nudge can fire (PB-73/PB-167)" {
   write_goals_profile
   write_libraries
   mkdir -p "$PLAN"
-  # A bare re-run on an already-laid day takes the UPDATE path — the diet nudge
-  # must still reach the model there (it only lived on the plan path before PB-73).
+  # A bare re-run on an already-laid day takes the UPDATE path — the diet flag
+  # must still reach the model there so the END-of-pass diet nudge fires (PB-167
+  # moved that nudge off the start-of-day preflight to the end of the pass; it
+  # only lived on the plan path before PB-73).
   printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
   run PMD
   [ "$status" -eq 0 ]
@@ -932,7 +934,7 @@ write_today_journals() {
   printf -- '# gratitude %s\n' "$TODAY" > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
 }
 
-@test "PB-58: bare plan with no fitness/diet emits PREFLIGHT and stops before heavy context" {
+@test "PB-58: bare plan with fitness/gratitude missing emits PREFLIGHT and stops before heavy context" {
   write_plans_profile
   write_libraries
   run PMD plan
@@ -973,6 +975,23 @@ write_today_journals() {
   [[ "$output" == *"gratitude_today_exists: no"* ]]
 }
 
+@test "PB-167: diet missing alone does NOT gate the preflight (diet is nudged at the END of the pass, not the start)" {
+  write_plans_profile
+  write_libraries
+  # Log fitness + gratitude so ONLY the diet journal is outstanding.
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking" "$PBRAIN_VAULT/life/gratitude-journal"
+  printf -- '---\ntype: fitness\ndate: %s\nstatus: planned\n---\n# s\n' "$TODAY" \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md"
+  printf -- '# gratitude %s\n' "$TODAY" > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
+  run PMD plan
+  [ "$status" -eq 0 ]
+  # No START-of-day gate — diet-only-missing falls straight through to the heavy
+  # SESSION, which fires the diet nudge at the END of the planning pass.
+  ! grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  [[ "$output" == *"=== PLANS PROFILE"* ]]
+}
+
 @test "PB-58: auto-skip — all journals logged goes straight to SESSION, no preflight" {
   write_plans_profile
   write_libraries
@@ -982,6 +1001,17 @@ write_today_journals() {
   ! grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
   grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
   [[ "$output" == *"=== PLANS PROFILE"* ]]
+}
+
+@test "PB-167: the SESSION instructions carry the END-of-pass diet nudge (Step 7)" {
+  write_plans_profile
+  write_libraries
+  run PMD plan --continue
+  [ "$status" -eq 0 ]
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  # Step 7 fires the diet nudge at the END of the pass (moved off the preflight).
+  [[ "$output" == *"Diet nudge (END of /plan-my-day"* ]]
+  [[ "$output" == *"/diet-journal isn't logged yet"* ]]
 }
 
 @test "PB-58: --continue skips the preflight and emits the full SESSION + HABIT SCAN" {

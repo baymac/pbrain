@@ -12,11 +12,12 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
   set up so I'll nudge". A skipped nudge produces NO output at all; a fired nudge
   produces only the one user-facing line described below. State only the nudge
   itself, never the reasoning that led to it.
-  - FITNESS / DIET NUDGES — ALREADY SURFACED (PB-58): the fitness-journal and
-    diet-journal nudges were handled in the cheap PREFLIGHT pass before this
-    context loaded (you only reach this SESSION block after the user chose to
-    continue). Do NOT re-nudge about either here — don't repeat "today's
-    /fitness-journal isn't done" or "/diet-journal isn't logged". Just plan.
+  - FITNESS NUDGE — ALREADY SURFACED (PB-58): the fitness-journal nudge was
+    handled in the cheap PREFLIGHT pass before this context loaded (you only
+    reach this SESSION block after the user chose to continue). Do NOT re-nudge
+    it here — don't repeat "today's /fitness-journal isn't done". The DIET nudge
+    is different: fire it once at the END of this pass (Step 7), never at the
+    start. Just plan.
       - If TODAY'S FITNESS JOURNAL exists: say nothing about it; still read its
         `sleep_*` fields (Step 1a) and treat its scheduled session as today's.
         Its `focus:` field is surfaced as `fitness_today_activity` above — when
@@ -616,7 +617,13 @@ Step 5 — Reminders (only if relevant — don't force it):
   Resolve the due time relative to today ($TODAY) + the current time. Set it
   only on a yes. At most one short offer covering all of them.
 
-Step 7 — Diet nudge: ALREADY SURFACED (PB-58). The diet-journal nudge fired in
-the cheap PREFLIGHT pass before this context loaded, so do NOT repeat it here.
-(`diet_today_exists` is still provided above for any planning use, e.g. meal-slot
-context — just don't re-offer "/diet-journal isn't logged".)
+Step 7 — Diet nudge (END of /plan-my-day, non-blocking). Nudge once here at the
+END of the planning pass, never at the start. Gate STRICTLY on the precomputed
+`diet_today_exists` flag in the header — never check the file yourself.
+   PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to skip the
+   diet nudge, skip this.
+   - diet_today_exists == no: one short line, folded into the closing message —
+     e.g. "Today's /diet-journal isn't logged yet — want to capture your meals?
+     Either way the plan's set." Don't block; don't ask whether anything is
+     complete. Just the offer.
+   - diet_today_exists == yes: say nothing.

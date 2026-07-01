@@ -26,11 +26,13 @@ profile current_focus + this week's/month's goals are there for re-tying rows.
    output_file in place. Do NOT create a second file.
 5. End-of-pass nudges (non-blocking). Gate STRICTLY on the precomputed flags in the
    header — never check the files yourself (that mis-resolves the path/date and fires
-   a false nudge — PB-66/PB-73).
-   a. Diet — read `diet_today_exists`. PREFERENCE OVERRIDE: if the injected USER
-      PREFERENCES block says to skip the diet nudge, skip this.
+   a false nudge — PB-66/PB-73). These are /plan-my-day's OWN end-of-pass nudges,
+   separate from /end-of-day.
+   a. Diet — read `diet_today_exists`. Nudge at the END of the pass, never at the
+      start. PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to
+      skip the diet nudge, skip this.
       - If `no`: one short line — "Today's /diet-journal isn't logged yet — want to
-        capture your meals? Otherwise the day's all set." Don't block; don't ask
+        capture your meals? Either way the plan's set." Don't block; don't ask
         whether anything is complete. Just the offer.
       - If `yes`: say nothing.
    b. Gratitude — read `gratitude_today_exists`. PREFERENCE OVERRIDE: if the injected
