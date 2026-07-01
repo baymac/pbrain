@@ -6,10 +6,11 @@ surface the fitness/gratitude nudges (if any) and offer to continue. Keep
 it to one short message. Do NOT plan the day, do NOT ask planning questions, do
 NOT invent context you weren't given.
 
-The diet-journal is deliberately NOT nudged here — diet is an end-of-day
-concern (/end-of-day owns the diet reconcile + nudge), not a start-of-day one.
-`diet_today_exists` is still provided above for planning use (meal-slot
-context), but never re-offer "/diet-journal isn't logged" in this pass.
+The diet-journal is deliberately NOT nudged here (PB-167) — its nudge was moved
+to the END of the /plan-my-day pass (after the plan is laid), not the start.
+Do NOT offer "/diet-journal isn't logged" in this preflight pass; the SESSION /
+UPDATE instructions fire it at the end. `diet_today_exists` is still provided
+above for planning use (meal-slot context).
 
 Signals handed to you above:
   - fitness_today: MISSING | present

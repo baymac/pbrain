@@ -453,11 +453,11 @@ if [[ "${1:-}" == "focus" || "${1:-}" == "library" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Existence-only diet flag — provided to the plan/update context for meal-slot
-# planning use ONLY, not a nudge: /plan-my-day never nudges for the diet journal
-# (diet is /end-of-day's concern). We only need yes/no, not the file contents.
-# Computed here (before the UPDATE branch) so BOTH the UPDATE and PLAN paths can
-# emit it in their header context.
+# Existence-only diet flag for the END-of-pass diet nudge (PB-167: moved off the
+# start-of-day preflight to the end of the /plan-my-day pass) — plus meal-slot
+# planning context. We only need yes/no, not the file contents. Computed here
+# (before the UPDATE branch) so BOTH the UPDATE and PLAN paths emit it: the nudge
+# fires on a bare re-run (UPDATE path) as well as the fresh-plan path.
 DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
 
 # Existence-only flag for the morning-sequence gratitude nudge (PB-66). The nudge
