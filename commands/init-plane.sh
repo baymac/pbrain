@@ -15,8 +15,13 @@
 #   probe                 Print machine state for the wizard. Default.
 #   fetch                 Download Plane's official setup.sh into the managed
 #                         dir and make it executable.
-#   up                    Run Plane's setup.sh (interactive menu: Install/Start/
-#                         Stop/Restart/Upgrade — Plane owns lifecycle).
+#   up [flags]            Run Plane's setup.sh (interactive menu: Install/Start/
+#                         Stop/Restart/Upgrade — Plane owns lifecycle), then by
+#                         default land on the stable vhost (PB-113:
+#                         http://plane.localhost:1800) — no separate vhost step.
+#                         Flags: --host (default plane.localhost), --port (1800),
+#                         --no-vhost / --port 80 (stay on bare :80), --no-restart,
+#                         --plane-home.
 #   config <flags>        Wire pbrain → the instance (delegates to lib/plane.py
 #                         setup; --base-url/--api-key/--workspace/--project).
 #   vhost [flags]         Move Plane off port 80 to a named vhost (default
@@ -199,6 +204,56 @@ _plane_configured() {
   echo no
 }
 
+# PB-113: apply the stable vhost (move Plane off :80 onto <host>:<port>) by
+# editing Plane's OWN plane.env knobs — backup once, upsert APP_DOMAIN +
+# LISTEN_HTTP_PORT, restart the stack (Plane's bundled Caddy is host-agnostic on
+# its listener port, so the vanity URL and the loopback both hit the backend),
+# then re-point pbrain's base_url at the loopback form (setup MERGES, so an
+# api_key/workspace/project already on file is preserved). Shared by `up` (the
+# default flow) and the `vhost` subcommand (escape hatch / explicit re-apply).
+# Args: <host> <port> <envfile> <no_restart yes|no>. Emits INIT_PLANE_VHOST.
+_apply_vhost() {
+  local hostname="$1" port="$2" envfile="$3" no_restart="${4:-no}"
+  local plane_dir backup app_domain_val default_url
+  plane_dir="$(dirname "$envfile")"
+  backup="$envfile.pbrain-bak"
+  app_domain_val="$hostname:$port"
+  [[ -f "$backup" ]] || cp "$envfile" "$backup"
+  python3 - "$envfile" "$app_domain_val" "$port" <<'PYEOF'
+import re, sys, pathlib
+envfile, app_domain, port = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(envfile); t = p.read_text()
+def upsert(t, k, v):
+    pat = re.compile(rf"(?m)^{re.escape(k)}=.*$")
+    return pat.sub(f"{k}={v}", t) if pat.search(t) else t.rstrip() + f"\n{k}={v}\n"
+t = upsert(t, "APP_DOMAIN", app_domain)
+t = upsert(t, "LISTEN_HTTP_PORT", port)
+p.write_text(t)
+PYEOF
+  echo "INIT_PLANE_VHOST"
+  echo "edited $envfile:"
+  echo "  APP_DOMAIN=$app_domain_val"
+  echo "  LISTEN_HTTP_PORT=$port"
+  echo "  (WEB_URL + CORS_ALLOWED_ORIGINS rebuild from APP_DOMAIN — Plane's own substitution)"
+  if [[ "$no_restart" == yes ]]; then
+    echo "skipped restart (--no-restart) — apply later with: cd \"$plane_dir\" && docker compose --env-file plane.env up -d"
+  else
+    ( cd "$plane_dir" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
+    echo "restarted Plane stack on host port $port"
+  fi
+  default_url="http://127.0.0.1:$port"
+  if [[ -f "$PLANE_ENGINE" ]] && grep -q '"api_key"' "$PLANE_CONFIG" 2>/dev/null; then
+    python3 "$PLANE_ENGINE" setup --base-url "$default_url" >/dev/null
+    echo "pbrain base_url -> $default_url"
+  else
+    echo "INIT_PLANE_WARN pbrain not wired yet — once it is, set: /init-plane config --base-url $default_url --api-key <pat> --workspace <slug> --project <id>"
+  fi
+  echo "next steps:"
+  echo "  1) bookmark Plane in the browser: http://$app_domain_val"
+  echo "  2) verify round-trip: /project-manager test"
+  echo "  3) revert any time: /init-plane vhost --remove"
+}
+
 SUB="${1:-probe}"
 [[ $# -gt 0 ]] && shift || true
 
@@ -248,6 +303,22 @@ case "$SUB" in
     ;;
 
   up)
+    # PB-113: by default, after the installer brings Plane up, land it on the
+    # STABLE vhost (http://plane.localhost:1800) — no separate `vhost` step.
+    # Escape hatches: --no-vhost (or --port 80) stays on bare http://localhost:80.
+    UP_HOST="plane.localhost"; UP_PORT="1800"; UP_NO_VHOST=no; UP_NO_RESTART=no; UP_HOME_OVERRIDE=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --host) UP_HOST="${2:?--host needs a value}"; shift 2;;
+        --port) UP_PORT="${2:?--port needs a value}"; shift 2;;
+        --no-vhost) UP_NO_VHOST=yes; shift;;
+        --no-restart) UP_NO_RESTART=yes; shift;;
+        --plane-home) UP_HOME_OVERRIDE="${2:?--plane-home needs a value}"; shift 2;;
+        *) echo "pbrain: unknown flag for /init-plane up: $1" >&2; exit 1;;
+      esac
+    done
+    # --port 80 means "stay on bare :80" (that IS the no-vhost case).
+    [[ "$UP_PORT" == "80" ]] && UP_NO_VHOST=yes
     if [[ ! -f "$SETUP_SH" ]]; then
       echo "INIT_PLANE_NEED_FETCH setup.sh not downloaded yet — run /init-plane fetch first." ; exit 0
     fi
@@ -257,6 +328,18 @@ case "$SUB" in
     echo "INIT_PLANE_UP launching Plane's installer (interactive menu: choose Install the first time, then Start)."
     cd "$PLANE_HOME"
     bash "$SETUP_SH"
+    if [[ "$UP_NO_VHOST" == yes ]]; then
+      echo "INIT_PLANE_NO_VHOST staying on bare http://localhost (--no-vhost / --port 80)."
+      echo "  move to a stable vhost later with: /init-plane vhost"
+    else
+      envf="$(_vhost_envfile "$UP_HOME_OVERRIDE" 2>/dev/null || true)"
+      if [[ -z "$envf" || ! -f "$envf" ]]; then
+        echo "INIT_PLANE_VHOST_NO_ENV could not find plane.env to apply the vhost; Plane is up on bare http://localhost."
+        echo "  apply the stable vhost once plane.env exists with: /init-plane vhost"
+      else
+        _apply_vhost "$UP_HOST" "$UP_PORT" "$envf" "$UP_NO_RESTART"
+      fi
+    fi
     ;;
 
   config)
@@ -339,49 +422,8 @@ PYEOF
       exit 0
     fi
 
-    # Apply: back up once, upsert the two knobs, restart, re-point pbrain.
-    if [[ ! -f "$BACKUP" ]]; then
-      cp "$ENVFILE" "$BACKUP"
-    fi
-    APP_DOMAIN_VAL="$HOSTNAME:$PORT"
-    python3 - "$ENVFILE" "$APP_DOMAIN_VAL" "$PORT" <<'PYEOF'
-import re, sys, pathlib
-envfile, app_domain, port = sys.argv[1], sys.argv[2], sys.argv[3]
-p = pathlib.Path(envfile); t = p.read_text()
-def upsert(t, k, v):
-    pat = re.compile(rf"(?m)^{re.escape(k)}=.*$")
-    return pat.sub(f"{k}={v}", t) if pat.search(t) else t.rstrip() + f"\n{k}={v}\n"
-t = upsert(t, "APP_DOMAIN", app_domain)
-t = upsert(t, "LISTEN_HTTP_PORT", port)
-p.write_text(t)
-PYEOF
-    echo "INIT_PLANE_VHOST"
-    echo "edited $ENVFILE:"
-    echo "  APP_DOMAIN=$APP_DOMAIN_VAL"
-    echo "  LISTEN_HTTP_PORT=$PORT"
-    echo "  (WEB_URL + CORS_ALLOWED_ORIGINS rebuild from APP_DOMAIN — Plane's own substitution)"
-    if [[ "$NO_RESTART" == yes ]]; then
-      echo "skipped restart (--no-restart) — apply with: cd \"$PLANE_DIR\" && docker compose --env-file plane.env up -d"
-    else
-      ( cd "$PLANE_DIR" && docker compose --env-file plane.env up -d >/dev/null 2>&1 )
-      echo "restarted Plane stack on host port $PORT"
-    fi
-    BROWSER_URL="http://$APP_DOMAIN_VAL"
-    PBRAIN_URL="http://127.0.0.1:$PORT"
-    if [[ -f "$PLANE_ENGINE" ]] && _has_creds; then
-      if python3 "$PLANE_ENGINE" setup --base-url "$PBRAIN_URL" >/dev/null; then
-        echo "pbrain base_url -> $PBRAIN_URL"
-      else
-        echo "INIT_PLANE_WARN could not update pbrain base_url; run: /init-plane config --base-url $PBRAIN_URL"
-      fi
-    else
-      echo "Plane isn't wired to pbrain yet — once it is, set the URL with:"
-      echo "  /init-plane config --base-url $PBRAIN_URL --api-key <pat> --workspace <slug> --project <id>"
-    fi
-    echo "next steps:"
-    echo "  1) bookmark Plane in your browser:  $BROWSER_URL"
-    echo "  2) verify the round-trip:           /project-manager test"
-    echo "  3) revert any time:                 /init-plane vhost --remove"
+    # Apply via the shared helper (same path `up` uses by default — PB-113).
+    _apply_vhost "$HOSTNAME" "$PORT" "$ENVFILE" "$NO_RESTART"
     ;;
 
   github)
