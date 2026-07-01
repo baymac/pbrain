@@ -28,9 +28,8 @@ profile current_focus + this week's/month's goals are there for re-tying rows.
    header — never check the files yourself (that mis-resolves the path/date and fires
    a false nudge — PB-66/PB-73). These are /plan-my-day's OWN end-of-pass nudges,
    separate from /end-of-day.
-   a. Diet — read `diet_today_exists`. The diet nudge fires at the END of the
-      /plan-my-day pass (moved off the start-of-day preflight — PB-167), never at
-      the start. PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to
+   a. Diet — read `diet_today_exists`. Nudge at the END of the pass, never at the
+      start. PREFERENCE OVERRIDE: if the injected USER PREFERENCES block says to
       skip the diet nudge, skip this.
       - If `no`: one short line — "Today's /diet-journal isn't logged yet — want to
         capture your meals? Either way the plan's set." Don't block; don't ask
