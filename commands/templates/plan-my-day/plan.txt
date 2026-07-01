@@ -12,11 +12,12 @@ Step 0 — Preflight checks (do these silently, then surface in one short messag
   set up so I'll nudge". A skipped nudge produces NO output at all; a fired nudge
   produces only the one user-facing line described below. State only the nudge
   itself, never the reasoning that led to it.
-  - FITNESS / DIET NUDGES — ALREADY SURFACED (PB-58): the fitness-journal and
-    diet-journal nudges were handled in the cheap PREFLIGHT pass before this
-    context loaded (you only reach this SESSION block after the user chose to
-    continue). Do NOT re-nudge about either here — don't repeat "today's
-    /fitness-journal isn't done" or "/diet-journal isn't logged". Just plan.
+  - FITNESS NUDGE — ALREADY SURFACED (PB-58): the fitness-journal nudge was
+    handled in the cheap PREFLIGHT pass before this context loaded (you only
+    reach this SESSION block after the user chose to continue). Do NOT re-nudge
+    it here — don't repeat "today's /fitness-journal isn't done". And do NOT
+    nudge the diet journal at all — diet is /end-of-day's concern, never
+    /plan-my-day's. Just plan.
       - If TODAY'S FITNESS JOURNAL exists: say nothing about it; still read its
         `sleep_*` fields (Step 1a) and treat its scheduled session as today's.
         Its `focus:` field is surfaced as `fitness_today_activity` above — when
@@ -616,7 +617,7 @@ Step 5 — Reminders (only if relevant — don't force it):
   Resolve the due time relative to today ($TODAY) + the current time. Set it
   only on a yes. At most one short offer covering all of them.
 
-Step 7 — Diet nudge: ALREADY SURFACED (PB-58). The diet-journal nudge fired in
-the cheap PREFLIGHT pass before this context loaded, so do NOT repeat it here.
-(`diet_today_exists` is still provided above for any planning use, e.g. meal-slot
-context — just don't re-offer "/diet-journal isn't logged".)
+Step 7 — Diet nudge: NONE. /plan-my-day does NOT nudge for the diet journal —
+diet is an end-of-day concern that /end-of-day owns (reconcile + nudge). Do NOT
+offer "/diet-journal isn't logged" here or anywhere in this pass. (`diet_today_exists`
+is still provided above for planning use only, e.g. meal-slot context.)

@@ -458,12 +458,13 @@ EOF
   [[ "$output" == *"PLAN_MY_DAY_UPDATE"* && "$output" == *"TODAY'S PLAN (current)"* && "$output" == *"plan content"* ]]
 }
 
-@test "UPDATE path emits diet_today_exists so the end-of-session diet nudge can fire (PB-73)" {
+@test "UPDATE path emits diet_today_exists as planning context (no diet nudge; PB-73)" {
   write_goals_profile
   write_libraries
   mkdir -p "$PLAN"
-  # A bare re-run on an already-laid day takes the UPDATE path — the diet nudge
-  # must still reach the model there (it only lived on the plan path before PB-73).
+  # A bare re-run on an already-laid day takes the UPDATE path — the diet flag
+  # must still reach the model there as meal-slot planning context (it is no
+  # longer a nudge: /plan-my-day never nudges for the diet journal).
   printf '## Today at a glance\n\nplan content\n' > "$PLAN/$TODAY.md"
   run PMD
   [ "$status" -eq 0 ]
@@ -932,7 +933,7 @@ write_today_journals() {
   printf -- '# gratitude %s\n' "$TODAY" > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
 }
 
-@test "PB-58: bare plan with no fitness/diet emits PREFLIGHT and stops before heavy context" {
+@test "PB-58: bare plan with fitness/gratitude missing emits PREFLIGHT and stops before heavy context" {
   write_plans_profile
   write_libraries
   run PMD plan
@@ -971,6 +972,22 @@ write_today_journals() {
   grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
   ! grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
   [[ "$output" == *"gratitude_today_exists: no"* ]]
+}
+
+@test "diet missing alone does NOT trigger the preflight gate (diet is /end-of-day's concern, not /plan-my-day's)" {
+  write_plans_profile
+  write_libraries
+  # Log fitness + gratitude so ONLY the diet journal is outstanding.
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking" "$PBRAIN_VAULT/life/gratitude-journal"
+  printf -- '---\ntype: fitness\ndate: %s\nstatus: planned\n---\n# s\n' "$TODAY" \
+    > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md"
+  printf -- '# gratitude %s\n' "$TODAY" > "$PBRAIN_VAULT/life/gratitude-journal/$TODAY.md"
+  run PMD plan
+  [ "$status" -eq 0 ]
+  # No gate — diet-only-missing falls straight through to the heavy SESSION.
+  ! grep -qE '^PLAN_MY_DAY_PREFLIGHT' <<<"$output"
+  grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
+  [[ "$output" == *"=== PLANS PROFILE"* ]]
 }
 
 @test "PB-58: auto-skip — all journals logged goes straight to SESSION, no preflight" {

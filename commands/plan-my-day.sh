@@ -110,7 +110,7 @@ esac
 # PB-58: staged context loading. The PLAN path is the expensive one (~66KB /
 # ~27k tokens of profile + 3-day digest + carry-forward + calendar + habits
 # rollup/tracker + sleep + diet). On a bare/`plan` invocation we first do a
-# CHEAP preflight pass that surfaces only the fitness/diet nudges + a continue
+# CHEAP preflight pass that surfaces only the fitness/gratitude nudges + a continue
 # gate, and `exit` BEFORE any heavy work runs. The continue command re-invokes
 # the script with `--continue`, which skips the preflight and emits the full
 # PLAN_MY_DAY_SESSION. Order-independent so `plan --continue` and a bare
@@ -453,10 +453,11 @@ if [[ "${1:-}" == "focus" || "${1:-}" == "library" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Existence-only flag for the end-of-session diet nudge — we only need yes/no,
-# not the file contents. Computed here (before the UPDATE branch) so BOTH the
-# UPDATE and PLAN paths can emit it: the nudge must fire on a bare end-of-session
-# re-run (which takes the UPDATE path), not only on the fresh-plan path (PB-73).
+# Existence-only diet flag — provided to the plan/update context for meal-slot
+# planning use ONLY, not a nudge: /plan-my-day never nudges for the diet journal
+# (diet is /end-of-day's concern). We only need yes/no, not the file contents.
+# Computed here (before the UPDATE branch) so BOTH the UPDATE and PLAN paths can
+# emit it in their header context.
 DIET_TODAY_EXISTS="$([[ -f "$DIET_DIR/$TODAY.md" ]] && echo yes || echo no)"
 
 # Existence-only flag for the morning-sequence gratitude nudge (PB-66). The nudge
@@ -557,7 +558,7 @@ PYEOF
 # to nudge" clause — by falling straight through to the heavy path.
 if [[ "$PLAN_CONTINUE" != yes ]]; then
   PMD_FITNESS_STATE="$([[ "$FITNESS_TODAY" == MISSING ]] && echo MISSING || echo present)"
-  if [[ "$PMD_FITNESS_STATE" == MISSING || "$DIET_TODAY_EXISTS" == no || "$GRATITUDE_TODAY_EXISTS" == no ]]; then
+  if [[ "$PMD_FITNESS_STATE" == MISSING || "$GRATITUDE_TODAY_EXISTS" == no ]]; then
     # Something to nudge → cheap preflight, then stop. The model surfaces the
     # nudges and re-runs the continue command when the user says go. The
     # continue command is composed from $_SCRIPT_DIR (the template builds the
