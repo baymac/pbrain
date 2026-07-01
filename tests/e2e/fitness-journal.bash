@@ -188,10 +188,10 @@ e2e_run_fitness() {
     grep -q "FITNESS_JOURNAL_SESSION" <<<"$block"
 
   # --- assertions on the EMITTED sleep contract (given-or-blank) -----------
-  e2e_assert "Step 1 makes sleep mandatory to ask" \
-    grep -q "this is mandatory to surface, never silently filled" <<<"$block"
-  e2e_assert "Step 4 is given-or-blank (write only what's given this session)" \
-    grep -q "SLEEP GIVEN THIS SESSION" <<<"$block"
+  e2e_assert "Step 1 makes sleep mandatory to surface" \
+    grep -q "ALWAYS surface" <<<"$block"
+  e2e_assert "Step 4 is given-or-confirmed-or-blank (write only what's given this session)" \
+    grep -q "SLEEP GIVEN OR CONFIRMED THIS SESSION" <<<"$block"
   e2e_assert "contract forbids assumed sleep (false data)" \
     grep -q "false data" <<<"$block"
   e2e_assert "no carry-forward mechanism in the instructions" \

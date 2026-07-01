@@ -355,11 +355,13 @@ EOF
   write_gym_activity_profile "$DOW"
   run FIT
   # Step 1 must carve sleep out of the skip: the check-in is skippable, the one
-  # sleep line is not, and it is asked once and never force-filled or invented.
+  # sleep line is not, and it is surfaced once and never force-filled or invented.
+  # (PB-165 turned the cold ask into surface/confirm — the never-fabricate
+  # invariant is unchanged; the wording now reads "did not give or confirm".)
   [[ "$output" == *"sleep is the one mandatory field"* ]]
-  [[ "$output" == *"ALWAYS ask"* ]]
+  [[ "$output" == *"ALWAYS surface"* ]]
   [[ "$output" == *"still confirm the one sleep line"* ]]
-  [[ "$output" == *"a value the user did not give is false data"* ]]
+  [[ "$output" == *"did not give or confirm is"* ]]
 }
 
 @test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {
@@ -522,4 +524,54 @@ EOF
   run FIT
   [[ "$output" == *"FITNESS_PROFILE_DRAFT_OPEN"* ]]
   [[ "$output" != *"FITNESS_JOURNAL_SETUP_PROFILE"* ]]
+}
+
+# ── journal sleep prefill (PB-165) ──────────────────────────────────────────
+
+@test "journal_sleep_hint carries today's journal sleep line when present" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$PBRAIN_VAULT/life/daily-tracking"
+  cat > "$PBRAIN_VAULT/life/daily-tracking/$TODAY.md" <<EOF
+---
+type: journal
+date: $TODAY
+---
+# Focus
+- Today: gym, clean diet. slept at 4:30, woke up at 12pm.
+EOF
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  [[ "$output" == *"journal_sleep_hint:"* ]]
+  [[ "$output" == *"slept at 4:30, woke up at 12pm"* ]]
+}
+
+@test "journal_sleep_hint emits the sentinel when no journal exists" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  # no life/daily-tracking file at all
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"journal_sleep_hint: (none found in today journal)"* ]]
+}
+
+@test "journal_sleep_hint ignores journal prose with no sleep mention" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$PBRAIN_VAULT/life/daily-tracking"
+  cat > "$PBRAIN_VAULT/life/daily-tracking/$TODAY.md" <<EOF
+---
+type: journal
+date: $TODAY
+---
+# Focus
+- Ship the PB-165 fix and get to the gym.
+EOF
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"journal_sleep_hint: (none found in today journal)"* ]]
 }
