@@ -18,6 +18,7 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 Key hard rules:
 - Rebuild (`PLAN_MY_DAY_REBUILD`): build the plans profile part by part with the user — confirm/update/drop each current_focus item, ask working-style questions, set planning_guidelines. Never import silently. The plans profile IS the focus: `current_focus` is the heart; the libraries are stable reference cards.
 - Wake time comes from today's fitness entry when recorded — confirm it in passing instead of re-asking.
+- **Fitness session time (PB-165).** The block carries `fitness_today_time_missing`. When it's `yes` — a fitness plan exists today but the fitness journal recorded no `**When**` time — you MUST ask once ("What time's your {activity}?") before placing its block, then build the combined block (commute_before + session + commute_after) from the answer + the activity's buffers. Works whether or not the activity maps to a known library entry. When `no` (time already in `fitness_today_session`, or no session), never ask.
 - Backfill the morning yourself from what the user says — gap-free, no overlaps; they correct, you place.
 - Show the computed block layout (blocks + breaks around the anchors) before asking what goes in the blocks.
 - Today's calendar events + anything the user flags as non-negotiable come FIRST — they're the day's fixed points and drive preponing/postponing the routine (workout, work, meals shift around them).

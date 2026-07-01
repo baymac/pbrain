@@ -1002,3 +1002,79 @@ write_today_journals() {
   [ "$status" -eq 0 ]
   grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
 }
+
+# --- PB-165 linkage: plan-my-day asks for the fitness time when the entry has none
+@test "fitness entry WITH a **When** time → fitness_today_time_missing is no" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+---
+# Gym — Day A
+**When** 14:30
+
+## Planned
+Bench 4x8
+EOF
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: no"* ]]
+  [[ "$output" == *"fitness_today_session: gym"*"14:30"* ]]
+}
+
+@test "fitness entry WITHOUT a time → fitness_today_time_missing is yes" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+---
+# Gym — Day A
+
+## Planned
+Bench 4x8
+EOF
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: yes"* ]]
+}
+
+@test "no fitness entry today → fitness_today_time_missing is no (nothing to anchor)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: no"* ]]
+}
+
+@test "session template carries the FITNESS TIME ask step" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"FITNESS TIME"* ]]
+}
+
+# --- PBRAIN_TODAY_OVERRIDE date seam -----------------------------------------
+@test "PBRAIN_TODAY_OVERRIDE pins the date and derives the weekday from it" {
+  write_goals_profile
+  write_libraries
+  PBRAIN_TODAY_OVERRIDE=2026-07-01 run PMD plan --continue
+  [[ "$output" == *"date: 2026-07-01"* ]]
+  # 2026-07-01 is a Wednesday — derived from the override, not the wall clock.
+  [[ "$output" == *"Wednesday"* ]] || [[ "$output" == *"Wed"* ]]
+}
+
+@test "a malformed PBRAIN_TODAY_OVERRIDE falls back to the real date" {
+  write_goals_profile
+  write_libraries
+  PBRAIN_TODAY_OVERRIDE=not-a-date run PMD plan --continue
+  [[ "$output" == *"date: $TODAY"* ]]
+}

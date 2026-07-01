@@ -360,6 +360,6 @@ JSON
 
   # Tracking channel = the Plane write-journal.
   e2e_emit_result "$pass" "plane-journal" "$E2E_JOURNAL" ""
-  rm -rf "$E2E_WORK"
+  e2e_safe_rmrf "$E2E_WORK"
   [[ "$pass" == "true" ]]
 }

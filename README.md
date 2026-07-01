@@ -200,6 +200,7 @@ Each command's default path is overrideable via env var. Full reference:
 | `PBRAIN_PREFS_DIR` | all commands — preferences ROOT (`_global/prefs.md` + per-command `<cmd>/prefs.md`) | `$VAULT/.pbrain` |
 | `PBRAIN_FEEDBACK_DIR` | all commands — quality-fix log ROOT (write-only `<cmd>/feedback.md`, never injected) | `$VAULT/.pbrain` |
 | `PBRAIN_MIGRATIONS` | all commands — set `0` to disable the vault migration runner | `1` |
+| `PBRAIN_TODAY_OVERRIDE` | `/journal`, `/fitness-journal`, `/plan-my-day` — pin "today" to a `YYYY-MM-DD` (weekday/human-date derived from it; wall-clock time unchanged). For tests + running a day whose data straddles midnight. Malformed value is ignored. | unset (system date) |
 | `PBRAIN_DB_FILE` | `/habits`, `/remind-blocking` (shared SQLite store: habit events + blocking-reminder queue; `/remind` does NOT use the DB) | `~/.config/pbrain/pbrain.db` |
 | `PBRAIN_REMINDERS_LIST` | `/remind` (which Apple Reminders list to create/read in) | unset → system default list |
 | `PBRAIN_REMINDER_MARKER` | `/remind` (hidden notes marker tagging pbrain reminders) | `⟦pbrain-reminder⟧` |

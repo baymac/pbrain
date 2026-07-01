@@ -30,7 +30,16 @@ pbrain_emit_prefs "journal" || true
 DAILY_DIR="${PBRAIN_JOURNAL_DIR:-$VAULT_DIR/life/daily-tracking}"
 mkdir -p "$DAILY_DIR"
 
-TODAY="$(date +%Y-%m-%d)"
+# TODAY defaults to the system date, but PBRAIN_TODAY_OVERRIDE (validated
+# YYYY-MM-DD) pins it — used by the live e2e chain to run a day whose data
+# straddles midnight (e.g. finishing a July-1 test after midnight on July 2).
+# A malformed override is ignored (falls back to the real date) rather than
+# silently corrupting the output path.
+if [[ "${PBRAIN_TODAY_OVERRIDE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  TODAY="$PBRAIN_TODAY_OVERRIDE"
+else
+  TODAY="$(date +%Y-%m-%d)"
+fi
 TIME="$(date +%H:%M)"
 OUT_FILE="$DAILY_DIR/$TODAY.md"
 

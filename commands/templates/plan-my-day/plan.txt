@@ -136,6 +136,19 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
       flag < 7h). Record ONLY what they actually give — never assume or infer a
       typical wake/bed time, and never carry over a guessed value; if they don't
       answer, leave it unrecorded rather than fill in a plausible time.
+  1a.5 — FITNESS TIME (only when needed). Read `fitness_today_time_missing` above.
+    • If `yes`: today has a fitness session (see `fitness_today_session`) but its
+      time wasn't recorded in the fitness journal, so you CANNOT place its block
+      yet. Ask ONE natural question — "What time's your {activity} today?" (say the
+      real activity name, never the flag). Take the time they give and build the
+      day's combined activity block around it: commute_before + the session's own
+      duration + commute_after, using the activity's buffers (from
+      `activity_buffers` / the profile) — exactly as when the time came from the
+      journal. Do NOT invent a time; if they genuinely don't know, place it as a
+      soft/unanchored block and say so. This works whether or not the activity
+      maps to a known library entry — any dated fitness plan counts.
+    • If `no`: skip this — either there's no session today, or its time is already
+      set (in `fitness_today_session`); never ask for a time you already have.
   1b — BACKFILL. Ask: "What have you done since waking until now?" Take
     whatever they say (work, meals, errands, scrolling — all of it) and slot
     it into time ranges YOURSELF, marked ✓ — gap-free, no overlaps, from wake

@@ -236,6 +236,6 @@ e2e_run_fitness_clock() {
   local pass="true"; [[ ${#E2E_FAILURES[@]} -eq 0 ]] || pass="false"
   local artifact; artifact="$E2E_OUT_FILE"$'\n---\n'"$(cat "$E2E_OUT_FILE")"
   e2e_emit_result "$pass" "vault-file" "" "$artifact"
-  rm -rf "$E2E_WORK"
+  e2e_safe_rmrf "$E2E_WORK"
   [[ "$pass" == "true" ]]
 }

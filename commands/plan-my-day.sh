@@ -77,12 +77,28 @@ STORE="$(pbrain_profile_store "$PLAN_DIR")"
 FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
 DIET_STORE="$(pbrain_profile_store "$DIET_DIR")"
 
-TODAY="$(date +%Y-%m-%d)"
-DOW="$(date +%A)"
-DOW3="$(date +%a)"
+# TODAY defaults to the system date; PBRAIN_TODAY_OVERRIDE (validated YYYY-MM-DD)
+# pins it — used by the live e2e chain to run a day whose data straddles midnight.
+# When overridden, all DATE-derived fields (weekday, ISO week, month) are computed
+# FROM that date so they stay consistent; NOW_TIME stays the real wall-clock time.
+# A malformed override falls back to the real date.
+if [[ "${PBRAIN_TODAY_OVERRIDE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  TODAY="$PBRAIN_TODAY_OVERRIDE"
+  read -r DOW DOW3 ISO_WEEK MONTH_YEAR <<<"$(python3 - "$TODAY" <<'PYEOF'
+import datetime, sys
+t = datetime.date.fromisoformat(sys.argv[1])
+y, w, _ = t.isocalendar()
+print(t.strftime('%A'), t.strftime('%a'), f'{y}-W{w:02d}', t.strftime('%Y-%m'))
+PYEOF
+)"
+else
+  TODAY="$(date +%Y-%m-%d)"
+  DOW="$(date +%A)"
+  DOW3="$(date +%a)"
+  ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
+  MONTH_YEAR="$(date +%Y-%m)"
+fi
 NOW_TIME="$(date +%H:%M)"
-ISO_WEEK="$(python3 -c "import datetime; t=datetime.date.today(); y,w,_=t.isocalendar(); print(f'{y}-W{w:02d}')")"
-MONTH_YEAR="$(date +%Y-%m)"
 OUT_FILE="$PLAN_DIR/$TODAY.md"
 
 mkdir -p "$PLAN_DIR"
@@ -545,6 +561,21 @@ print(" · ".join(parts))
 PYEOF
 )"
 [[ -n "${FITNESS_TODAY_SUMMARY//[[:space:]]/}" ]] || FITNESS_TODAY_SUMMARY="(no dated fitness session today)"
+
+# PB-165 linkage: a fitness session exists today but carries NO time (fitness-journal
+# didn't record a "**When** HH:MM" — e.g. the user never stated one). The combined
+# activity block can't be anchored without a start time, so flag it — the emitted
+# instructions turn this into an explicit ASK ("what time is your {activity}?"),
+# after which the planner builds commute_before + session + commute_after. The
+# activity need NOT map to a known library entry — any dated fitness plan counts.
+FITNESS_TODAY_TIME_MISSING=no
+if [[ "$FITNESS_TODAY" != MISSING ]]; then
+  case "$FITNESS_TODAY_SUMMARY" in
+    *" at "[0-9]*) : ;;                       # a "· at HH:MM" was parsed → have a time
+    "(no dated fitness session today)") : ;;  # nothing to anchor anyway
+    *) FITNESS_TODAY_TIME_MISSING=yes ;;
+  esac
+fi
 
 # PB-58: PREFLIGHT (fast) pass. These flags are CHEAP (file reads + existence
 # tests, all already done above) — everything below this block is the heavy
@@ -1085,6 +1116,7 @@ gratitude_today_exists: $GRATITUDE_TODAY_EXISTS
 fitness_today_schedule: $TODAY_FITNESS_SCHEDULE
 fitness_today_activity: ${TODAY_FITNESS_ACTIVITY:-(no fitness entry / focus not set)}
 fitness_today_session: $FITNESS_TODAY_SUMMARY   # activity · REAL session duration · time — use this duration for the combined activity block, NOT session_length_min
+fitness_today_time_missing: $FITNESS_TODAY_TIME_MISSING   # yes = a fitness plan exists today but has NO time — you MUST ask (see below) before anchoring its block
 typical_day_present: $TYPICAL_DAY_PRESENT
 
 === PLANS PROFILE (the planning lens — current_focus, working_style, typical_day, daily_anchors, variation_rules, anti_patterns) ===

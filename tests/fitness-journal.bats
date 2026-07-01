@@ -575,3 +575,72 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"journal_sleep_hint: (none found in today journal)"* ]]
 }
+
+# --- PB-165 linkage: fitness-journal persists a stated session time ----------
+# The .sh is a dispatcher — it emits the WRITE INSTRUCTIONS, so we assert that
+# the emitted block tells the agent to record "**When** HH:MM" in the entry (both
+# the standard and generated-gym layouts), and that the field-emission is present.
+@test "session block instructs writing a **When** HH:MM line (both layouts)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym day A at 2:30pm"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  # The When-line instruction appears (once per layout = standard + generated gym).
+  [[ "$output" == *'**When** HH:MM'* ]]
+}
+
+@test "the **When** instruction carries the plan-my-day anchoring rationale" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym day A at 2:30pm"
+  [ "$status" -eq 0 ]
+  # Names plan-my-day as the reader (why the line matters) + the never-invent rule.
+  [[ "$output" == *"plan-my-day"* ]]
+  [[ "$output" == *"OMIT"*"when no time"* ]] || [[ "$output" == *"never invent"* ]]
+}
+
+@test "existing/update entry preserves and can set the **When** line" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$TRACKING"
+  cat > "$TRACKING/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+sleep_bed:
+sleep_wake:
+sleep_quality:
+sleep_hours:
+tags: []
+---
+
+# Gym — Day A
+**When** 14:30
+
+## Planned
+Bench 4x8
+EOF
+  run FIT "logged bench 8,8,6"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_EXISTING"* ]]
+  # UPDATE instructions tell the agent to KEEP an existing **When** line.
+  [[ "$output" == *'**When**'* ]]
+}
+
+@test "PBRAIN_TODAY_OVERRIDE pins the date and derives the weekday (2026-07-01 = Wed)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "Wed"
+  PBRAIN_TODAY_OVERRIDE=2026-07-01 run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"date: 2026-07-01"* ]]
+  [[ "$output" == *"day_of_week: Wed"* ]]
+  [[ "$output" == *"Wednesday, July 1, 2026"* ]]
+}

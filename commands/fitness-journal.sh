@@ -59,12 +59,23 @@ TRACKING_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 STORE="$(pbrain_profile_store "$TRACKING_DIR")"
 ACT_STORE="$STORE/activities"
 
-TODAY="$(date +%Y-%m-%d)"
-DOW="$(date +%a)"
-# Authoritative, fully-spelled local date — the LLM must copy this verbatim and
-# never compute the weekday itself (it gets it wrong). %e is space-padded day
-# (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
-TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+# TODAY defaults to the system date; PBRAIN_TODAY_OVERRIDE (validated YYYY-MM-DD)
+# pins it — used by the live e2e chain to run a day whose data straddles midnight.
+# When overridden, DOW + TODAY_HUMAN are derived FROM that date (not the clock) so
+# the weekday/human-date stay consistent; a malformed override falls back to today.
+if [[ "${PBRAIN_TODAY_OVERRIDE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  TODAY="$PBRAIN_TODAY_OVERRIDE"
+  DOW="$(date -j -f %Y-%m-%d "$TODAY" +%a 2>/dev/null || date -d "$TODAY" +%a 2>/dev/null || echo '')"
+  TODAY_HUMAN="$(date -j -f %Y-%m-%d "$TODAY" '+%A, %B %e, %Y' 2>/dev/null | tr -s ' ' \
+                 || date -d "$TODAY" '+%A, %B %e, %Y' 2>/dev/null | tr -s ' ' || echo "$TODAY")"
+else
+  TODAY="$(date +%Y-%m-%d)"
+  DOW="$(date +%a)"
+  # Authoritative, fully-spelled local date — the LLM must copy this verbatim and
+  # never compute the weekday itself (it gets it wrong). %e is space-padded day
+  # (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
+  TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+fi
 # Authoritative local clock (24h HH:MM), same machine-time provenance as the
 # date fields above. This is the disambiguator between a PLANNED session (stated
 # time is in the future) and a COMPLETED one (stated time is at/past now) — the
@@ -917,6 +928,9 @@ Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep 
   now. Do NOT carry it forward from a prior entry, do NOT copy the profile's typical
   window, do NOT invent a value — a sleep reading the user did not give is false
   data, and a blank field is the honest state.
+  If the entry has a \`**When** HH:MM\` line, KEEP it. If the user states or corrects
+  a session time now, write/update it as \`**When** HH:MM\` (24h) under the heading —
+  plan-my-day anchors the combined activity block from it. Never invent a time.
   Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
   session is done, \`partial\` if partly done, \`planned\` while still plan-only.
 
@@ -1173,6 +1187,12 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
 
   # {Activity} — $TODAY
 
+  {WHEN LINE — if the user stated a session time (e.g. "gym at 2:30pm",
+   "swim at 7"), write it here on its own line as "**When** HH:MM" (24h), e.g.
+   "**When** 14:30". plan-my-day reads this to anchor the day's combined activity
+   block (commute + session + commute). OMIT the line entirely when no time was
+   given — never invent one (same never-fabricate rule as sleep).}
+
   {KPI summary line of the values that exist (LOGGED if present, else PLANNED),
    e.g. "**Distance** 2.0 km · **Duration** 47 min". Omit the line if nothing
    numeric is set yet.}
@@ -1237,6 +1257,9 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
 
   # {gym: Day {letter} — {Focus}   |   non-gym: {Activity} — $TODAY}
   {gym only: **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min}
+  {WHEN LINE — if the user stated a session time, write it here as "**When** HH:MM"
+   (24h), e.g. "**When** 14:30". plan-my-day anchors the day's combined activity
+   block from this. OMIT when no time was given — never invent one.}
 
   > {one coaching note tied to today's state — RPE / fatigue / mindset cue; mention
      the gap band if it is not normal. 1-2 sentences.}
