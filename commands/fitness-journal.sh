@@ -1257,6 +1257,7 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
 
   # {gym: Day {letter} — {Focus}   |   non-gym: {Activity} — $TODAY}
   {gym only: **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min}
+  {WHEN LINE (gym) — if the user stated a session time (even a planned-ahead one), you MUST write it here on its own line as "**When** HH:MM" (24h), e.g. "**When** 14:30". REQUIRED whenever a time is known — plan-my-day anchors the combined activity block from it, and omitting it forces plan-my-day to re-ask. OMIT only when NO time was given; never invent one.}
   {WHEN LINE — if the user stated a session time, write it here as "**When** HH:MM"
    (24h), e.g. "**When** 14:30". plan-my-day anchors the day's combined activity
    block from this. OMIT when no time was given — never invent one.}

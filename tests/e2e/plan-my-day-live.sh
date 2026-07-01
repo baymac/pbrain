@@ -383,6 +383,14 @@ Rules of engagement for this run:
   </PLAN>
 - Until then, reply with ONLY your next single in-character check-in line."
 
+  # CHAIN MODE (PB-165): answer from the REAL regenerated day's facts, not the
+  # fixed scenario. The persona speaks to today's actual fitness/meals/sleep, and
+  # if the fitness entry had no time, it MAY be asked and should give the real one.
+  if [[ "${CHAIN:-0}" == 1 ]]; then
+    persona_answers="Today's real facts (answer the check-in from these, in your own words; give the fitness time if asked):
+$CHAIN_FACTS"
+  fi
+
   persona_sys="You are the human running /plan-my-day this morning. Answer the
 skill's check-in tersely and in character, using THESE answers in order (one per
 question the skill asks); do not volunteer anything else, and never invent a
