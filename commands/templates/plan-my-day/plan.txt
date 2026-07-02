@@ -250,13 +250,19 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            match + commute", 23:30–00:00 settle (shower+prep), 00:00–00:30 Dinner,
            then wind-down → sleep. NO prep row before 20:30; dinner is NOT dropped.)
          - Late wake-up (today's wake from 1a is later than the template's wake
-           slot): shift the timeline later, ENFORCING at least
-           variation_rules.min_wake_to_work_gap_min between wake and the first
-           work block (the slow-start/wake gap — read the profile value, never
-           assume 30; it is the wake gap on EVERY day, not only late-wake ones).
+           slot): shift the timeline later. On a wake AFTER 11:00, COMPRESS the
+           morning to a 1-HOUR run before the first work block = 30 min morning
+           routine (HALVE the normal wake-to-work gap, 60 → 30) + 30 min
+           breakfast (KEPT at 30). Breakfast is NOT dropped and the routine is
+           NOT skipped — the routine is what halves. First work block starts at
+           wake + 60 min. (On a normal wake, keep the full
+           variation_rules.min_wake_to_work_gap_min wake gap + breakfast as the
+           skeleton states — read the profile value, never assume 30; it is the
+           wake gap on EVERY day, not only late-wake ones.)
          - Invariants every day: keep the REAL-meal COUNT (keep_meal_count =
            Starter/Breakfast/Lunch/Dinner; the SNACK is a break, not a counted
-           meal — see rule 5); rest never stacks (rule 6) and work is pulled to
+           meal — see rule 5); no INVENTED stacked rest, but profile fixed rest
+           (post-lunch nap / settle) is always kept (rule 6); work is pulled to
            the earliest gaps (rule 7); breaks default to break_minutes.median,
            and absorb time pressure by shrinking a break toward min ONLY to bank
            a full block (never below min, never above max, never pad); work blocks
@@ -298,11 +304,12 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     │    separate break beside it. (Exception: a snack that is explicitly    │
     │    pre-activity FUEL may sit just before that combined block — still   │
     │    a break row, not a meal.) Only drop a real meal the user skips.     │
-    │ 6. REST NEVER STACKS. Two rest rows (nap / break / snack / settle)     │
-    │    must NEVER be adjacent. If the layout would place two in a row,     │
-    │    MERGE them into ONE rest row and turn the reclaimed slot into a     │
-    │    WORK block. A post-anchor settle + lunch is already the rest after  │
-    │    the gym — the NEXT row must be work, not another nap/break/snack.   │
+    │ 6. NO INVENTED STACKED REST. Do not invent a NEW rest row adjacent     │
+    │    to another rest row; merge any such pair and reclaim the slot as    │
+    │    WORK. BUT a PROFILE-DEFINED fixed rest segment (typical_day nap /   │
+    │    post-activity settle) is ALWAYS kept at its set length — it is NOT  │
+    │    "stacked rest." settle → lunch → profile nap is all legal; what's   │
+    │    banned is adding a SECOND, invented break beside one of them.       │
     │ 7. WORK FIRST. Fill EVERY usable gap with full work blocks starting    │
     │    from the earliest available slot (incl. a pre-anchor morning gap,   │
     │    e.g. 13:30–14:30 before gym). The FIRST focus block lands as early  │
@@ -358,15 +365,19 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
             14:30 gym), put a work block there — a full block if it fits, else a
             block trimmed to butt the anchor — never leave it empty. The FIRST
             focus block of the day must land as early as the anchors allow. A
-            long non-work run right AFTER a big fixed anchor (gym + settle +
-            lunch) is a VIOLATION: once the post-anchor settle and the real meal
-            are placed, the next row is WORK, not another nap/break/snack.
-          · REST NEVER STACKS (hard rule 6). Never place two rest rows
-            (nap / break / snack / post-anchor settle) back to back. If the
-            layout would produce an adjacent pair, MERGE them into ONE rest row
-            and convert the freed slot into a work block. The post-gym settle +
-            lunch already ARE the rest after training — do not follow them with
-            a nap AND a break AND a snack.
+            long INVENTED non-work run right AFTER a big fixed anchor is a
+            VIOLATION: do not pad the afternoon with extra optional breaks. (A
+            PROFILE-DEFINED fixed rest — the post-activity settle and the
+            typical_day post-lunch nap — is NOT padding: keep it; work resumes
+            right after it.)
+          · NO INVENTED STACKED REST (hard rule 6). Never INVENT a new rest row
+            back-to-back with another rest row; MERGE such a pair and convert the
+            freed slot into a work block. This does NOT touch PROFILE-DEFINED
+            fixed rest: the post-activity settle and the typical_day post-lunch
+            nap are ALWAYS kept at their set length (protected like meals), so a
+            settle → lunch → profile-nap run is legal. What's banned is adding a
+            SECOND, invented break next to a settle/meal/nap. Do not drop the
+            post-lunch nap to make room for work.
           · THE SNACK IS A BREAK, PLACED BY JUDGMENT (hard rule 5). Do NOT emit
             the Snack as a meal row and do NOT pin it to diet_meal_times' Snack
             clock time. Treat it as ONE flex break (break-length rules apply):
@@ -457,9 +468,13 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      40/45/60.
      POST-MEAL NAP/REST IS A BREAK: a nap or rest after a meal counts as a break
      and obeys break_minutes {min, median, max} (default median, may shrink to
-     min, never above max) — UNLESS `diet_meal_times` shows a fixed post_meal_nap
-     (then place it at exactly that length and NEVER shrink it). A nap is never a
-     free-form slot of arbitrary length.
+     min, never above max) — UNLESS it is a FIXED post-meal nap, i.e. either
+     `diet_meal_times` shows a fixed post_meal_nap OR the typical_day skeleton
+     carries a `rest`/`fixed` post-lunch nap segment. A FIXED post-lunch nap is
+     ALWAYS placed at exactly its set length and is NEVER shrunk, merged away, or
+     dropped to make room for work (it is protected like a meal; hard rule 6 does
+     not touch it). It may drop ONLY if the check-in shows the user is not tired /
+     explicitly skips it. A nap is never a free-form slot of arbitrary length.
      SKELETON & FLEX (from 1b.5, whenever a skeleton exists — a typical_day
      template OR a planning_guidelines sample skeleton): the skeleton is the
      one reshaped in 1b.5. FOLLOW ITS EXACT SEGMENT DURATIONS / GAPS — a 2h gym
@@ -492,12 +507,17 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      real time. The plan spans wake → bed.
      WAKE / MORNING ROUTINE: the first row is a wake + morning-routine block of
      variation_rules.min_wake_to_work_gap_min (e.g. 60 min) — the full slow start
-     before any work, not a token 30.
+     before any work, not a token 30. EXCEPTION — late wake (after 11:00): halve
+     the routine to 30 min and KEEP breakfast at 30, so routine(30)+breakfast(30)
+     = a 1-hour morning before the first block. Do NOT drop breakfast; the
+     routine is what shrinks.
      HONOR PER-BLOCK NOTES: each typical_day block may carry a `notes` field with
-     conditional guidance (e.g. "skip if wake after 11:00", "shorten when tired",
-     "drop on a late start"). READ each block's notes and apply them when the
-     stated condition holds today — skip / shorten / shift that block accordingly.
-     A block skipped because its own notes said so is NOT a dropped meal/anchor.
+     conditional guidance (e.g. "shorten when tired", "fold prep into this block,
+     no separate row"). READ each block's notes and apply them when the stated
+     condition holds today — skip / shorten / shift that block accordingly. A
+     block skipped because its own notes said so is NOT a dropped meal/anchor.
+     (Note: on a late wake, breakfast is KEPT — see the WAKE / MORNING ROUTINE
+     late-wake exception above — the morning routine halves instead.)
   d. GAP-FREE & OVERLAP-FREE: every span from wake to bed is accounted for —
      no gaps, NO OVERLAPPING ROWS. Each row's end MUST equal the next row's start.
      A work block adjacent to a meal/anchor ENDS EXACTLY at that anchor's start —

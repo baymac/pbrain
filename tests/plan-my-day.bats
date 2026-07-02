@@ -1099,11 +1099,36 @@ EOF
   [[ "$output" == *"pinned to the diet profile's Snack clock time"* ]]
 }
 
-@test "SESSION forbids stacked rest rows (rule 6)" {
+@test "SESSION forbids INVENTED stacked rest but exempts profile fixed rest (rule 6)" {
   write_goals_profile
   write_libraries
   run PMD plan --continue
-  [[ "$output" == *"REST NEVER STACKS"* ]]
+  [[ "$output" == *"NO INVENTED STACKED REST"* ]]
+  # a profile-defined fixed rest segment (nap/settle) is NOT stacked rest
+  [[ "$output" == *"PROFILE-DEFINED fixed rest"* ]]
+}
+
+@test "SESSION always keeps the profile post-lunch nap, never drops it for work" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"FIXED post-lunch nap"* ]]
+  # protected like a meal; hard rule 6 does not touch it
+  [[ "$output" == *"ALWAYS placed at exactly its set length"* ]]
+  [[ "$output" == *"Do not drop the"*"nap to make room for work"* ]] || [[ "$output" == *"not touch it"* ]]
+}
+
+@test "SESSION compresses a late wake to routine(30)+breakfast(30), keeps breakfast" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  # late-wake rule present and explicit about halving routine + keeping breakfast
+  [[ "$output" == *"after 11:00"* ]]
+  [[ "$output" == *"breakfast (KEPT at 30)"* ]] || [[ "$output" == *"breakfast (kept)"* ]]
+  [[ "$output" == *"HALVE"*"wake-to-work gap"* ]] || [[ "$output" == *"halve the routine to 30"* ]]
+  # breakfast is NOT dropped on a late wake
+  [[ "$output" != *"skip if wake after 11:00"* ]]
+  [[ "$output" != *"skip breakfast"* ]]
 }
 
 @test "SESSION pulls work forward into the earliest gaps (rule 7)" {
