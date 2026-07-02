@@ -1,5 +1,9 @@
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
+
+/// Menu item id for the manual "Reload" action (PB-156).
+const RELOAD_MENU_ID: &str = "plane-reload";
 
 /// Base URL of the Plane instance, used for BOTH the window's start URL and the
 /// deep-link target (so `plane://…` always resolves onto the same host the app
@@ -146,12 +150,47 @@ fn focus_and_navigate(app: &tauri::AppHandle, target: &str) {
     }
 }
 
+/// Reload the main window's current page in place (PB-156 manual refresh).
+///
+/// Uses a JS `location.reload()` eval rather than re-navigating to `PLANE_BASE`
+/// so the user's current view (whatever issue/board/deep link they're on) comes
+/// back with fresh data instead of bouncing them to the Plane home page.
+fn reload_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.eval("window.location.reload();");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Native "Reload" menu item (PB-156): View > Reload, Cmd+R.
+            // Plane's own DOM is out of bounds (no injected on-page button),
+            // so the manual-refresh control lives in the native menu instead.
+            let reload_item =
+                MenuItem::with_id(app, RELOAD_MENU_ID, "Reload", true, Some("CmdOrCtrl+R"))?;
+            let view_menu = Submenu::with_items(app, "View", true, &[&reload_item])?;
+            let app_menu = Submenu::with_items(
+                app,
+                "Plane",
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, None, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ],
+            )?;
+            let menu = Menu::with_items(app, &[&app_menu, &view_menu])?;
+            app.set_menu(menu)?;
+            app.on_menu_event(move |app, event| {
+                if event.id() == RELOAD_MENU_ID {
+                    reload_main_window(app);
+                }
+            });
 
             // Build the main window in Rust (rather than tauri.conf.json) so we can
             // attach an initialization script: it runs at document-start on EVERY
