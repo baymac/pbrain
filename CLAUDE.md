@@ -8,20 +8,14 @@ This is the **pbrain tooling repo**. You are in the outer repo, not the vault.
 
 See `README.md` for the full spec and architecture.
 
----
-
 ## Vault location
 
 The plugin is path-agnostic — works against any vault directory the user marks. Resolution order in `lib/vault.sh`:
 
-1. `$PBRAIN_VAULT` env var
-2. Path written in `~/.config/pbrain/vault`
-3. Default: `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault`
+1. `$PBRAIN_VAULT` env var, 2. path written in `~/.config/pbrain/vault`, 3. default `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault`.
 4. **Zero-config fallback**: if nothing above is configured (no `$PBRAIN_VAULT`, no config file) and the default iCloud path doesn't exist, `lib/vault.sh` auto-creates a plain local vault at `~/pbrain-vault` (via the shared `lib/scaffold.sh` — git init + `.gitignore` + `CLAUDE.md` + initial commit + config file, exactly like `/init-obsidian bootstrap`, with git treated as optional) and continues, so commands never hard-fail on a fresh machine without Obsidian. Only the unset (default) case auto-creates — an explicit but missing env/config path still errors (a typo shouldn't silently spawn a vault elsewhere). `PBRAIN_NO_AUTOVAULT=1` opts back into the hard-fail.
 
 This user's actual vault is at the default iCloud path. It's a standalone git repo (not a submodule), in iCloud Drive for iOS sync.
-
----
 
 ## Where agents write in the vault
 
@@ -38,7 +32,7 @@ When Claude (or any agent) writes content into the vault, it goes under `agent-w
 | `agent-work/research/` | Research outputs, web summaries, references |
 | `agent-work/people/` | People pages (auto-enriched contacts from gbrain or hand-written) |
 | `agent-work/clips/<platform>/` | `/clipper` outputs — videos saved as clean, faithful transcripts (`x/`, `yt/`). |
-| `agent-work/daily-grooming/` | `/project-manager groom` outputs (PB-94) — per-day grooming data: **todo-only** triage (backlog is the user's staging area, never touched), the **ordered run queue** (blockers ahead of blocked, each issue a clickable Plane browse link **built from the project shortcut** — PB/YT/KA, never the display name — with an **Auto** column and a **half-line abridged title**), an **`## Enriched this run`** section (agent-recorded: which issues the quality gate auto-enriched + what it set), the `## Needs review` thin list, and `/plan-my-work`'s per-id auto-work outcomes. Groom now **assigns `auto:plan/implement/test/ship` by judgment** (nightly mechanical floor + interactive-agent refinement) — **never `auto:land`** (merge stays a manual gate); `PBRAIN_GROOM_NO_AUTO=1` opts out. The judgment pass also runs a **QUALITY GATE**: the mechanical thin-check only catches *empty* fields, so a one-letter/placeholder/vague description (`x`, `wip`, "fix the thing") or an obviously-wrong priority slips into the queue — the LLM judges *quality* (not just presence) on every queue item and enriches the half-baked ones, marking each vetted issue with **`auto:groomed`** so later nights skip it (strip the label in Plane to force a re-vet). `auto:groomed` is a marker, not a pipeline stage — the gate machinery ignores it. **Optional autonomous mode** (`groom enable --autonomous`): the nightly LaunchAgent runs a **headless Claude session** for judgment triage (enrich thin issues + smart-label) overnight — triage-only (no git/PR/execute, `/plan-my-work` not reachable), bounded by max-turns + timeout (no budget cap), on the user's **subscription keychain login** (no API key, no secret written). `groom doctor` verifies the claude CLI + login under the launchd env. Off by default; `PBRAIN_GROOM_AUTONOMOUS`. **Scoped to this week's weekly-goal projects** by default (the `plane_project` ids from the current `weekly-goals` profile; no goals → all registry; an explicit `--projects` overrides). iCloud-synced for morning review. One `<date>.md` per day. The nightly headless LaunchAgent can't write this iCloud path directly (no Full Disk Access under launchd), so it writes a non-iCloud staging copy (`~/.config/pbrain/pm-groom/<date>.data.md`) and the FDA-granted `pbrain-groom.app` copies staging → here; the interactive run writes it directly. |
+| `agent-work/daily-grooming/` | `/project-manager groom` outputs (PB-94) — per-day grooming data: todo-only triage, ordered run queue, enrichment log. Full mechanics (quality gate, autonomous mode, scoping) in `commands/project-manager.md`. One `<date>.md` per day, iCloud-synced. |
 | `agent-work/summaries/<type>/` | `/summarize` outputs — vault folders summarized via a per-type prompt (`webinar/`). |
 
 If a new content type doesn't fit any of these, ask before creating a new subdir.
@@ -47,96 +41,57 @@ If a new content type doesn't fit any of these, ask before creating a new subdir
 
 **`/laptop-tracking` writes `vault/life/laptop-tracking/YYYY-MM-DD.md`** — also a sanctioned `life/` path (a derived per-day usage report, domain-level only). The granular DB stays local at `~/.config/pbrain/tracker.db` and is never synced to the vault.
 
----
-
 ## Morning sequence (journal → gratitude → everything else)
 
 The day starts on `/journal` (a raw brain dump that clears the head), then `/gratitude-journal` (anchors baseline on cleared ground). When the user invokes any other slash command — or asks for personal reflection / capture / brainstorming — check today's files in order: (1) if `vault/life/daily-tracking/YYYY-MM-DD.md` is missing, suggest `/journal`; (2) else if `vault/life/gratitude-journal/YYYY-MM-DD.md` is missing, suggest `/gratitude-journal`; (3) otherwise proceed. **Suggest once, never block** — the user can override and continue.
 
 Exempt (never trigger the check): `/journal`, `/gratitude-journal`, `/init-obsidian`, `/codex-install`, `/remind`, `/thoughts`, `/discuss`, `/laptop-tracking`, `/loose-ends`, `/vault-backup`. `/habits` is **not** exempt (it runs after the morning sequence). **Overridable by a standing preference**: if the user's injected USER PREFERENCES block says to skip the journal/gratitude nudge, don't make it — the morning-sequence skip is a *global* preference at `.pbrain/_global/prefs.md`. More broadly, any built-in suggestion/nudge yields to a standing preference that silences it.
 
----
-
 ## Linking a Claude Code chat to a filed issue ("ref chat")
 
-When you file a `/project-manager` Plane issue from a Claude Code session **and** the user says to reference the chat (e.g. "ref chat", "ref this chat", "reference the cc session", or any equivalent), append a reference to the **current session's transcript path** at the **bottom of the issue description**, as the last line, in this exact form:
+When you file a `/project-manager` Plane issue from a Claude Code session **and** the user says to reference the chat (e.g. "ref chat", "ref this chat", or equivalent), append this exact line to the **bottom of the issue description** (last line): `---` then `Claude Code chat ref: <full path to the current session .jsonl>`. Resolve the path as `~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl` (cwd with `/`→`-`, session UUID); verify it exists first (`find ~/.claude/projects -name '<session-id>.jsonl'`) and say so rather than guessing if it can't be resolved.
 
-```
----
-Claude Code chat ref: <full path to the current session .jsonl>
-```
-
-Resolve the path to the live session transcript, which on macOS is:
-
-```
-~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl
-```
-
-— where `<sanitized-cwd>` is the working directory with `/` replaced by `-` (e.g. `-Users-parichay-dev`) and `<session-id>` is this session's UUID. Verify the file exists before writing the line (`find ~/.claude/projects -name '<session-id>.jsonl'`); if it can't be resolved, say so rather than guessing.
-
-Rules:
-- The ref goes **in the description body** (last line), not as a comment — `update --edits` with a `description` field replaces the whole field, so re-send the full existing description with the ref line appended.
-- Only add it when the user asks ("ref chat" or similar) — never automatically on every issue.
-- One ref line per issue; if one already exists, replace it rather than stacking.
-
----
+Rules: the ref goes in the description body, not a comment (`update --edits` replaces the whole `description` field, so re-send the full existing text with the ref appended); only add it when asked, never automatically; one ref line per issue — replace, don't stack, if one already exists.
 
 ## Nightly-groom flow doc — keep it in sync
 
-`docs/nightly-groom-flow.html` is the source-of-truth **flow diagram** for the nightly
-groom (all branches + leaves: launchd entry → mechanical scan → autonomous judgment
-pass → vault write). **Whenever you change the groom flow, update this doc in the same
-change.** "The flow" means any of:
-
-- `lib/pbrain-groom.swift` (the orchestrator: phases, the claude invocation, gating)
-- `lib/pm-groom.sh` (scheduling, project selection, queue/cache, doctor)
-- `lib/plane.py` groom pieces (`groom_run`, `thinness_flags`, `suggest_auto_stages`,
-  gate/marker labels like `GROOMED_LABEL`)
-- `commands/templates/project-manager/groom-drive.txt` (the judgment-pass instructions:
-  ASSESS & LABEL, the quality gate, autonomous-mode rules)
-- `lib/hooks/groom-triage-guard.sh` (the triage-only safety boundary)
-- any new env var, branch, phase, or invariant in the above
-
-When such a change lands, edit `docs/nightly-groom-flow.html` to match (the node it
-affects + the footer's "traced from / invariants" line) so the diagram never drifts
-from the code. If a change makes a whole phase obsolete, redraw that lane, don't just
-append a note.
+`docs/nightly-groom-flow.html` is the source-of-truth flow diagram for the nightly groom (launchd entry → mechanical scan → autonomous judgment pass → vault write). **Whenever you change the groom flow — `lib/pbrain-groom.swift`, `lib/pm-groom.sh`, the groom pieces of `lib/plane.py`, `commands/templates/project-manager/groom-drive.txt`, `lib/hooks/groom-triage-guard.sh`, or any new env var/branch/phase/invariant in those — update this doc in the same change**: edit the affected node + the footer's "traced from / invariants" line; redraw the whole lane (don't just append a note) if a phase goes obsolete.
 
 ## Repository layout (monorepo)
 
-Each file carries its own implementation detail in its header comment / docstring; the lines below are one-clause pointers. Slash-command behavior is in the index further down + each `commands/<cmd>.md`.
+**Every file's own header comment/docstring is the source of truth for its implementation detail** — this section only maps names to purpose in one clause; don't duplicate a header's content here, and don't let this list substitute for reading the header. Slash-command behavior is in the index further down + each `commands/<cmd>.md`.
 
 ```
 pbrain/
 ├── .claude-plugin/plugin.json   ← Claude plugin manifest (this repo IS the plugin)
 ├── commands/                    ← all slash command .md + .sh pairs (see the index below; spec in each commands/<cmd>.md)
-├── lib/vault.sh                 ← shared VAULT_DIR resolver, sourced by every command (zero-config fallback auto-creates ~/pbrain-vault; PBRAIN_NO_AUTOVAULT=1 hard-fails). Sourcing order: scaffold → update-check → prefs → self-improve → profile → profiles → projects; db before habits/reminders; launchd before reminders
-├── lib/scaffold.sh              ← standalone vault-scaffold helpers (mkdir + git init + .gitignore + CLAUDE.md + config); sourced by init-obsidian.sh (pre-vault) AND vault.sh (auto-fallback)
+├── lib/vault.sh                 ← shared VAULT_DIR resolver, sourced by every command
+├── lib/scaffold.sh              ← vault-scaffold helpers (mkdir + git init + config); used by init-obsidian.sh and vault.sh's auto-fallback
 ├── lib/update-check.sh          ← upgrade nudge
-├── lib/prefs.sh                 ← per-command preference injection (pbrain_emit_prefs; profile-owning cmds read prefs from the profile's "prefs" array, else <cmd>/prefs.md)
-├── lib/self-improve.sh          ← feedback capture: pbrain_emit_self_improve_batch (PB-47: the sole self-improve pass — end-of-day, transcript-mining, correction-driven; the old inline per-command reflection was removed)
-├── lib/profile.sh               ← fenced-JSON-block extractor (pbrain_profile_json — reads ANY profile file)
-├── lib/profiles.sh              ← versioned profile store (.profile/<base>.vN.md); store/latest/draft/new/commit API in its header
-├── lib/projects.sh              ← shared Plane seam layer for the daily loop (degrades to []/{} when Plane is unconfigured); never exits non-zero; detail in its header
-├── lib/plane.py                 ← pbrain ↔ Plane backend (multi-project, stdlib urllib); the sole project source; seams + config in its header (incl. `workdir`/`workdirs` for PB-40 per-project working locations; `projects --sync` preserves `work`)
-├── lib/plane-backup.sh          ← /project-manager backup (PB-17): pg_dump + uploads-volume snapshot → tarball, retention, local/external/vps dest, launchd schedule, restore; drives Docker directly (no plane.json); detail in its header
-├── lib/vault-backup.sh          ← /vault-backup (PB-10): off-iCloud vault snapshot (tar of $VAULT_DIR + manifest) → tarball, retention, local/external/vps dest (inherits Plane's VPS host/key from plane-backup.json), launchd schedule, NON-destructive restore (extract into a dir), backup-log.md + >48h stale macOS notify; detail in its header
-├── lib/plane-host.sh            ← /project-manager host (PB-18): move Plane off localhost onto a VPS — probe / deploy+domain GUIDES (setup.sh is interactive, so walked not automated) / quick-vpn no-domain access (reuse-or-install, full|split tunnel) / remote backup import (pg_restore + uploads, over SSH) / wire (repoint base_url + email-password internal auth, password → macOS Keychain). Reuses the VPS host/key from plane-backup.json; detail in its header
-├── lib/migrations.sh            ← migration runner (lib/migrations/<NNNN_slug>.sh; ledger per vault); AUTO vs STAGED vs EFFECTFUL in its header. PBRAIN_MIGRATIONS=0 disables; PBRAIN_MIGRATIONS_EFFECTFUL=1 opts the silent runner into live-external migrations
-├── lib/migrations/              ← the ordered migrations 0001–0012 (each script self-documents); see "Versioned profiles + migrations" below
-├── lib/db.sh                    ← shared SQLite store (habit events incl. 3-state `status` done/skipped/missed + blocking-reminder queue + habit_reminders) + separate tracker.db init for /laptop-tracking
-├── lib/launchd.sh               ← native-helper build (pbrain_swift_build) + LaunchAgent helpers; sourced before reminders.sh
-├── lib/habits.sh                ← habits profile + md tracking (3-state done/skipped/missed Done-column tokens; skipped=off day, missed=real miss) + schedule-aware rollup + scored-habit evaluator (score_from_spec); formulae / auto-seed rules / habit↔reminder link in its header
-├── lib/habit_schedule.py        ← habit schedule engine (is_due / derive_schedule / spacing); stdlib-only
+├── lib/prefs.sh                 ← per-command preference injection
+├── lib/self-improve.sh          ← feedback capture (see "Self-improvement loop" below)
+├── lib/profile.sh               ← fenced-JSON-block extractor for profile files
+├── lib/profiles.sh              ← versioned profile store (.profile/<base>.vN.md)
+├── lib/projects.sh              ← shared Plane seam layer for the daily loop
+├── lib/plane.py                 ← pbrain ↔ Plane backend (multi-project, stdlib urllib); the sole project source
+├── lib/plane-backup.sh          ← /project-manager backup: pg_dump + uploads snapshot → local/external/vps, restore
+├── lib/vault-backup.sh          ← /vault-backup: off-iCloud vault snapshot → local/external/vps, restore
+├── lib/plane-host.sh            ← /project-manager host: move Plane off localhost onto a VPS
+├── lib/migrations.sh            ← migration runner (see "Versioned profiles + migrations" below)
+├── lib/migrations/              ← the ordered migration scripts (each self-documents)
+├── lib/db.sh                    ← shared SQLite store (habit events + reminder queue) + separate tracker.db for /laptop-tracking
+├── lib/launchd.sh               ← native-helper build + LaunchAgent helpers
+├── lib/habits.sh                ← habits profile + md tracking + scored-habit evaluator
+├── lib/habit_schedule.py        ← habit schedule engine (is_due / derive_schedule / spacing)
 ├── lib/profile_lock.py          ← atomic read-modify-write helper for the habits profile JSON block
-├── lib/reminders.sh             ← /remind (Apple Reminders) + /remind-blocking (overlay poller); FIRE/DEFER/MISS state machine + cron→recurrence mapping in its header
-├── lib/pbrain-reminders.swift   ← EventKit Reminders helper source (built on demand → pbrain-reminders.app)
+├── lib/reminders.sh             ← /remind (Apple Reminders) + /remind-blocking (overlay poller)
+├── lib/pbrain-reminders.swift   ← EventKit Reminders helper source
 ├── lib/pbrain-notify.swift      ← macOS notifier source (overlay's no-swiftc fallback)
-├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking); plays the lifecycle chime at notif-start / blocking-start / blocking-end (--chime / --no-chime)
-├── lib/assets/chime.mp3         ← bundled lifecycle chime; copied into pbrain-overlay.app/Contents/Resources on build (gate: PBRAIN_OVERLAY_CHIME, override: PBRAIN_CHIME_FILE)
+├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking)
+├── lib/assets/chime.mp3         ← bundled lifecycle chime for the overlay
 ├── lib/pbrain-tracker.swift     ← /laptop-tracking daemon source (resident LaunchAgent)
-├── lib/whats-new.sh             ← per-release "what's new" doc (PB-129): `render` (changelog section → HTML via lib/whats-new-render.py) + `check`/`surface` (surface-once-on-update, sourced from vault.sh; state in $XDG_STATE_HOME/pbrain/whats-new.seen; skipped on dev installs)
-├── scripts/release.sh           ← reproducible release pipeline (PB-128): SOLE writer of VERSION + .claude-plugin/plugin.json (lockstep), cuts CHANGELOG [Unreleased]→[x.y.z], generates docs/whats-new/<v>.html, tag + gh publish; dry-run by default, idempotent. See docs/release.md
+├── lib/whats-new.sh             ← per-release "what's new" doc, surfaced once on update
+├── scripts/release.sh           ← reproducible release pipeline; sole writer of VERSION + plugin.json. See docs/release.md
 ├── tests/                       ← bats tests for the shared lib/ helpers
 ├── docs/                        ← one short user-facing doc per command
 ├── gbrain/                      ← gbrain operations (separate from the plugin): scripts/, launchd/, docs/, .logs/ (gitignored)
@@ -145,9 +100,7 @@ pbrain/
 └── README.md
 ```
 
-There's no `.claude/commands` symlink at the repo root — by design. Slash commands are made available globally via a one-time `ln -s <repo>/commands ~/.claude/commands` (documented in the README's Quick start), so edits to the scripts go live in every CC session. The tooling repo is for editing, the vault is for running.
-
----
+There's no `.claude/commands` symlink at the repo root — by design. Slash commands go live globally via a one-time `ln -s <repo>/commands ~/.claude/commands` (see README's Quick start). The tooling repo is for editing, the vault is for running.
 
 ## Conventions for editing scripts
 
@@ -158,58 +111,47 @@ There's no `.claude/commands` symlink at the repo root — by design. Slash comm
 - Slash command sources live **only** in `commands/`. Commands become available globally via `~/.claude/commands` → `<repo>/commands` (one-time user symlink). Never duplicate sources elsewhere.
 - gbrain operational scripts live in `gbrain/scripts/`. Never mix plugin commands with gbrain scripts.
 - **URLs in chat output (PB-95).** `pbrain_emit_prefs` ships a baseline CHAT OUTPUT HYGIENE rule on every command run telling the agent to wrap chat URLs as `[label](url)` or in backticks and never paste a bare URL with punctuation jammed against it (the renderer swallows a trailing `.,;:)]}>` into the link target and breaks it). Author instruction text and `echo`s the same way: prefer backtick-wrapped or markdown-link URLs over bare `(https://…)` / `https://…​.` in any `.md`/`.sh`/`.txt` the agent reads or relays.
-- **Never hardcode the vault path in a command.** Source the shared resolver and use the resulting `$VAULT_DIR`:
-  ```bash
-  _SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-  source "$_SCRIPT_DIR/../lib/vault.sh"
-  # then use $VAULT_DIR plus an optional per-command override like
-  # FOO_DIR="${PBRAIN_FOO_DIR:-$VAULT_DIR/some/sub/path}"
-  ```
-  `pwd -P` is required so sourcing works whether the script was invoked via the vault's `.claude/commands` symlink or directly.
+- **Never hardcode the vault path in a command.** Source the shared resolver (`_SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"; source "$_SCRIPT_DIR/../lib/vault.sh"`, `pwd -P` so it works whether invoked via the vault's symlink or directly) and use the resulting `$VAULT_DIR`, with an optional per-command override like `FOO_DIR="${PBRAIN_FOO_DIR:-$VAULT_DIR/some/sub/path}"`.
 - Python heredocs that need vault paths: pass them as argv (`python3 - "$VAULT_DIR" <<'PYEOF' ... sys.argv[1] ...`). Do NOT use `os.path.expanduser` on a hardcoded path.
-- Slash command `.md` files use `${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/<name>.sh` — three-tier resolution:
-  1. `PBRAIN_DEV_DIR` — local dev override. Set `export PBRAIN_DEV_DIR=/path/to/pbrain` in your shell profile to point at the live repo; edits to `.sh` files take effect immediately.
-  2. `CLAUDE_PLUGIN_ROOT` — set by the Claude Code harness when running a plugin command. Points to the plugin install dir automatically.
-  3. `$HOME/.claude/plugins/marketplaces/pbrain` — marketplace install fallback. Used when neither env var is set (e.g. when the Bash tool invokes the command outside the plugin system).
-  The fallback must be an absolute path — slash commands run with the *user's project* as cwd, which inside a Conductor workspace is not the pbrain repo.
-
----
+- Slash command `.md` files use `${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/pbrain}}/commands/<name>.sh` — three-tier resolution: `PBRAIN_DEV_DIR` (local dev override, edits take effect immediately) → `CLAUDE_PLUGIN_ROOT` (set by the harness for a plugin install) → the marketplace path fallback (must stay absolute — a slash command's cwd is the *user's project*, e.g. a Conductor workspace, not the pbrain repo).
 
 ## Slash commands
 
 Sources live in `commands/`. Available in every CC session once the user symlinks `~/.claude/commands` → this repo's `commands/`, or after `/plugin marketplace add baymac/pbrain` + `/plugin install pbrain@pbrain` once it's published.
 
-**The per-command contract lives in each `commands/<cmd>.md`** (the spec the agent reads when running/editing the command); user-facing docs are `README.md` (overview) + `docs/<command>.md`. **Env vars:** see README.md's env-var table and each command's `.sh` defaults. The index below is one line per command — purpose + default write path only.
+**The per-command contract lives in each `commands/<cmd>.md`** (the spec the agent reads when running/editing the command); user-facing docs are `README.md` (overview) + `docs/<command>.md`. **Env vars:** see README.md's env-var table and each command's `.sh` defaults. The index below is name + default write path only — do not re-expand a command's behavior here; that duplicates its `.md` and drifts out of sync with it.
 
-| Command | Purpose | Default write path |
-|---|---|---|
-| `/init-obsidian` | bootstrap a vault (optional iCloud migration + private dir + git remote) | writes `~/.config/pbrain/vault` |
-| `/init-plane` | local Plane self-host wizard (bypasses `lib/vault.sh`); superseded by `/project-manager` once a vault exists, kept as the vault-free setup path | `~/.config/pbrain/plane.json` |
-| `/journal` | quiet daily journal — morning brain dump, then timestamped activity log | `life/daily-tracking/<date>.md` |
-| `/brainstorm <topic>` | brainstorm a topic → idea note | `agent-work/brainstorms/tbd/` |
-| `/discuss <topic>` | Socratic personal-dilemma partner; saves an insight note | `agent-work/notes/` |
-| `/diet-journal` | daily diet log + versioned diet profile (targets/slots/meal-times) + food library; meal times fitness-anchored | `fitness/diet-tracking/` |
-| `/fitness-journal` | flexible daily fitness journal — **logger-first with on-request session generation**. Describe your session in plain words and it derives the activity's per-activity KPIs (gym→sets, swim→distance, dance→min), tolerating partial logs; when you PLAN AHEAD (accept the owed/scheduled session, or ask to plan it) it GENERATES a complete session (gym = Block/Day rotation + progressive overload + training-gap deload; non-gym = concrete KPI targets) written as coaching note + warmup + weighted `## Planned` + cooldown + empty `## Logged` table — the same `## Planned`/`## Logged` contract Train scoring + `/end-of-day` read. KPIs live in the fitness library + are user-extensible; an activity missing `kpis` derives archetype defaults on the fly (no migration — graceful fallback + lazy save). fitness profile + activity library (fixed weekly days, per-activity KPIs) + per-activity profiles (gym Block/Day DRIVES generated gym sessions); `activity:`/`focus:`/`sleep_*` frontmatter + Train habit + `fitness-reconcile` preserved; training-gap band drives generation when planning ahead | `fitness/daily-tracking/` |
-| `/finance` | personal financial tracker (analytics, not a spend limiter), **two trackers sharing one profile + month file**: EXPENSE tracker (core, always on) — `## Expenses`: transactions, spend-by-category + month total, recurring statuses, a **planned one-off expenses (rest-of-year) ledger**, and a **next-month forecast**; BALANCES tracker (**opt-in** via `track_balances`) — `## Balances`: accounts/investments net worth, income, savings rate, **runway**, planned-expense affordability. Quick-add `expense <amount> <what>` (shell extracts amount, model parses item/merchant/date, defaults to now). `ingest` paste statement/CSV/list → parse → dedupe (date+amount+normalized-desc) → categorize exactly-one (`other` fallback) → recompute. `balances on\|off` toggles the opt-in; `expense`/`ingest`/`balances`/`profile` subcommands; living merchant→category library; diet/fitness categories label-link to the journals (v1) | `life/finance-tracking/<YYYY-MM>.md` |
-| `/gratitude-journal` | gratitude (3–6) + one rotated reflection question | `life/gratitude-journal/` |
-| `/plan-my-day` | lays the day's LIFE structure (calendar/fitness/meals/walk/bed/habit reminders) + EMPTY work blocks; no longer assigns tasks. Reads today's fitness `focus:` (`fitness_today_activity`) and reconciles fitness-habit reminders to it (`habits.sh fitness-reconcile` — set the chosen activity's reminder, cancel + auto-skip the scheduled-but-not-chosen ones). Owns the plans profile + work/goals libraries + goals tiers; `focus`/`library`/`profile` subcommands | `life/daily-planning/<date>.md` |
-| `/plan-my-work` | the EXECUTION layer (PB-94/PB-147) — drives Plane issues through a fixed **5-stage pipeline** (`auto:plan`→`auto:implement`→`auto:test`→`auto:ship`→`auto:land`), auto-advancing each stage whose label is present and **parking** (WIP-commit + push + a `pbrain park:` issue comment) at the first stage without it; **stop-at-first-gap**, later labels don't imply earlier. **FOUR entry modes (PB-147), same loop, different selection/gating** (each output carries a `mode:` line): **1 by id** (`/plan-my-work PB-96`), **2 fix-an-issue** (a description → find-or-file → full-path triage → **run the loop on the resulting id**), **3 auto-drive** (`auto` → hands-off: claim the **cross-project** queue top, run, **park+log+move-on** at any unmet gate — notably land, since groom never grants `auto:land` — loop till empty, then roll up; `PLAN_MY_WORK_AUTODRIVE`), **4 top-of-queue** (no-arg / `top` / `next` → claim the single top, run, **offer** next; `PLAN_MY_WORK_QUEUE_PULL`). Modes 3 & 4 consume groom's ranked Queued state, which **excludes `parked` issues** (a human holds an issue with the `parked` label); an explicit id run on a parked issue still runs with a one-line warning (`is_parked` in `spec --read`). **SRP mid-loop triage (PB-153):** a discovery mid-loop (user remark or self-found bug) is **filed as a SEPARATE issue by default** (fold only if same single responsibility; update existing for a trivial delta), always captured, and set `blocked_by` the current issue when it blocks the PR else `relates_to` — keeping each PR single-purpose. **State is Plane-only** — no `## Work tracker`, no daily planning, no `task add/remove/list`; reads via `/project-manager spec <id> --read`, writes status/log via `move`/`comment`, **writes nothing to the vault**. Dependency-aware/**multi-loop**: a `blocked_by` issue runs its blocker first; a parent with open sub-issues drives each child (one branch/PR/merge each, parent closed last, PB-81). The only command that touches code/branches/PRs/merges (isolated worktree off fresh `origin/<base>`); land is gated on **CI-green** (red hard-stops regardless of `auto:land`) + `auto:land`-or-typed-confirm, **no release** — nothing auto-merges. NL form (PB-96): `fix X`/`work on pb96` normalize to the same path; `task execute <id>` is a back-compat alias. Requires Plane (`PLAN_MY_WORK_NO_PLANE`) | Plane only (no vault write) |
-| `/end-of-day` | fills `## How it went`; reconciles the **WORK side from Plane** (PB-94: state is Plane-only — `completed_in_plane_today` done + `doing_in_plane_now` in-progress/parked, read via `/project-manager`; a parked issue's own comments carry its breadcrumb + per-stage log; a legacy `## Work tracker` is reconciled only if present); closes the `## Today at a glance` day-shape if present; Plane sync + unplanned detection, marks scored-habit defaults (Work-the-plan/Deep-work score off Plane work, not a vault ledger), runs `habits autostatus` before consolidate, writes `### Scoreboard`; `--date` closes a past day | `life/daily-planning/<date>.md` |
-| `/weekly-review` | weekly synthesis + per-project Work review + one-at-a-time Improvements walk (mints new profile versions) + weekly-goals versioning | `life/weekly-tracking/YYYY-Www.md` |
-| `/monthly-review` | monthly synthesis across the month's weekly reviews + monthly-goals versioning + optional plans-profile hygiene | `life/monthly-tracking/YYYY-MM.md` |
-| `/thoughts [<text>]` | explode + append a timestamped thought (no args: asks first) | `life/thought-tracking/<date>.md` |
-| `/recall <query>` | read-only case-insensitive markdown grep across the vault | — (read-only) |
-| `/loose-ends` | read-only dashboard of unresolved threads (stale brainstorms, open questions, carry-forward, focus drift) | — (read-only) |
-| `/organize-clippings` | file `Clippings/` into chosen top-level vault dirs | user-chosen vault dirs |
-| `/habits` | habits profile + dated md tracking + scored-habit defaults + Apple-Reminder linking; see `commands/habits.md` | `life/habit-tracking/` |
-| `/remind <text>` | natural-language Apple Reminders (EKReminder), not Calendar; recurrence via cron→RRULE; see `commands/remind.md` | Apple Reminders (no vault write) |
-| `/remind-blocking <text>` | full-screen blocking reminders; SOLE owner of the SQLite reminders store; poller tick | SQLite DB (no vault write) |
-| `/laptop-tracking` | resident macOS usage tracker → per-day report; focus-breakdown feeds the Deep-work score | `life/laptop-tracking/<date>.md` |
-| `/project-manager` | the Plane commander and **sole** project backend (absorbs `/init-plane` setup + Plane ops). The **sole writer** of Plane — drive it in plain words ("bump PB-26 to high, tag backend"): a **natural-language router** resolves the issue (`find` by link/id/fuzzy name) and edits ANY field (priority/dates/description/labels/assignee-by-name/comments/re-parent/cycle/module/relations/sub-issues) via the verb catalogue. Also `explode <ref>` (PB-24): interactively break ONE issue into sub-issues via a Socratic AskUserQuestion walk (like `/discuss`). Also `spec <ref>` (PB-45): the spec/approval gate — a Socratic walk that drafts a `## Implementation Plan` into the issue description and, on explicit approval, adds the `plan-approved` label; an approved issue lets `/plan-my-work task execute` skip its live planning gate (`spec <ref> --read` = JSON-only read of plan + approval). Also `file "<dump>"` (aliases `create`/`track`/`capture`, PB-67): the generic work-item intake & triage convention — explodes a free-text dump into a triage-ready item of ANY type (bug/feature/docs/chore/refactor/improvement, inferred), with a `--fast` infer+one-confirm path and a default full Socratic build-up (type → body → sub-issues → labels → estimate → priority → deadline), dedupes against open items, and sets the type's convention label + a severity-derived priority for bugs. The convention labels `bug`/`feature`/`chore`/`docs` are seeded into every project on create and backfillable via `labels --seed [--projects R,…]` (PB-70) — the seed set also includes `plan-approved`, the 5-stage `auto:*` pipeline labels (`auto:plan`/`auto:implement`/`auto:test`/`auto:ship`/`auto:land`, PB-94), and `parked` (PB-152 — a human-set manual-hold marker the hands-off `/plan-my-work` modes skip; never auto-created on issues). The **same create + `labels --seed` path also seeds the custom lifecycle STATES** (PB-130): every project gets **Backlog → Todo → Planning → Building → Testing → Shipped** (+ Landed/Cancelled) — it adds the four work states and removes Plane's default `In Progress`, **keeping `Todo`** as the default unstarted state (Plane reserves the name "Triage" for its intake inbox and rejects creating it, so the pipeline keeps "Todo" rather than rename it). Each state's group preserves the `ready`/`READY_GROUPS` contract (Backlog→backlog, Todo + the four work states→unstarted/started, Landed→completed, Cancelled→cancelled; Todo is the default so newly-filed issues land ready). `/plan-my-work` advances issues through them via `move --to-state` (plan→Planning, implement→Building, test→Testing, ship/land→Shipped, merge→Landed; non-pipeline projects degrade to the group default). The pipeline states were renamed Review→Shipped, Done→Landed by `states --rename` (effectful migration `0014_plane_state_rename`). States need Plane's **internal** API (public token is read-only for states) — no internal auth → the seed hands back the exact UI steps. To migrate EXISTING issues across all projects, `states --migrate` (effectful migration `0012_plane_pipeline_states`) seeds + re-points stragglers. Also `groom` (PB-46/PB-94): the **dumb orchestrator** — **todo-only** (backlog is the user's staging area: it never promotes backlog→todo and never thin-flags backlog), it triages todo issues, builds the **ordered run queue** via `ready --ordered` (blockers hoisted ahead of the issues they block) into the vault grooming-data artifact (`agent-work/daily-grooming/<date>.md`), and — when an agent runs `groom run` interactively — emits a block that feeds each queued id to `/plan-my-work <id>` (which owns the whole execution loop; groom does no code/git itself). Also `subtree`/`blocked-by`/`doing` reads (PB-81/PB-94). **Dual-mode** (executor when `/plan-my-work` calls it, goal-aware when direct); label-creation guardrails; manual-UI fallback for the ~10% the API can't do. Also `backup` (PB-17): daily Plane snapshots (pg_dump + uploads) → local/external/vps with retention + restore, runs without Plane wired (drives Docker directly). Also `workdir` (PB-40): records the per-project working location (`projects[].work` in plane.json) that `/plan-my-work task execute` runs tasks in — the sole-writer rule extends to this config write. Needs a vault; ops emit `PM_NOT_CONFIGURED` when unset | Plane (no vault write) |
-| `/vault-backup` | off-iCloud vault backup (PB-10) — nightly `tar.gz` of `$VAULT_DIR` → local/external/**vps** (inherits Plane's VPS host/key from `plane-backup.json`; distinct remote path) with retention, daily launchd, per-run `vault/.pbrain/backup-log.md`, **non-destructive** restore (extract into a dir), >48h stale macOS notify. Sibling of `/project-manager backup`; sources `lib/vault-backup.sh`. `status\|estimate\|now\|enable\|disable\|config\|list\|restore\|check` | `~/.config/pbrain/vault-backups/` (config `vault-backup.json`, mode `0600`) |
-| `/clipper <platform> <url>` | save an online video as a clean, faithful long-form transcript ("clip"); platform subcommands (`x` / `yt`); the `.sh` does cookies/download/VTT-cleanup/transcription fallback, the model only reframes prose | `agent-work/clips/<platform>/<slug>.md` |
-| `/summarize <type> <folder>` | summarize a vault folder of notes/transcripts via a per-type **summarize prompt**; content-type subcommands (`webinar`, mirroring `/clipper`'s shape); the `.sh` resolves + walks the folder and concatenates every `.md`/`.txt` into one corpus, the model reframes it into a faithful prompt-driven summary (input read-only) | `agent-work/summaries/<type>/<slug>.md` |
-| `/codex-install` | Codex interop generator — skills + managed `AGENTS.md` from the same `commands/*.md` sources | `$CODEX_HOME/skills/pbrain-<cmd>/` |
+| Command | Default write path |
+|---|---|
+| `/init-obsidian` | `~/.config/pbrain/vault` |
+| `/init-plane` | `~/.config/pbrain/plane.json` |
+| `/journal` | `life/daily-tracking/<date>.md` |
+| `/brainstorm <topic>` | `agent-work/brainstorms/tbd/` |
+| `/discuss <topic>` | `agent-work/notes/` |
+| `/diet-journal` | `fitness/diet-tracking/` |
+| `/fitness-journal` | `fitness/daily-tracking/` |
+| `/finance` | `life/finance-tracking/<YYYY-MM>.md` |
+| `/gratitude-journal` | `life/gratitude-journal/` |
+| `/plan-my-day` | `life/daily-planning/<date>.md` |
+| `/plan-my-work` | Plane only (no vault write) |
+| `/end-of-day` | `life/daily-planning/<date>.md` |
+| `/weekly-review` | `life/weekly-tracking/YYYY-Www.md` |
+| `/monthly-review` | `life/monthly-tracking/YYYY-MM.md` |
+| `/thoughts [<text>]` | `life/thought-tracking/<date>.md` |
+| `/recall <query>` | — (read-only) |
+| `/loose-ends` | — (read-only) |
+| `/organize-clippings` | user-chosen vault dirs |
+| `/habits` | `life/habit-tracking/` |
+| `/remind <text>` | Apple Reminders (no vault write) |
+| `/remind-blocking <text>` | SQLite DB (no vault write) |
+| `/laptop-tracking` | `life/laptop-tracking/<date>.md` |
+| `/project-manager` | Plane (no vault write) |
+| `/vault-backup` | `~/.config/pbrain/vault-backups/` |
+| `/clipper <platform> <url>` | `agent-work/clips/<platform>/<slug>.md` |
+| `/summarize <type> <folder>` | `agent-work/summaries/<type>/<slug>.md` |
+| `/codex-install` | `$CODEX_HOME/skills/pbrain-<cmd>/` |
+
+A few invariants worth stating here because they cut across commands and aren't obvious from any single `.md`: **`/plan-my-work` is the only command that touches code, branches, PRs, or merges** (a fixed 5-stage pipeline — plan/implement/test/ship/land — gated per-stage by `auto:<stage>` labels; nothing auto-merges, ever). **`/project-manager` is the sole writer of Plane** — all other commands read Plane through it, never directly. **State for the daily work loop lives in Plane only** (no vault `## Work tracker`) — `/plan-my-work` and `/end-of-day` read/write it via `/project-manager spec/move/comment`.
 
 `/init-obsidian`, `/codex-install`, and `/init-plane` are the commands that don't go through `lib/vault.sh` — they're setup commands that must run before/around a vault being configured (or, for `/init-plane`, need no vault at all). `/init-obsidian` writes the config every other command reads; `/codex-install` only reads it (read-only resolve, never exits if absent); `/init-plane` is independent of the vault entirely. (`/remind-blocking tick`, the background poller path, also bypasses `lib/vault.sh` on purpose — it only needs the DB, and must not exit when no vault dir exists.)
 
@@ -222,17 +164,9 @@ Sources live in `commands/`. Available in every CC session once the user symlink
 - **Libraries are living documents** (food-library, work-library, goals-library, fitness-library; the habits profile behaves the same for `add`/`edit`/`archive`): entries append/amend in place on the latest version — version mints only on structural rebuilds.
 - Which `.profile/` bases each command owns is listed in its `commands/<cmd>.md` (plan-my-day, habits, fitness-journal, diet-journal).
 
-**Migrations** (`lib/migrations.sh` + `lib/migrations/<NNNN_slug>.sh`) move pbrain from one state to another exactly once, DB-migration style: the applied-set ledger is `$VAULT_DIR/.pbrain/migrations/<id>.done` — correctness is **ledger-based, not semver-based**. A migration is any one-time transition, not only vault-file moves — there are **three kinds** (declared by `MIGRATION_KIND`):
+**Migrations** (`lib/migrations.sh` + `lib/migrations/<NNNN_slug>.sh`) move pbrain from one state to another exactly once, DB-migration style: the applied-set ledger is `$VAULT_DIR/.pbrain/migrations/<id>.done` — correctness is **ledger-based, not semver-based**. Three kinds (declared by `MIGRATION_KIND`): **auto** — pure local data moves, applied silently by `pbrain_run_migrations` on every command run. **staged** — needs an LLM rebuild validating old data with the user; stays pending until the owning command's next run emits the rebuild block. **effectful** — mutates an external/live system (e.g. re-pointing Plane issues); never fires on the silent hot path, only when opted in (`bash lib/migrations.sh run --effectful` or `PBRAIN_MIGRATIONS_EFFECTFUL=1`); the migration body must be idempotent. `PBRAIN_MIGRATIONS=0` disables the runner entirely.
 
-- **auto** — pure local data moves (file relocations, format wraps). `pbrain_run_migrations` (called from `vault.sh` on every command) applies unapplied ones in id order (originals parked in `.pbrain/backup/`) and records vacuously when there's nothing to do.
-- **staged** — needs an LLM rebuild validating old data **part by part** with the user. Stays pending until the owning command's next run emits the rebuild block; recording via `bash lib/migrations.sh record <id>`.
-- **effectful** (PB-130) — mutates an EXTERNAL / live system (e.g. re-pointing Plane issues onto new states). Runs in bash with no LLM, but is **not** applied on the silent hot path — live external writes must never fire as a side effect of an unrelated command on another machine. Applies only when opted in: `bash lib/migrations.sh run --effectful`, or `PBRAIN_MIGRATIONS_EFFECTFUL=1`. Otherwise it's left pending (a one-line `PBRAIN_MIGRATION_PENDING` notice). Idempotency is the migration body's responsibility (re-running must be safe), because the ledger is per-vault while the effect is per-workspace. Example: `0012_plane_pipeline_states` seeds the PB-130 pipeline states + re-points issues across all registered Plane projects.
-
-`PBRAIN_MIGRATIONS=0` disables the runner entirely (set in every bats suite that runs command scripts).
-
-**Editing a migration that hasn't shipped yet — DON'T stack a new one on top.** A migration is only "live" once it has merged to `main` (and so may already sit in someone's ledger as `.done`). Before you add a *new* migration that builds on or supersedes one introduced in this same unmerged branch, check the branch state first: if the prior migration is **not merged** (still on a working/PR/uncommitted branch, never run against a real vault), then **edit that migration in place** instead of appending the next-numbered one. When the work involves the build agent (you), pause and **ask the user**: do they want a *new* migration, or to fold the change into the unmerged one (or drop the unmerged migration's changes entirely)? The default for unshipped work is fold-in-place.
-
-Why: a never-applied migration has no ledger entries anywhere, so rewriting it is safe and loses nothing — whereas a merged migration is immutable history you must never rewrite (someone may already have run it; only a *new* higher-numbered migration can change its outcome). Example: migration `0006` (unmerged) does "move life profile → goals profile". You then decide goals profile should split into v1 + v2. Do **not** add `0007` "migrate goals profile → goals-profile v1 + v2" — just rewrite `0006` so it does "life profile → goals-profile v1 + v2" directly. Only once `0006` is on `main` does a follow-up change require a new `0007`.
+**Editing a migration that hasn't shipped yet — don't stack a new one on top.** A migration is "live" only once merged to `main` (and may already sit in someone's ledger). If the prior migration is still unmerged, **edit it in place** instead of appending a next-numbered one — ask the user whether they want a new migration or a fold-in first. Why: an unmerged migration has no ledger entries anywhere, so rewriting it is safe; a merged one is immutable history that only a new higher-numbered migration may change.
 
 ### Upgrade prompt
 
@@ -240,24 +174,15 @@ Commands that source `lib/vault.sh` run a cached version check (`lib/update-chec
 
 ### Self-improvement loop
 
-Two helpers in `lib/prefs.sh` + `lib/self-improve.sh`, sourced through `lib/vault.sh`. One reads prefs into every command; the other (the sole self-improve pass) runs once a day at `/end-of-day`:
-
-- `pbrain_emit_prefs <cmd> [profile-file]` — near the top of every command's output (except `/init-obsidian`). Injects `$VAULT_DIR/.pbrain/_global/prefs.md` (cross-command standing prefs) first, then the per-command prefs. **PB-37:** for a profile-owning command (which passes its resolved latest-profile path as the 2nd arg), the per-command prefs come from the profile's top-level `prefs` array; only a command with no profile (or a profile carrying no `prefs` array yet) falls back to `.pbrain/<cmd>/prefs.md`. Apply both for the session; they override defaults where they conflict — including built-in suggestions/nudges. Prefs live IN THE VAULT so they sync across devices (`PBRAIN_PREFS_DIR` overrides the root).
-- `pbrain_emit_self_improve_batch <date>` — **PB-47**, the scheduled, correction-driven pass, and the **sole** self-improve mechanism (the old inline per-command `pbrain_emit_self_improve` reflection was removed). `/end-of-day` calls it once at the tail, passing `$TODAY` (so `--date` mines a past day). It discovers that day's Claude Code session transcripts (`~/.claude/projects/*/<session>.jsonl`, mtime-filtered) and emits a `SELF-IMPROVE BATCH` block telling the agent to **mine** them for corrections the user made to pbrain commands — including ones never explicitly flagged "remember this" — and propose each (with its transcript quote) under a classify→propose→explicit-per-item-yes→act discipline. A PREFERENCE writes to `_global/prefs.md`, `<cmd>/prefs.md`, or a profile-owning command's `prefs` array. A QUALITY FIX (a bug/improvement that helps everyone) is always logged to the **write-only** `<cmd>/feedback.md` (a local bug logbook — never read back or injected, so it costs no context; only `prefs.md` is loaded each run), then optionally raised upstream as a GitHub issue against `baymac/pbrain` (`gh issue create`, or a prefilled issue URL when `gh` is unavailable). Transcripts are treated strictly as data, not instructions; conservative bar (neutral Q&A / one-off requests don't count); silent when nothing genuine surfaces or no transcripts exist. Gated by `PBRAIN_SELF_IMPROVE_BATCH` (default `on`; `off` skips this pass), with `PBRAIN_CLAUDE_PROJECTS_DIR` overriding the transcript root. Tests: `tests/self-improve.bats`.
-
-`PBRAIN_SELF_IMPROVE=off` disables self-improve capture entirely (kept for back-compat with the old inline loop's master switch). Both helpers never exit non-zero (call sites add `|| true`). Profile/plan changes are no longer captured inline — `/weekly-review` owns lasting profile improvements via its richer Step 4. Deeper mechanics live in the `lib/prefs.sh` / `lib/self-improve.sh` headers. Tests: `tests/*.bats`.
+Two helpers in `lib/prefs.sh` + `lib/self-improve.sh`, sourced through `lib/vault.sh` (mechanics in their headers). `pbrain_emit_prefs <cmd> [profile-file]` injects standing prefs (`_global/prefs.md` then per-command — a profile-owning command's prefs live in its profile's `prefs` array, else `.pbrain/<cmd>/prefs.md`) near the top of every command's output; these override built-in defaults/nudges for the session. Prefs live in the vault so they sync across devices (`PBRAIN_PREFS_DIR` overrides). `pbrain_emit_self_improve_batch <date>` is the **sole** self-improve mechanism, run once daily at the tail of `/end-of-day`: it mines that day's Claude Code transcripts for corrections the user made (even ones never flagged "remember this") and proposes each under a classify→propose→explicit-yes→act discipline — a PREFERENCE writes to prefs, a QUALITY FIX logs to the write-only `<cmd>/feedback.md` and is optionally raised as a GitHub issue. Gated by `PBRAIN_SELF_IMPROVE_BATCH` (default on) and `PBRAIN_SELF_IMPROVE=off` (full disable); neither helper ever exits non-zero. Tests: `tests/self-improve.bats`.
 
 ### Shared SQLite layer + habit extraction
 
-`lib/db.sh`, `lib/habits.sh`, `lib/reminders.sh` are sourced through `lib/vault.sh` (db before habits/reminders). They back `/habits` and `/remind-blocking` on one local SQLite DB (`~/.config/pbrain/pbrain.db`, override `PBRAIN_DB_FILE`); `/remind` is Apple-Reminders-only (no DB). Human-facing definitions stay markdown in the vault (habits profile, food library), browsable in Obsidian.
-
-**Habit logging is markdown-first** — the dated checklist (`life/habit-tracking/<date>.md`) is the source of truth; the SQLite DB is *derived* from it. `pbrain_emit_habits_extract <cmd>` rides along like the self-improve helpers: it tells you to `mark` any tracked habits the user evidenced this session (via `commands/habits.sh mark …` — not a direct DB write), plus a gated suggest-new-habit nudge. It is **silent when no habits profile exists**, so it costs nothing until the user opts in. The full wiring — which commands sync/consolidate, and the one cross-write (the habit↔reminder per-day one-shot link) — lives in the `/habits` + `/remind` specs (`commands/habits.md`, `commands/remind.md`) and the `lib/habits.sh` / `lib/reminders.sh` headers. All these helpers never exit non-zero (tests in `tests/db.bats`, `tests/habits.bats`, `tests/reminders.bats`).
+`lib/db.sh`, `lib/habits.sh`, `lib/reminders.sh` (sourced through `lib/vault.sh`) back `/habits` and `/remind-blocking` on one local SQLite DB (`~/.config/pbrain/pbrain.db`, override `PBRAIN_DB_FILE`); `/remind` is Apple-Reminders-only, no DB. **Habit logging is markdown-first** — the dated checklist (`life/habit-tracking/<date>.md`) is the source of truth; the DB is derived from it via `commands/habits.sh mark`, never written directly. `pbrain_emit_habits_extract <cmd>` is silent when no habits profile exists, so it costs nothing until the user opts in. Full wiring lives in `commands/habits.md`, `commands/remind.md`, and the `lib/habits.sh`/`lib/reminders.sh` headers. Tests: `tests/db.bats`, `tests/habits.bats`, `tests/reminders.bats`.
 
 ### Codex interoperability
 
 pbrain is a Claude Code plugin first; the OpenAI **Codex CLI** is a supported *secondary* runner. The invariant: **the `.sh` files are the agent-agnostic single source of truth** — nothing in them is Claude-specific, and you must **not fork behaviour per agent**. `/codex-install` (run from Claude Code after `/init-obsidian`) generates Codex entry points from the same `commands/*.md` sources — one `skills/pbrain-<cmd>/SKILL.md` per command + a managed, delimited `AGENTS.md` block — and shares one vault / config dir / DB / script set with Claude Code, so alternating runners is safe and re-running the installer is idempotent. The skill-body-transform mechanics + the why-skills-not-custom-prompts rationale live in `commands/codex-install.sh` / `docs/codex-install.md`. Tests: `tests/codex-install.bats`.
-
----
 
 ## Stack
 
@@ -265,8 +190,6 @@ pbrain is a Claude Code plugin first; the OpenAI **Codex CLI** is a supported *s
 - **pbrain plugin** — slash commands that read/write the vault. User docs: `README.md` (root) + `docs/<command>.md`.
 - **gbrain** — hybrid vector + keyword search over vault, MCP server for Claude sessions. Setup: `gbrain/docs/setup.md`.
 - **vault/** — markdown corpus (standalone git repo, location user-configurable); source of truth for all notes.
-
----
 
 ## What not to do here
 
