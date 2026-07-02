@@ -171,13 +171,8 @@ pub fn run() {
             // Native "Reload" menu item (PB-156): View > Reload, Cmd+R.
             // Plane's own DOM is out of bounds (no injected on-page button),
             // so the manual-refresh control lives in the native menu instead.
-            let reload_item = MenuItem::with_id(
-                app,
-                RELOAD_MENU_ID,
-                "Reload",
-                true,
-                Some("CmdOrCtrl+R"),
-            )?;
+            let reload_item =
+                MenuItem::with_id(app, RELOAD_MENU_ID, "Reload", true, Some("CmdOrCtrl+R"))?;
             let view_menu = Submenu::with_items(app, "View", true, &[&reload_item])?;
             let app_menu = Submenu::with_items(
                 app,
