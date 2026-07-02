@@ -1171,6 +1171,9 @@ EOF
   [[ "$output" == *"pre-anchor"*"morning gap"* ]]
   # work must never drop a real meal (dinner) to fit a block
   [[ "$output" == *"Dropping DINNER"* ]] || [[ "$output" == *"drop an anchor"* ]]
+  # a meal colliding with an activity SHIFTS after it, never vanishes
+  [[ "$output" == *"MEAL-vs-ACTIVITY COLLISION"* ]]
+  [[ "$output" == *"mega-block over a meal"* ]]
 }
 
 @test "SESSION places the snack ~1-2 blocks after lunch, before dinner" {

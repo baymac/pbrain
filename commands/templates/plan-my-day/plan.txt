@@ -383,7 +383,14 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
             work blocks from the EARLIEST available slot. "Work first" means work
             beats OPTIONAL rest inside a gap — it must NEVER displace, shorten, or
             drop an anchor. Dropping DINNER (or the walk, or any real meal) to fit
-            another block is a VIOLATION. Do include a pre-anchor MORNING gap: if
+            another block is a VIOLATION. MEAL-vs-ACTIVITY COLLISION: when a real
+            meal's slot overlaps a fixed activity (e.g. LUNCH 14:30 vs a 14:30 gym),
+            SHIFT the meal to right after the activity's combined block + settle —
+            it must still APPEAR (lunch after a 14:30–16:30 gym + 30-min settle lands
+            ~17:00). NEVER let a work block swallow the meal's slot: a 3-hour
+            mega-block over a meal window is doubly wrong (blocks are fixed
+            session_length; the meal must be there). Every real meal from
+            diet_meal_times appears exactly once. Do include a pre-anchor MORNING gap: if
             there is time between the end of the backfill/wake gap and the first
             fixed anchor (e.g. 13:30→14:30 before a 14:30 gym), put a work block
             there — full if it fits, else trimmed to butt the anchor — never leave
