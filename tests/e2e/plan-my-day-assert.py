@@ -306,6 +306,11 @@ if meal_times and rows:
     # whose typical_day block note says "skip if wake after HH:MM" is not flagged
     # when today's wake (span_start) is past that time.
     for slot, t in meal_times.items():
+        # The SNACK is a BREAK, not a counted meal (plan-my-day rule 5): it is placed
+        # by judgment as a flex break, not pinned to its diet-profile time, so it is
+        # NOT part of keep_meal_count. Don't flag it as a "missing meal".
+        if slot.strip().lower() == "snack":
+            continue
         try:
             mt = mins(t)
         except Exception:
