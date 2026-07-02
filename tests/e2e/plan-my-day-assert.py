@@ -348,6 +348,14 @@ for b in blocks:
         continue
     nxt = rows[b["idx"] + 1] if b["idx"] + 1 < len(rows) else None
     abuts_anchor = bool(nxt) and classify(nxt[2], nxt[3]) in ("anchor", "winddown")
+    # A short block that ends the work run right before a fixed anchor is a legit
+    # anchor-trim even when a single BREAK bridges the two (block -> break ->
+    # gym/meal/wind-down). The break is the pre-anchor rest; the block was trimmed
+    # to butt that window, not "shrunk for no reason". See it through one break.
+    if not abuts_anchor and nxt and classify(nxt[2], nxt[3]) == "break":
+        after = rows[b["idx"] + 2] if b["idx"] + 2 < len(rows) else None
+        if after and classify(after[2], after[3]) in ("anchor", "winddown"):
+            abuts_anchor = True
     is_last = (b["idx"] == last_work_idx)
     label = b["action"][:32]
     if b["dur"] > sess:
