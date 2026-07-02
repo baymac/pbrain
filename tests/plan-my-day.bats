@@ -1078,3 +1078,49 @@ EOF
   PBRAIN_TODAY_OVERRIDE=not-a-date run PMD plan --continue
   [[ "$output" == *"date: $TODAY"* ]]
 }
+
+# --- PB-165: work-first layout, rest-never-stacks, snack-is-a-break ----------
+@test "SESSION instructions declare SEVEN hard rules (not five)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"SEVEN HARD RULES"* ]]
+  [[ "$output" != *"FIVE HARD RULES"* ]]
+}
+
+@test "SESSION reclassifies the snack as a break, not a counted meal" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"SNACK IS A BREAK"* ]]
+  # keep_meal_count is scoped to real meals only
+  [[ "$output" == *"Starter/Breakfast/Lunch/Dinner"* ]]
+  # snack is not pinned to the diet profile's Snack clock time
+  [[ "$output" == *"pinned to the diet profile's Snack clock time"* ]]
+}
+
+@test "SESSION forbids stacked rest rows (rule 6)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"REST NEVER STACKS"* ]]
+}
+
+@test "SESSION pulls work forward into the earliest gaps (rule 7)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"WORK FIRST"* ]]
+  # the operational bullet names the pre-anchor morning gap explicitly
+  [[ "$output" == *"pre-anchor"*"morning gap"* ]]
+}
+
+@test "SESSION places the snack ~1-2 blocks after lunch, before dinner" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"PLACED BY JUDGMENT"* ]]
+  # "after ... lunch" and "... dinner" wording (may wrap across the rule box)
+  [[ "$output" == *"after"*"lunch"* ]]
+  [[ "$output" == *"BEFORE dinner"* ]] || [[ "$output" == *"before dinner"* ]]
+}
