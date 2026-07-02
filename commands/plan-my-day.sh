@@ -638,6 +638,31 @@ PYEOF
 )"
 [[ -n "${FITNESS_SLEEP//[[:space:]]/}" ]] || FITNESS_SLEEP="(not recorded — ask the user)"
 
+# Readiness check-in (energy / soreness / stress) recorded by today's fitness
+# check-in — plan-my-day READS these to CONFIRM (never re-ask) in the backfill turn.
+FITNESS_CHECKIN="$(python3 - "$FITNESS_DIR/$TODAY.md" <<'PYEOF' 2>/dev/null || true
+import re, sys
+try:
+    with open(sys.argv[1]) as fh:
+        head = fh.read(2000)
+except Exception:
+    sys.exit(0)
+m = re.match(r"^---\n(.*?)\n---", head, re.DOTALL)
+if not m:
+    sys.exit(0)
+fm = m.group(1)
+out = []
+for key in ("energy", "soreness", "stress"):
+    km = re.search(r"^" + key + r":\s*(.+?)\s*$", fm, re.MULTILINE)
+    if km:
+        val = km.group(1).strip()
+        if val and val not in ("''", '""'):
+            out.append(f"{key}={val}")
+print(" ".join(out))
+PYEOF
+)"
+[[ -n "${FITNESS_CHECKIN//[[:space:]]/}" ]] || FITNESS_CHECKIN="(no readiness check-in recorded — ask the user)"
+
 # Today's CHOSEN fitness activity, from the fitness entry's `focus:` frontmatter
 # field (the workout the user actually logged for today — may differ from what
 # the schedule says). Drives the deterministic habit-reminder reconciliation
@@ -1110,6 +1135,7 @@ habits_track_created: $HABITS_TRACK_CREATED
 laptop_tracking_state: $LAPTOP_TRACKING_STATE
 laptop_tracking_cmd: $LAPTOP_CMD
 fitness_sleep: $FITNESS_SLEEP
+fitness_checkin: $FITNESS_CHECKIN   # energy/soreness/stress from today's fitness check-in — CONFIRM these in the backfill turn, do NOT re-ask energy
 diet_meal_times: $DIET_MEAL_TIMES
 diet_today_exists: $DIET_TODAY_EXISTS
 gratitude_today_exists: $GRATITUDE_TODAY_EXISTS

@@ -1182,6 +1182,9 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   sleep_wake: {HH:MM or blank}
   sleep_quality: {1-10 or blank}
   sleep_hours: {X.X or blank}
+  energy: {1-10 from the check-in, or blank — plan-my-day reads this to avoid re-asking}
+  soreness: {short note from the check-in, or blank}
+  stress: {low|medium|high from the check-in, or blank}
   tags: []
   ---
 
@@ -1190,8 +1193,12 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   {WHEN LINE — if the user stated a session time (e.g. "gym at 2:30pm",
    "swim at 7"), write it here on its own line as "**When** HH:MM" (24h), e.g.
    "**When** 14:30". plan-my-day reads this to anchor the day's combined activity
-   block (commute + session + commute). OMIT the line entirely when no time was
-   given — never invent one (same never-fabricate rule as sleep).}
+   block (commute + session + commute).
+   PLANNING a session with NO time given → ASK ONCE: "What time do you want to
+   start — e.g. what time are you heading to the gym?" and write their answer as
+   the When line. Only omit the line if they decline / genuinely don't know yet.
+   (For a session being LOGGED as already DONE with no time, don't ask and don't
+   fabricate — omit, same never-fabricate rule as sleep.)}
 
   {KPI summary line of the values that exist (LOGGED if present, else PLANNED),
    e.g. "**Distance** 2.0 km · **Duration** 47 min". Omit the line if nothing
@@ -1252,15 +1259,15 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   sleep_wake: {HH:MM or blank}
   sleep_quality: {1-10 or blank}
   sleep_hours: {X.X or blank}
+  energy: {1-10 from the check-in, or blank — plan-my-day reads this to avoid re-asking}
+  soreness: {short note from the check-in, or blank}
+  stress: {low|medium|high from the check-in, or blank}
   tags: []
   ---
 
   # {gym: Day {letter} — {Focus}   |   non-gym: {Activity} — $TODAY}
   {gym only: **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min}
-  {WHEN LINE (gym) — if the user stated a session time (even a planned-ahead one), you MUST write it here on its own line as "**When** HH:MM" (24h), e.g. "**When** 14:30". REQUIRED whenever a time is known — plan-my-day anchors the combined activity block from it, and omitting it forces plan-my-day to re-ask. OMIT only when NO time was given; never invent one.}
-  {WHEN LINE — if the user stated a session time, write it here as "**When** HH:MM"
-   (24h), e.g. "**When** 14:30". plan-my-day anchors the day's combined activity
-   block from this. OMIT when no time was given — never invent one.}
+  {WHEN LINE (gym) — write the session time on its own line as "**When** HH:MM" (24h), e.g. "**When** 14:30", whenever a time is known. This is a GENERATED (planned-ahead) gym session, so if the user did NOT give a time, ASK ONCE — "What time are you heading to the gym?" — and write their answer here. plan-my-day anchors the combined activity block from it; omitting it forces plan-my-day to re-ask, so capture it here. Only omit if the user declines / doesn't know yet; never invent a time.}
 
   > {one coaching note tied to today's state — RPE / fatigue / mindset cue; mention
      the gap band if it is not normal. 1-2 sentences.}

@@ -644,3 +644,26 @@ EOF
   [[ "$output" == *"day_of_week: Wed"* ]]
   [[ "$output" == *"Wednesday, July 1, 2026"* ]]
 }
+
+# --- PB-165: ask the gym time when planning a session with none given --------
+@test "planning a gym session with no time given instructs asking the time" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  # the generated-gym WHEN-line instruction tells the agent to ASK the time
+  [[ "$output" == *"What time are you heading to the gym"* ]]
+}
+
+@test "session frontmatter persists energy/soreness/stress for plan-my-day" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"energy: {1-10 from the check-in"* ]]
+  [[ "$output" == *"soreness:"* ]]
+  [[ "$output" == *"stress:"* ]]
+}

@@ -1080,12 +1080,43 @@ EOF
 }
 
 # --- PB-165: work-first layout, rest-never-stacks, snack-is-a-break ----------
-@test "SESSION instructions declare SEVEN hard rules (not five)" {
+@test "SESSION instructions declare EIGHT hard rules (not five/seven)" {
   write_goals_profile
   write_libraries
   run PMD plan --continue
-  [[ "$output" == *"SEVEN HARD RULES"* ]]
+  [[ "$output" == *"EIGHT HARD RULES"* ]]
   [[ "$output" != *"FIVE HARD RULES"* ]]
+  [[ "$output" != *"SEVEN HARD RULES"* ]]
+}
+
+@test "SESSION forbids invented pre-activity/filler rows (rule 8)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"NO INVENTED ROWS"* ]]
+  # no wrap-up / head-out / prep row before a fitness block
+  [[ "$output" == *"wrap up / head out"* ]]
+  [[ "$output" == *"travel is ALREADY inside commute_before"* ]]
+}
+
+@test "SESSION lays a single combined routine+breakfast row on a late wake" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"ONE combined row"* ]] || [[ "$output" == *"SINGLE"*"COMBINED row"* ]]
+  [[ "$output" == *"Morning routine + breakfast"* ]]
+  # explicitly NOT two rows / not 90 min
+  [[ "$output" == *"NOT two rows"* ]] || [[ "$output" == *"not two rows"* ]]
+}
+
+@test "SESSION reads/confirms fitness check-in energy, does not re-ask" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"DO NOT RE-ASK"* ]]
+  [[ "$output" == *"fitness_checkin"* ]]
+  # the old standalone energy ask is gone
+  [[ "$output" != *"how's the energy — rough"* ]]
 }
 
 @test "SESSION reclassifies the snack as a break, not a counted meal" {

@@ -154,8 +154,12 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     it into time ranges YOURSELF, marked ✓ — gap-free, no overlaps, from wake
     time to now. Fill unexplained spans with honest rest/transition rows. Do
     NOT interrogate them range by range — you place things, they correct.
-    Fold a light energy read into this turn ("and how's the energy — rough
-    number out of 10?").
+    ENERGY — DO NOT RE-ASK. The fitness-journal check-in already collected
+    energy (and soreness/stress) today; read it from `fitness_checkin` above
+    and just CONFIRM it in one line ("your fitness check-in has energy 5/10 —
+    using that; say if it's changed"), do NOT ask "how's the energy out of 10?"
+    again. Only ask fresh if `fitness_checkin` shows no energy (missing fitness
+    journal, or no energy recorded).
   1b.5 — TODAY'S SHAPE (skeleton + variation detection). Read
     `typical_day_present` above.
     • If `no`: there is no STRUCTURED typical_day template — but the plans
@@ -250,15 +254,17 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            match + commute", 23:30–00:00 settle (shower+prep), 00:00–00:30 Dinner,
            then wind-down → sleep. NO prep row before 20:30; dinner is NOT dropped.)
          - Late wake-up (today's wake from 1a is later than the template's wake
-           slot): shift the timeline later. On a wake AFTER 11:00, COMPRESS the
-           morning to a 1-HOUR run before the first work block = 30 min morning
-           routine (HALVE the normal wake-to-work gap, 60 → 30) + 30 min
-           breakfast (KEPT at 30). Breakfast is NOT dropped and the routine is
-           NOT skipped — the routine is what halves. First work block starts at
-           wake + 60 min. (On a normal wake, keep the full
-           variation_rules.min_wake_to_work_gap_min wake gap + breakfast as the
-           skeleton states — read the profile value, never assume 30; it is the
-           wake gap on EVERY day, not only late-wake ones.)
+           slot): shift the timeline later. On a wake AFTER 11:00, emit a SINGLE
+           COMBINED row "Morning routine + breakfast" of 60 min total (30 min
+           routine + 30 min breakfast folded into ONE row) before the first work
+           block — NOT a full 60-min routine followed by a separate breakfast
+           row, and NOT two rows. Breakfast is folded in, not dropped; the full
+           wake gap halves so routine+breakfast together == 60 min. First work
+           block starts at wake + 60 min. (On a NORMAL wake, keep the full
+           variation_rules.min_wake_to_work_gap_min wake gap as its own row + a
+           SEPARATE breakfast row as the skeleton states — read the profile
+           value, never assume 30; it is the wake gap on EVERY day, not only
+           late-wake ones. The single-combined-row form is late-wake ONLY.)
          - Invariants every day: keep the REAL-meal COUNT (keep_meal_count =
            Starter/Breakfast/Lunch/Dinner; the SNACK is a break, not a counted
            meal — see rule 5); no INVENTED stacked rest, but profile fixed rest
@@ -281,7 +287,7 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
          moved to X for the 3pm call, lunch nudged to Y. Good, or change it?"
       Carry this skeleton into 1c (it defines the fixed/flex gaps work fills).
   1c — FOCUS HOURS. Do NOT ask the user how many focused hours they want.
-    ┌─ SEVEN HARD RULES (the plan is WRONG if any is broken) ───────────────┐
+    ┌─ EIGHT HARD RULES (the plan is WRONG if any is broken) ───────────────┐
     │ 1. EVERY work block is EXACTLY session_length_min minutes long (e.g.   │
     │    90). NOT 120, not 60. To use more time, add ANOTHER block — never   │
     │    make a block longer. A block is shorter ONLY when trimmed to butt   │
@@ -319,6 +325,14 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     │    fit a block is a VIOLATION. The first block lands as early as the   │
     │    anchors allow; a long idle run right after a big anchor is the only │
     │    thing "pull work forward" fixes.                                    │
+    │ 8. NO INVENTED ROWS. Emit ONLY rows the user gave, the backfill needs, │
+    │    or the profile/skeleton defines. NEVER synthesize a filler/prep row │
+    │    the user didn't ask for — in particular NO "wrap up / head out /    │
+    │    prep / kit up / get-ready / pre-activity settle" row BEFORE a       │
+    │    fitness block: travel is ALREADY inside commute_before. The only    │
+    │    activity-adjacent rows are the commute-bundled COMBINED block, then │
+    │    the configured post_home_settle (shower/settle, AFTER), then the    │
+    │    meal. Work runs to the combined block's start with nothing between. │
     └───────────────────────────────────────────────────────────────────────┘
     DERIVE the available focus hours from today's skeleton: the gaps the LIFE
     anchors leave (typical_day work segments + variation_rules + daily_anchors),
@@ -516,10 +530,11 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
      real time. The plan spans wake → bed.
      WAKE / MORNING ROUTINE: the first row is a wake + morning-routine block of
      variation_rules.min_wake_to_work_gap_min (e.g. 60 min) — the full slow start
-     before any work, not a token 30. EXCEPTION — late wake (after 11:00): halve
-     the routine to 30 min and KEEP breakfast at 30, so routine(30)+breakfast(30)
-     = a 1-hour morning before the first block. Do NOT drop breakfast; the
-     routine is what shrinks.
+     before any work, not a token 30 — followed by a SEPARATE breakfast row.
+     EXCEPTION — late wake (after 11:00): emit ONE combined row "Morning routine +
+     breakfast" of 60 min total (routine 30 + breakfast 30 folded together), NOT
+     a 60-min routine plus a separate breakfast and NOT two rows. Breakfast is
+     folded in, not dropped; the first block starts at wake + 60 min.
      HONOR PER-BLOCK NOTES: each typical_day block may carry a `notes` field with
      conditional guidance (e.g. "shorten when tired", "fold prep into this block,
      no separate row"). READ each block's notes and apply them when the stated
@@ -563,7 +578,7 @@ Step 2 — Generate the full day plan draft in memory (do NOT write to disk yet)
   day_of_week: $DOW
   week_period: $ISO_WEEK
   status: planned
-  energy: {1-10 from 1b}
+  energy: {1-10 — from `fitness_checkin` (confirmed), or from 1b only if none recorded}
   sleep_hours: {from fitness_sleep or 1a — omit if unknown}
   focus_today: [{the current_focus item names today's blocks tie back to — empty array if none}]
   tags: []
