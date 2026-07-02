@@ -310,11 +310,15 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
     │    post-activity settle) is ALWAYS kept at its set length — it is NOT  │
     │    "stacked rest." settle → lunch → profile nap is all legal; what's   │
     │    banned is adding a SECOND, invented break beside one of them.       │
-    │ 7. WORK FIRST. Fill EVERY usable gap with full work blocks starting    │
-    │    from the earliest available slot (incl. a pre-anchor morning gap,   │
-    │    e.g. 13:30–14:30 before gym). The FIRST focus block lands as early  │
-    │    as the anchors allow. A long non-work run right after a big fixed   │
-    │    anchor (gym/settle/lunch) is a VIOLATION — pull work forward.       │
+    │ 7. WORK FILLS THE GAPS ANCHORS LEAVE. Place ALL anchors FIRST — every  │
+    │    real meal (incl. DINNER), the fitness block, the walk, the profile  │
+    │    nap, wind-down, bed — then fill the REMAINING gaps with full work   │
+    │    blocks from the earliest slot (incl. a pre-anchor morning gap, e.g. │
+    │    13:30–14:30 before gym). "Work first" means work BEATS optional rest│
+    │    in a gap — it NEVER displaces or drops an anchor. Dropping a meal to│
+    │    fit a block is a VIOLATION. The first block lands as early as the   │
+    │    anchors allow; a long idle run right after a big anchor is the only │
+    │    thing "pull work forward" fixes.                                    │
     └───────────────────────────────────────────────────────────────────────┘
     DERIVE the available focus hours from today's skeleton: the gaps the LIFE
     anchors leave (typical_day work segments + variation_rules + daily_anchors),
@@ -357,16 +361,21 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
             ≤`max` break if one is warranted. The meal/rest itself is the rest —
             a flex break right before a long meal shrinks toward `min` (or drops
             entirely) and the time becomes work, never a double-rest.
-          · WORK FIRST — PULL IT FORWARD (hard rule 7). Before laying any
-            optional rest, fill EVERY usable gap with full work blocks starting
-            from the EARLIEST available slot. That explicitly includes a
-            pre-anchor MORNING gap: if there is time between the end of the
-            backfill/wake gap and a fixed anchor (e.g. 13:30→14:30 before a
-            14:30 gym), put a work block there — a full block if it fits, else a
-            block trimmed to butt the anchor — never leave it empty. The FIRST
-            focus block of the day must land as early as the anchors allow. A
-            long INVENTED non-work run right AFTER a big fixed anchor is a
-            VIOLATION: do not pad the afternoon with extra optional breaks. (A
+          · WORK FILLS THE GAPS ANCHORS LEAVE (hard rule 7). FIRST lay ALL of
+            today's anchors onto the timeline — every real meal (breakfast if
+            kept, lunch, DINNER, any starter/snack-as-break), the fitness
+            combined block + its settle, the profile post-lunch nap, the walk,
+            wind-down and bed. THEN fill the gaps BETWEEN those anchors with full
+            work blocks from the EARLIEST available slot. "Work first" means work
+            beats OPTIONAL rest inside a gap — it must NEVER displace, shorten, or
+            drop an anchor. Dropping DINNER (or the walk, or any real meal) to fit
+            another block is a VIOLATION. Do include a pre-anchor MORNING gap: if
+            there is time between the end of the backfill/wake gap and the first
+            fixed anchor (e.g. 13:30→14:30 before a 14:30 gym), put a work block
+            there — full if it fits, else trimmed to butt the anchor — never leave
+            it empty. The FIRST focus block lands as early as the anchors allow; a
+            long INVENTED idle run right AFTER a big anchor is the only thing
+            "pull work forward" fixes — do not pad with extra optional breaks. (A
             PROFILE-DEFINED fixed rest — the post-activity settle and the
             typical_day post-lunch nap — is NOT padding: keep it; work resumes
             right after it.)

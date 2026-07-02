@@ -1131,13 +1131,15 @@ EOF
   [[ "$output" != *"skip breakfast"* ]]
 }
 
-@test "SESSION pulls work forward into the earliest gaps (rule 7)" {
+@test "SESSION fills gaps with work but places anchors first, never dropping a meal (rule 7)" {
   write_goals_profile
   write_libraries
   run PMD plan --continue
-  [[ "$output" == *"WORK FIRST"* ]]
+  [[ "$output" == *"WORK FILLS THE GAPS ANCHORS LEAVE"* ]]
   # the operational bullet names the pre-anchor morning gap explicitly
   [[ "$output" == *"pre-anchor"*"morning gap"* ]]
+  # work must never drop a real meal (dinner) to fit a block
+  [[ "$output" == *"Dropping DINNER"* ]] || [[ "$output" == *"drop an anchor"* ]]
 }
 
 @test "SESSION places the snack ~1-2 blocks after lunch, before dinner" {
