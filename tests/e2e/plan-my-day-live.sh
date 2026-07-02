@@ -329,7 +329,13 @@ d=json.load(open(sys.argv[1]))
 for i,a in enumerate(d.get("checkin_answers",[]),1):
     print(f"{i}. {a}")
 ' "$SCENARIO")"
-  local sname; sname="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("display","plan-my-day today replay"))' "$SCENARIO")"
+  local sname
+  if [[ "${CHAIN:-0}" == 1 ]]; then
+    sname="chain on real $TODAY data — journal → fitness → diet → plan-my-day (persona speaks the real facts, not a scripted scenario)"
+  else
+    sname="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("display","plan-my-day today replay"))' "$SCENARIO")"
+  fi
+  SCENARIO_LABEL="$sname"   # global, consumed by report()
   log "scenario: $sname"
 
   local skill_sys persona_sys convo turn skill_out persona_out
@@ -403,7 +409,11 @@ Reply with ONLY your in-character line."
   [[ "$n_answers" =~ ^[0-9]+$ ]] || n_answers=6
 
   convo=""
-  : >"$SANDBOX/transcript.ndjson"
+  # In chain mode the earlier legs (journal/fitness/diet) have already appended
+  # their turns to this transcript — APPEND the plan-my-day leg so the kept
+  # transcript holds the FULL four-leg agent-to-agent conversation. Only reset it
+  # when running the single-leg (non-chain) flow.
+  [[ "${CHAIN:-0}" == 1 ]] || : >"$SANDBOX/transcript.ndjson"
   log "conversation begins (skill model ↔ persona model)"
   local max_turns=12
   for ((turn=1; turn<=max_turns; turn++)); do
@@ -420,7 +430,7 @@ blocks per the policy and OUTPUT the finished plan wrapped in <PLAN>…</PLAN> n
 ${convo:-(none yet — open the check-in)}
 Your next turn:${nudge}" --model "$MODEL" --append-system-prompt "$skill_sys" 2>>"$SANDBOX/live.stderr")"
     [[ -n "$skill_out" ]] || { echo "skill model empty (turn $turn)" >&2; return 2; }
-    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"role":"skill","text":sys.stdin.read()}))' <<<"$skill_out")" >>"$SANDBOX/transcript.ndjson"
+    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"leg":"plan-my-day","role":"skill","text":sys.stdin.read()}))' <<<"$skill_out")" >>"$SANDBOX/transcript.ndjson"
     convo+="
 SKILL: $skill_out"
     # Did the skill emit the finished plan? Extract <PLAN>…</PLAN> and write it.
@@ -434,7 +444,7 @@ SKILL: $skill_out"
 $skill_out
 Your in-character reply:" --model "$MODEL" --append-system-prompt "$persona_sys" 2>>"$SANDBOX/live.stderr")"
     [[ -n "$persona_out" ]] || persona_out="(no reply)"
-    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"role":"persona","text":sys.stdin.read()}))' <<<"$persona_out")" >>"$SANDBOX/transcript.ndjson"
+    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"leg":"plan-my-day","role":"persona","text":sys.stdin.read()}))' <<<"$persona_out")" >>"$SANDBOX/transcript.ndjson"
     convo+="
 USER: $persona_out"
   done
@@ -494,7 +504,8 @@ report() {
   mkdir -p "$REPORT_DIR"
   local stamp out; stamp="$(date +%Y%m%d-%H%M%S)"; out="$REPORT_DIR/plan-my-day-live-$stamp.html"
   python3 "$HERE/plan-my-day-report.py" \
-    "$SANDBOX/transcript.ndjson" "$VERDICT_JSON" "$PLAN_FILE" "$SCENARIO" "$out"
+    "$SANDBOX/transcript.ndjson" "$VERDICT_JSON" "$PLAN_FILE" "$SCENARIO" "$out" \
+    "${SCENARIO_LABEL:-}"
   log "report: $out"
   [[ "$OPEN_REPORT" -eq 1 ]] && command -v open >/dev/null 2>&1 && open "$out"
   REPORT_PATH="$out"

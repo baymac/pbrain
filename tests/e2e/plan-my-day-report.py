@@ -3,11 +3,15 @@
 plan-my-day live e2e (PB-186).
 
 Inputs (argv):
-  1 transcript.ndjson  — one JSON object per line: {"role":"skill|persona","text":...}
+  1 transcript.ndjson  — one JSON object per line:
+                         {"leg":"journal|fitness-journal|diet-journal|plan-my-day",
+                          "role":"skill|persona","text":...}  (leg optional → plan-my-day)
   2 verdict JSON       — from the assert step (ok, problems, blocks, breaks, rows, ...)
   3 plan file          — the generated daily-planning markdown
   4 scenario JSON      — the morning-replay scenario (display, checkin_answers)
   5 out path           — where to write the HTML
+  6 label (optional)   — override the sub-title (chain mode passes the real-facts label,
+                         so the report never shows a stale scenario name)
 
 Self-contained: inline CSS, no external assets. Sections:
   - header + PASS/FAIL verdict + policy summary
@@ -19,6 +23,7 @@ Self-contained: inline CSS, no external assets. Sections:
 import html, json, sys, datetime
 
 tpath, vjson_path_or_str, plan_path, scen_path, out = sys.argv[1:6]
+label_override = sys.argv[6] if len(sys.argv) > 6 else ""
 
 def esc(s): return html.escape(str(s), quote=True)
 
@@ -54,18 +59,43 @@ blocks = verdict.get("blocks", [])
 breaks = verdict.get("breaks", [])
 rows = verdict.get("rows", [])
 
-# ---- conversation bubbles --------------------------------------------------
-bubbles = []
+# ---- conversation bubbles, grouped by leg ----------------------------------
+# The chain writes turns for every leg (journal → fitness → diet → plan-my-day)
+# into ONE transcript, each tagged with "leg". Group them so the report shows the
+# FULL agent-to-agent conversation, leg by leg, in order — not just plan-my-day.
+LEG_ORDER = ["journal", "fitness-journal", "diet-journal", "plan-my-day"]
+LEG_TITLE = {
+    "journal":        "① /journal — morning brain dump (sleep line feeds fitness)",
+    "fitness-journal":"② /fitness-journal — today's session + its time (feeds plan-my-day)",
+    "diet-journal":   "③ /diet-journal — today's meals (meal slots feed plan-my-day)",
+    "plan-my-day":    "④ /plan-my-day — reads the fresh fitness When + meal slots, lays the day",
+}
+def _leg_of(m): return m.get("leg") or "plan-my-day"
+
+legs_seen = []
 for m in convo:
-    role = m.get("role","")
-    text = (m.get("text") or "").strip()
-    who = "You" if role == "persona" else "plan-my-day"
-    side = "right" if role == "persona" else "left"
-    bubbles.append(
-        f'<div class="msg {side}"><div class="who">{esc(who)}</div>'
-        f'<div class="bubble {side}">{esc(text).replace(chr(10),"<br>")}</div></div>'
-    )
-convo_html = "\n".join(bubbles) or '<p class="none">(no conversation captured)</p>'
+    lg = _leg_of(m)
+    if lg not in legs_seen: legs_seen.append(lg)
+ordered_legs = [l for l in LEG_ORDER if l in legs_seen] + [l for l in legs_seen if l not in LEG_ORDER]
+
+multi_leg = len(ordered_legs) > 1
+sections = []
+for lg in ordered_legs:
+    bubbles = []
+    for m in convo:
+        if _leg_of(m) != lg: continue
+        role = m.get("role","")
+        text = (m.get("text") or "").strip()
+        who = "You" if role == "persona" else lg
+        side = "right" if role == "persona" else "left"
+        bubbles.append(
+            f'<div class="msg {side}"><div class="who">{esc(who)}</div>'
+            f'<div class="bubble {side}">{esc(text).replace(chr(10),"<br>")}</div></div>'
+        )
+    body = "\n".join(bubbles) or '<p class="none">(no turns captured for this leg — it may have written its file on the first turn)</p>'
+    hdr = f'<div class="leghdr">{esc(LEG_TITLE.get(lg, lg))}</div>' if multi_leg else ""
+    sections.append(f'{hdr}<div class="chat">{body}</div>')
+convo_html = "\n".join(sections) or '<p class="none">(no conversation captured)</p>'
 
 # ---- timeline --------------------------------------------------------------
 # Build a simple proportional timeline from the parsed rows.
@@ -158,12 +188,32 @@ check_table="".join(check_rows) or '<tr><td colspan="5" class="none">no blocks/b
 
 problems_html = ("<ul class='probs'>"+"".join(f"<li>{esc(p)}</li>" for p in problems)+"</ul>") if problems else "<p class='none'>none</p>"
 
-display = scen.get("display","plan-my-day — today replay")
+display = label_override or scen.get("display","plan-my-day — today replay")
 answers = scen.get("checkin_answers",[])
 answers_html = "".join(f"<li>{esc(a)}</li>" for a in answers) or "<li class='none'>(none)</li>"
 
 verdict_badge = ('<span class="badge pass">PASS</span>' if ok
                  else '<span class="badge fail">FAIL</span>')
+
+# Chain mode (>1 leg) vs the single plan-my-day replay: adapt the conversation
+# section so it never shows stale scripted-scenario framing.
+if multi_leg:
+    convo_heading = "Full agent ↔ agent conversation (every leg, in order)"
+    left_card = ('<div class="card"><h3>How the persona was driven</h3>'
+                 '<p style="font-size:13px;color:var(--mut);margin:0">No scripted scenario. '
+                 'Each leg\'s persona spoke the <b>real facts</b> extracted from that day\'s own '
+                 'vault files (rephrased naturally), then the file was reset and regenerated live.</p></div>')
+    proves_text = ("The chain is connected end to end: /journal recorded the night's sleep, "
+                   "/fitness-journal wrote today's real session <b>with its time</b>, and "
+                   "/plan-my-day then read that fresh <code>When</code> line + the diet meal slots "
+                   "to anchor the day — nothing about the schedule was supplied by hand.")
+else:
+    convo_heading = "Morning conversation (agent ↔ agent)"
+    left_card = (f'<div class="card"><h3>Your replayed check-in answers (scenario)</h3>'
+                 f'<ul>{answers_html}</ul></div>')
+    proves_text = ("The fitness time and meal slots were NOT supplied here — the skill pulled them "
+                   "from the copied fitness journal &amp; diet profile, exactly as a real morning "
+                   "run does. You only answered the check-in.")
 
 HTML = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -190,7 +240,10 @@ code{{background:var(--trk);padding:1px 6px;border-radius:5px;font:13px ui-monos
 .card h3{{margin:0 0 8px;font-size:14px;color:var(--mut);font-weight:600}}
 
 /* conversation */
-.chat{{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:16px}}
+.leghdr{{margin:20px 0 8px;font-size:13px;font-weight:700;color:var(--blu);
+letter-spacing:.2px}}
+.leghdr:first-child{{margin-top:0}}
+.chat{{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:6px}}
 .msg{{display:flex;flex-direction:column;margin:10px 0;max-width:80%}}
 .msg.left{{align-items:flex-start}} .msg.right{{align-items:flex-end;margin-left:auto}}
 .who{{font-size:11px;color:var(--mut);margin:0 6px 3px}}
@@ -271,14 +324,14 @@ footer{{color:var(--mut);font-size:12px;margin-top:40px;border-top:1px solid var
   {check_table}
 </table>
 
-<h2>Morning conversation (agent ↔ agent)</h2>
+<h2>{convo_heading}</h2>
 <div class="cols">
-  <div class="card"><h3>Your replayed check-in answers (scenario)</h3><ul>{answers_html}</ul></div>
+  {left_card}
   <div class="card"><h3>What this proves</h3>
-    <p style="font-size:13px;color:var(--mut);margin:0">The football time and meal slots were NOT supplied here — the skill pulled them from the copied fitness journal &amp; diet profile, exactly as a real morning run does. You only answered the check-in.</p>
+    <p style="font-size:13px;color:var(--mut);margin:0">{proves_text}</p>
   </div>
 </div>
-<div class="chat">{convo_html}</div>
+{convo_html}
 
 <h2>Generated plan — “Today at a glance”</h2>
 <pre>{esc(plan_md[:6000])}{'…(truncated)' if len(plan_md)>6000 else ''}</pre>
