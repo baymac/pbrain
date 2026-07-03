@@ -191,6 +191,31 @@ bash tests/e2e/plan-my-day-live.sh run --scenario tests/e2e/scenarios/plan-my-da
 PBRAIN_E2E_MODEL=claude-haiku-4-5-20251001 bash tests/e2e/plan-my-day-live.sh run  # cheaper smoke run
 ```
 
+### Chain mode (`--chain`, PB-165) — the CONNECTED pipeline on real today-data
+
+The default run replays a single fixed scenario against plan-my-day. **Chain mode**
+instead regenerates the user's *own real today-data* live, in dependency order —
+**journal → fitness-journal → diet-journal → plan-my-day** — so it exercises the
+actual linkage (fitness records a `**When**` time → plan-my-day anchors the day
+from it; journal sleep → fitness prefill). Each leg's persona is *inspired by facts
+extracted from that day's real files* (facts only, rephrased naturally), the outputs
+are reset so each regenerates, and plan-my-day is asserted against the regenerated
+data — no invented scenario.
+
+```
+# Run the chain on a specific day (e.g. a day whose data straddled midnight):
+bash tests/e2e/plan-my-day-live.sh run --chain --date 2026-07-01 --no-open
+PBRAIN_E2E_CHAIN=1 PBRAIN_TODAY_OVERRIDE=2026-07-01 bash tests/e2e/plan-my-day-live.sh run
+```
+
+`--date` / `PBRAIN_TODAY_OVERRIDE` pins the day; the commands honor the same
+override so the whole chain is internally consistent (weekday derived from the
+pinned date, wall-clock time unchanged). Pieces added for chain mode:
+`plan-my-day-chain.bash` (the leg orchestrator) and `plan-my-day-facts.py` (the
+read-only fact extractor). The snapshot/fake-reminders/plane-disable safety is
+unchanged — the real vault is never touched, and all temp cleanup goes through a
+guarded `_safe_rmrf` (refuses empty/non-temp paths).
+
 It applies migrations 0015 (break band + fixed-block policy) and 0016 (diet
 meal durations + post-meal nap) on the copy, so the assert enforces: fixed
 work blocks, breaks within break_minutes min..max, meals capped at their

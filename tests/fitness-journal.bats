@@ -355,11 +355,13 @@ EOF
   write_gym_activity_profile "$DOW"
   run FIT
   # Step 1 must carve sleep out of the skip: the check-in is skippable, the one
-  # sleep line is not, and it is asked once and never force-filled or invented.
+  # sleep line is not, and it is surfaced once and never force-filled or invented.
+  # (PB-165 turned the cold ask into surface/confirm — the never-fabricate
+  # invariant is unchanged; the wording now reads "did not give or confirm".)
   [[ "$output" == *"sleep is the one mandatory field"* ]]
-  [[ "$output" == *"ALWAYS ask"* ]]
+  [[ "$output" == *"ALWAYS surface"* ]]
   [[ "$output" == *"still confirm the one sleep line"* ]]
-  [[ "$output" == *"a value the user did not give is false data"* ]]
+  [[ "$output" == *"did not give or confirm is"* ]]
 }
 
 @test "daily flow bundles resolved per-activity KPIs (explicit kpis kept)" {
@@ -522,4 +524,146 @@ EOF
   run FIT
   [[ "$output" == *"FITNESS_PROFILE_DRAFT_OPEN"* ]]
   [[ "$output" != *"FITNESS_JOURNAL_SETUP_PROFILE"* ]]
+}
+
+# ── journal sleep prefill (PB-165) ──────────────────────────────────────────
+
+@test "journal_sleep_hint carries today's journal sleep line when present" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$PBRAIN_VAULT/life/daily-tracking"
+  cat > "$PBRAIN_VAULT/life/daily-tracking/$TODAY.md" <<EOF
+---
+type: journal
+date: $TODAY
+---
+# Focus
+- Today: gym, clean diet. slept at 4:30, woke up at 12pm.
+EOF
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  [[ "$output" == *"journal_sleep_hint:"* ]]
+  [[ "$output" == *"slept at 4:30, woke up at 12pm"* ]]
+}
+
+@test "journal_sleep_hint emits the sentinel when no journal exists" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  # no life/daily-tracking file at all
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"journal_sleep_hint: (none found in today journal)"* ]]
+}
+
+@test "journal_sleep_hint ignores journal prose with no sleep mention" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$PBRAIN_VAULT/life/daily-tracking"
+  cat > "$PBRAIN_VAULT/life/daily-tracking/$TODAY.md" <<EOF
+---
+type: journal
+date: $TODAY
+---
+# Focus
+- Ship the PB-165 fix and get to the gym.
+EOF
+  run FIT
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"journal_sleep_hint: (none found in today journal)"* ]]
+}
+
+# --- PB-165 linkage: fitness-journal persists a stated session time ----------
+# The .sh is a dispatcher — it emits the WRITE INSTRUCTIONS, so we assert that
+# the emitted block tells the agent to record "**When** HH:MM" in the entry (both
+# the standard and generated-gym layouts), and that the field-emission is present.
+@test "session block instructs writing a **When** HH:MM line (both layouts)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym day A at 2:30pm"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  # The When-line instruction appears (once per layout = standard + generated gym).
+  [[ "$output" == *'**When** HH:MM'* ]]
+}
+
+@test "the **When** instruction carries the plan-my-day anchoring rationale" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym day A at 2:30pm"
+  [ "$status" -eq 0 ]
+  # Names plan-my-day as the reader (why the line matters) + the never-invent rule.
+  [[ "$output" == *"plan-my-day"* ]]
+  [[ "$output" == *"OMIT"*"when no time"* ]] || [[ "$output" == *"never invent"* ]]
+}
+
+@test "existing/update entry preserves and can set the **When** line" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  mkdir -p "$TRACKING"
+  cat > "$TRACKING/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+sleep_bed:
+sleep_wake:
+sleep_quality:
+sleep_hours:
+tags: []
+---
+
+# Gym — Day A
+**When** 14:30
+
+## Planned
+Bench 4x8
+EOF
+  run FIT "logged bench 8,8,6"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_EXISTING"* ]]
+  # UPDATE instructions tell the agent to KEEP an existing **When** line.
+  [[ "$output" == *'**When**'* ]]
+}
+
+@test "PBRAIN_TODAY_OVERRIDE pins the date and derives the weekday (2026-07-01 = Wed)" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "Wed"
+  PBRAIN_TODAY_OVERRIDE=2026-07-01 run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"date: 2026-07-01"* ]]
+  [[ "$output" == *"day_of_week: Wed"* ]]
+  [[ "$output" == *"Wednesday, July 1, 2026"* ]]
+}
+
+# --- PB-165: ask the gym time when planning a session with none given --------
+@test "planning a gym session with no time given instructs asking the time" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FITNESS_JOURNAL_SESSION"* ]]
+  # the generated-gym WHEN-line instruction tells the agent to ASK the time
+  [[ "$output" == *"What time are you heading to the gym"* ]]
+}
+
+@test "session frontmatter persists energy/soreness/stress for plan-my-day" {
+  write_overall_profile
+  write_library
+  write_gym_activity_profile "$DOW"
+  run FIT "gym"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"energy: {1-10 from the check-in"* ]]
+  [[ "$output" == *"soreness:"* ]]
+  [[ "$output" == *"stress:"* ]]
 }

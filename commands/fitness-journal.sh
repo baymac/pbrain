@@ -59,12 +59,23 @@ TRACKING_DIR="${PBRAIN_FITNESS_DIR:-$VAULT_DIR/fitness/daily-tracking}"
 STORE="$(pbrain_profile_store "$TRACKING_DIR")"
 ACT_STORE="$STORE/activities"
 
-TODAY="$(date +%Y-%m-%d)"
-DOW="$(date +%a)"
-# Authoritative, fully-spelled local date — the LLM must copy this verbatim and
-# never compute the weekday itself (it gets it wrong). %e is space-padded day
-# (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
-TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+# TODAY defaults to the system date; PBRAIN_TODAY_OVERRIDE (validated YYYY-MM-DD)
+# pins it — used by the live e2e chain to run a day whose data straddles midnight.
+# When overridden, DOW + TODAY_HUMAN are derived FROM that date (not the clock) so
+# the weekday/human-date stay consistent; a malformed override falls back to today.
+if [[ "${PBRAIN_TODAY_OVERRIDE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  TODAY="$PBRAIN_TODAY_OVERRIDE"
+  DOW="$(date -j -f %Y-%m-%d "$TODAY" +%a 2>/dev/null || date -d "$TODAY" +%a 2>/dev/null || echo '')"
+  TODAY_HUMAN="$(date -j -f %Y-%m-%d "$TODAY" '+%A, %B %e, %Y' 2>/dev/null | tr -s ' ' \
+                 || date -d "$TODAY" '+%A, %B %e, %Y' 2>/dev/null | tr -s ' ' || echo "$TODAY")"
+else
+  TODAY="$(date +%Y-%m-%d)"
+  DOW="$(date +%a)"
+  # Authoritative, fully-spelled local date — the LLM must copy this verbatim and
+  # never compute the weekday itself (it gets it wrong). %e is space-padded day
+  # (BSD-portable); tr squeezes the gap so single-digit days read cleanly.
+  TODAY_HUMAN="$(date '+%A, %B %e, %Y' | tr -s ' ')"
+fi
 # Authoritative local clock (24h HH:MM), same machine-time provenance as the
 # date fields above. This is the disambiguator between a PLANNED session (stated
 # time is in the future) and a COMPLETED one (stated time is at/past now) — the
@@ -708,10 +719,40 @@ print("\n\n".join(parts) if parts else "(no previous sessions)")
 PYEOF
 )"
 
-# Sleep is given-or-blank: it is mandatory to ASK (Step 1), written only from what
-# the user gives THIS session, and otherwise left blank. There is deliberately no
-# carry-forward from prior sessions and no profile-window fallback — a value the
-# user did not give is an assumption, and an assumed sleep reading is false data.
+# Sleep is given-or-confirmed-or-blank: it is mandatory to SURFACE (Step 1),
+# written only from what the user gives/confirms THIS session, otherwise blank.
+# There is deliberately no carry-forward from prior sessions and no profile-window
+# fallback — a value the user did not give is an assumption, and an assumed sleep
+# reading is false data. The ONE sanctioned same-day prefill source is today's
+# /journal entry (user-authored, same date): JOURNAL_SLEEP_HINT below surfaces its
+# raw sleep mention so Step 1 can prefill-and-confirm-once instead of asking cold
+# (PB-165). The journal file is user-owned (life/) and is read strictly read-only.
+JOURNAL_SLEEP_HINT="$(python3 - "$VAULT_DIR" "$TODAY" <<'PYEOF' 2>/dev/null || true
+import os, re, sys
+vault, today = sys.argv[1], sys.argv[2]
+path = os.path.join(vault, "life", "daily-tracking", today + ".md")
+try:
+    with open(path) as fh:
+        body = fh.read()
+except Exception:
+    print("(none found in today journal)")
+    sys.exit(0)
+# Strip frontmatter so we only scan the user prose.
+body = re.sub(r"^---\n.*?\n---\n", "", body, count=1, flags=re.DOTALL)
+sleep_re = re.compile(r"sleep|slept|woke|awake|\bbed\b|wake", re.IGNORECASE)
+time_re = re.compile(r"\b\d{1,2}([:.]\d{2})?\s*(a\.?m\.?|p\.?m\.?)?\b", re.IGNORECASE)
+hits = []
+for line in body.splitlines():
+    s = line.strip().lstrip("-*# ").strip()
+    if not s:
+        continue
+    if sleep_re.search(s) and time_re.search(s):
+        hits.append(s)
+    if len(hits) >= 3:
+        break
+print("\n".join(hits) if hits else "(none found in today journal)")
+PYEOF
+)"
 
 # Bundle every activity profile (highest COMMITTED version per slug — an open
 # draft must not shadow the committed version below it).
@@ -820,6 +861,7 @@ time_now: $TIME_NOW
 output_file: $OUT_FILE
 training_gap_days: $TRAINING_GAP_DAYS
 training_gap_band: $TRAINING_GAP_BAND
+journal_sleep_hint: $JOURNAL_SLEEP_HINT
 
 === EXISTING ENTRY ===
 $EXISTING_ENTRY
@@ -886,6 +928,9 @@ Step 3 — Rewrite the entry in place at $OUT_FILE, preserving its format. Keep 
   now. Do NOT carry it forward from a prior entry, do NOT copy the profile's typical
   window, do NOT invent a value — a sleep reading the user did not give is false
   data, and a blank field is the honest state.
+  If the entry has a \`**When** HH:MM\` line, KEEP it. If the user states or corrects
+  a session time now, write/update it as \`**When** HH:MM\` (24h) under the heading —
+  plan-my-day anchors the combined activity block from it. Never invent a time.
   Set \`status:\` to match reality: \`completed\` when ## Logged is filled and the
   session is done, \`partial\` if partly done, \`planned\` while still plan-only.
 
@@ -913,6 +958,7 @@ output_file: $OUT_FILE
 training_gap_days: $TRAINING_GAP_DAYS
 training_gap_band: $TRAINING_GAP_BAND
 preselected_today: $PRESELECTED
+journal_sleep_hint: $JOURNAL_SLEEP_HINT
 
 === OVERALL FITNESS PROFILE ($FITNESS_PROFILE_FILE) ===
 $FITNESS_PROFILE_CONTENT
@@ -949,7 +995,8 @@ session is completed just because it was described in the past tense.
 
 Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above says to
   skip the check-in, SKIP the rest of this step — BUT sleep is the one mandatory
-  field, so still ask the ONE sleep line (item 3) before moving to Step 2. Otherwise
+  field, so still surface the ONE sleep line (item 3 — confirm the journal prefill
+  if present, else ask) before moving to Step 2. Otherwise
   present the whole batch as one quick batch — the user may answer some, all, or
   none:
   "Quick check-in (or say 'skip'):"
@@ -958,20 +1005,31 @@ Step 1 — QUICK CHECK-IN (mostly skippable). If a standing preference above say
      movement to work around. PRE-FILL from RECENT SESSIONS + the activity
      profiles' notes, e.g. "(Last few days: lower back 3/10 on the chest day,
      right knee 6/10 after football last night)".
-  3. Sleep (ALWAYS ask — this is mandatory to surface, never silently filled):
-     what time to bed, what time awake, and quality 1–10? Ask plainly, with NO
-     prefilled default. Write ONLY what the user gives this session. Do NOT carry a
-     value forward from a prior entry, do NOT offer the profile's typical window,
-     do NOT assume any time — a value the user did not give is false data; a blank
-     field is honest.
+  3. Sleep (ALWAYS surface — mandatory; but PREFILL from today's journal when
+     present, PB-165). Look at journal_sleep_hint above:
+     - HINT PRESENT (anything other than "(none found in today journal)"): parse
+       bed / wake / quality from that raw journal text and ask a ONE-LINE confirm
+       instead of a blank ask — e.g. "Last night (from your journal): bed 04:30,
+       wake 12:00 — right?". On confirm, write those sleep_* fields (Step 4a). On a
+       correction, use the corrected value. Only ask the full question cold if the
+       hint is unparseable. The journal is a legitimate SAME-DAY, user-authored
+       source — this is not a carry-forward or a guess.
+     - HINT ABSENT ("(none found in today journal)"): ask plainly, with NO
+       prefilled default — what time to bed, what time awake, quality 1–10?
+     Either way, write ONLY what the user gives or confirms this session. Do NOT
+     carry a value forward from a PRIOR entry, do NOT offer the profile's typical
+     window, do NOT assume any time — a value the user did not give or confirm is
+     false data; a blank field is honest.
   4. Stress? (low / medium / high)
   5. Bodyweight today? (kg — skip if you don't have it)
-  This is a LOGGER, not an interrogation — never block. Ask the sleep line ONCE; if
-  the user skips or ignores it, leave sleep_* blank (Step 4c) — do not nag, do not
-  invent. If the user just states what they DID or are PLANNING, ask the one sleep
-  line and otherwise go straight to logging.
-  IF THE USER SAYS "SKIP" (or ignores it): drop the rest — but still ask the one
-  sleep line — move to Step 2, then ask
+  This is a LOGGER, not an interrogation — never block. Surface the sleep line ONCE
+  (a one-line confirm when journal_sleep_hint prefilled it, else a plain ask); if the
+  user skips or ignores it, leave sleep_* blank (Step 4c) — do not nag, do not
+  invent. If the user just states what they DID or are PLANNING, surface the one
+  sleep line and otherwise go straight to logging.
+  IF THE USER SAYS "SKIP" (or ignores it): drop the rest — but still surface the one
+  sleep line (confirm the journal prefill if present, else ask) — move to Step 2,
+  then ask
   ONCE — "Want me to skip this check-in from now on?" On a yes, fold this standing
   preference INTO the fitness profile (at $FITNESS_PROFILE_FILE): append
   "Skip the quick check-in (still confirm the one sleep line); go straight to the
@@ -1032,12 +1090,15 @@ Step 4 — Fold in whatever state they gave, then set the four sleep_* fields by
   precedence. plan-my-day and the Sleep-well habit read sleep_*, but a WRONG value is
   worse than a blank one — so NEVER write a sleep value the user did not give, and
   NEVER invent or carry one:
-    a) SLEEP GIVEN THIS SESSION (asked in Step 1, or volunteered) — from bed + wake
+    a) SLEEP GIVEN OR CONFIRMED THIS SESSION (asked in Step 1, volunteered, or
+       confirmed from the journal prefill) — from bed + wake
        INFER sleep hours (add 24h across midnight, e.g. bed 23:30 wake 07:00 → 7.5h)
-       and write all four. This is a fresh reading; no provenance note needed.
+       and write all four. A journal value the user confirmed this session counts as
+       given — it's a same-day, user-authored reading, not a carry-forward. No
+       provenance note needed.
     b) ELSE leave all four sleep_* BLANK. This covers any case where the user did
-       not give sleep this session — they skipped the question, or there's nothing
-       on record. Do NOT carry a value forward from a prior entry, do NOT copy the
+       not give or confirm sleep this session — they skipped the question, declined
+       the journal prefill, or there's nothing on record. Do NOT carry a value forward from a prior entry, do NOT copy the
        profile's typical sleep window, do NOT assume a usual bedtime, do NOT infer a
        plausible value. A value the user did not give is false data; a blank field
        is the correct, honest state. The skill wants the data and asks for it — but
@@ -1121,10 +1182,23 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   sleep_wake: {HH:MM or blank}
   sleep_quality: {1-10 or blank}
   sleep_hours: {X.X or blank}
+  energy: {1-10 from the check-in, or blank — plan-my-day reads this to avoid re-asking}
+  soreness: {short note from the check-in, or blank}
+  stress: {low|medium|high from the check-in, or blank}
   tags: []
   ---
 
   # {Activity} — $TODAY
+
+  {WHEN LINE — if the user stated a session time (e.g. "gym at 2:30pm",
+   "swim at 7"), write it here on its own line as "**When** HH:MM" (24h), e.g.
+   "**When** 14:30". plan-my-day reads this to anchor the day's combined activity
+   block (commute + session + commute).
+   PLANNING a session with NO time given → ASK ONCE: "What time do you want to
+   start — e.g. what time are you heading to the gym?" and write their answer as
+   the When line. Only omit the line if they decline / genuinely don't know yet.
+   (For a session being LOGGED as already DONE with no time, don't ask and don't
+   fabricate — omit, same never-fabricate rule as sleep.)}
 
   {KPI summary line of the values that exist (LOGGED if present, else PLANNED),
    e.g. "**Distance** 2.0 km · **Duration** 47 min". Omit the line if nothing
@@ -1185,11 +1259,15 @@ Step 6 — WRITE the entry to $OUT_FILE. An entry has up to TWO sections —
   sleep_wake: {HH:MM or blank}
   sleep_quality: {1-10 or blank}
   sleep_hours: {X.X or blank}
+  energy: {1-10 from the check-in, or blank — plan-my-day reads this to avoid re-asking}
+  soreness: {short note from the check-in, or blank}
+  stress: {low|medium|high from the check-in, or blank}
   tags: []
   ---
 
   # {gym: Day {letter} — {Focus}   |   non-gym: {Activity} — $TODAY}
   {gym only: **Week {N} · Block {N} · Session {N}** | ~{estimated duration} min}
+  {WHEN LINE (gym) — write the session time on its own line as "**When** HH:MM" (24h), e.g. "**When** 14:30", whenever a time is known. This is a GENERATED (planned-ahead) gym session, so if the user did NOT give a time, ASK ONCE — "What time are you heading to the gym?" — and write their answer here. plan-my-day anchors the combined activity block from it; omitting it forces plan-my-day to re-ask, so capture it here. Only omit if the user declines / doesn't know yet; never invent a time.}
 
   > {one coaching note tied to today's state — RPE / fatigue / mindset cue; mention
      the gap band if it is not normal. 1-2 sentences.}

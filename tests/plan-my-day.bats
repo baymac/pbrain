@@ -1032,3 +1032,206 @@ write_today_journals() {
   [ "$status" -eq 0 ]
   grep -qE '^PLAN_MY_DAY_SESSION' <<<"$output"
 }
+
+# --- PB-165 linkage: plan-my-day asks for the fitness time when the entry has none
+@test "fitness entry WITH a **When** time → fitness_today_time_missing is no" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+---
+# Gym — Day A
+**When** 14:30
+
+## Planned
+Bench 4x8
+EOF
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: no"* ]]
+  [[ "$output" == *"fitness_today_session: gym"*"14:30"* ]]
+}
+
+@test "fitness entry WITHOUT a time → fitness_today_time_missing is yes" {
+  write_goals_profile
+  write_libraries
+  mkdir -p "$PBRAIN_VAULT/fitness/daily-tracking"
+  cat > "$PBRAIN_VAULT/fitness/daily-tracking/$TODAY.md" <<EOF
+---
+type: fitness
+date: $TODAY
+activity: gym
+focus: gym
+status: planned
+---
+# Gym — Day A
+
+## Planned
+Bench 4x8
+EOF
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: yes"* ]]
+}
+
+@test "no fitness entry today → fitness_today_time_missing is no (nothing to anchor)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"fitness_today_time_missing: no"* ]]
+}
+
+@test "session template carries the FITNESS TIME ask step" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"FITNESS TIME"* ]]
+}
+
+@test "combined activity block STARTS at the When time, not When minus commute" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"TIME IS THE BLOCK'S START"* ]]
+  [[ "$output" == *"NEVER subtract commute_before"* ]]
+  # worked gym example: When 14:30 -> block 14:30-16:30
+  [[ "$output" == *"14:30–16:30"* ]]
+  # the old kickoff-minus-commute wording is gone
+  [[ "$output" != *"kickoff − commute"* ]]
+}
+
+@test "no sub-min break: a leftover gap folds into work or meal" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"NEVER A SUB-MIN BREAK"* ]]
+  [[ "$output" == *"5-minute break before dinner is WRONG"* ]]
+}
+
+# --- PBRAIN_TODAY_OVERRIDE date seam -----------------------------------------
+@test "PBRAIN_TODAY_OVERRIDE pins the date and derives the weekday from it" {
+  write_goals_profile
+  write_libraries
+  PBRAIN_TODAY_OVERRIDE=2026-07-01 run PMD plan --continue
+  [[ "$output" == *"date: 2026-07-01"* ]]
+  # 2026-07-01 is a Wednesday — derived from the override, not the wall clock.
+  [[ "$output" == *"Wednesday"* ]] || [[ "$output" == *"Wed"* ]]
+}
+
+@test "a malformed PBRAIN_TODAY_OVERRIDE falls back to the real date" {
+  write_goals_profile
+  write_libraries
+  PBRAIN_TODAY_OVERRIDE=not-a-date run PMD plan --continue
+  [[ "$output" == *"date: $TODAY"* ]]
+}
+
+# --- PB-165: work-first layout, rest-never-stacks, snack-is-a-break ----------
+@test "SESSION instructions declare EIGHT hard rules (not five/seven)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"EIGHT HARD RULES"* ]]
+  [[ "$output" != *"FIVE HARD RULES"* ]]
+  [[ "$output" != *"SEVEN HARD RULES"* ]]
+}
+
+@test "SESSION forbids invented pre-activity/filler rows (rule 8)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"NO INVENTED ROWS"* ]]
+  # no wrap-up / head-out / prep row before a fitness block
+  [[ "$output" == *"wrap up / head out"* ]]
+  [[ "$output" == *"travel is ALREADY inside commute_before"* ]]
+}
+
+@test "SESSION lays a single combined routine+breakfast row on a late wake" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"ONE combined row"* ]] || [[ "$output" == *"SINGLE"*"COMBINED row"* ]]
+  [[ "$output" == *"Morning routine + breakfast"* ]]
+  # explicitly NOT two rows / not 90 min
+  [[ "$output" == *"NOT two rows"* ]] || [[ "$output" == *"not two rows"* ]]
+}
+
+@test "SESSION reads/confirms fitness check-in energy, does not re-ask" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"DO NOT RE-ASK"* ]]
+  [[ "$output" == *"fitness_checkin"* ]]
+  # the old standalone energy ask is gone
+  [[ "$output" != *"how's the energy — rough"* ]]
+}
+
+@test "SESSION reclassifies the snack as a break, not a counted meal" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"SNACK IS A BREAK"* ]]
+  # keep_meal_count is scoped to real meals only
+  [[ "$output" == *"Starter/Breakfast/Lunch/Dinner"* ]]
+  # snack is not pinned to the diet profile's Snack clock time
+  [[ "$output" == *"pinned to the diet profile's Snack clock time"* ]]
+}
+
+@test "SESSION forbids INVENTED stacked rest but exempts profile fixed rest (rule 6)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"NO INVENTED STACKED REST"* ]]
+  # a profile-defined fixed rest segment (nap/settle) is NOT stacked rest
+  [[ "$output" == *"PROFILE-DEFINED fixed rest"* ]]
+}
+
+@test "SESSION always keeps the profile post-lunch nap, never drops it for work" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"FIXED post-lunch nap"* ]]
+  # protected like a meal; hard rule 6 does not touch it
+  [[ "$output" == *"ALWAYS placed at exactly its set length"* ]]
+  [[ "$output" == *"Do not drop the"*"nap to make room for work"* ]] || [[ "$output" == *"not touch it"* ]]
+}
+
+@test "SESSION compresses a late wake to routine(30)+breakfast(30), keeps breakfast" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  # late-wake rule present and explicit about halving routine + keeping breakfast
+  [[ "$output" == *"after 11:00"* ]]
+  [[ "$output" == *"breakfast (KEPT at 30)"* ]] || [[ "$output" == *"breakfast (kept)"* ]]
+  [[ "$output" == *"HALVE"*"wake-to-work gap"* ]] || [[ "$output" == *"halve the routine to 30"* ]]
+  # breakfast is NOT dropped on a late wake
+  [[ "$output" != *"skip if wake after 11:00"* ]]
+  [[ "$output" != *"skip breakfast"* ]]
+}
+
+@test "SESSION fills gaps with work but places anchors first, never dropping a meal (rule 7)" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"WORK FILLS THE GAPS ANCHORS LEAVE"* ]]
+  # the operational bullet names the pre-anchor morning gap explicitly
+  [[ "$output" == *"pre-anchor"*"morning gap"* ]]
+  # work must never drop a real meal (dinner) to fit a block
+  [[ "$output" == *"Dropping DINNER"* ]] || [[ "$output" == *"drop an anchor"* ]]
+  # a meal colliding with an activity SHIFTS after it, never vanishes
+  [[ "$output" == *"MEAL-vs-ACTIVITY COLLISION"* ]]
+  [[ "$output" == *"mega-block over a meal"* ]]
+}
+
+@test "SESSION places the snack ~1-2 blocks after lunch, before dinner" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"PLACED BY JUDGMENT"* ]]
+  # "after ... lunch" and "... dinner" wording (may wrap across the rule box)
+  [[ "$output" == *"after"*"lunch"* ]]
+  [[ "$output" == *"BEFORE dinner"* ]] || [[ "$output" == *"before dinner"* ]]
+}

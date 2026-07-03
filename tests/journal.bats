@@ -75,3 +75,12 @@ _run_cmd() { run bash "$CMD" "$@"; }
   [[ "$output" == *"dump_provided: yes"* ]]
   [[ "$output" == *"quick note: deploy went out clean at 4pm"* ]]
 }
+
+@test "PBRAIN_TODAY_OVERRIDE pins journal's date; malformed falls back" {
+  PBRAIN_TODAY_OVERRIDE=2026-07-01 run bash "$CMD"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2026-07-01"* ]]
+  PBRAIN_TODAY_OVERRIDE=nope run bash "$CMD"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$TODAY"* ]]
+}

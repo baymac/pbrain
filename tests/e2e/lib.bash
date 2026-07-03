@@ -17,6 +17,21 @@
 
 set -uo pipefail
 
+# Guarded recursive delete shared by every driver. NEVER `rm -rf "$var"` on a
+# path that could be empty or mis-set: an empty var would delete the CWD, and a
+# repointed var could target real data. Refuses anything that isn't a non-empty,
+# existing directory under a system temp root (where E2E_WORK is always mktemp'd).
+e2e_safe_rmrf() {
+  local d="${1:-}"
+  [[ -n "$d" ]] || { echo "e2e_safe_rmrf: refusing empty path" >&2; return 1; }
+  [[ -d "$d" ]] || return 0   # already gone / never created
+  case "$d" in
+    "${TMPDIR:-/tmp}"/*|/tmp/*|/private/tmp/*|/var/folders/*) : ;;
+    *) echo "e2e_safe_rmrf: refusing path outside a temp root: $d" >&2; return 1 ;;
+  esac
+  rm -rf "$d"
+}
+
 # --- run-scoped state shared by all drivers ---------------------------------
 E2E_REAL_ROOT=""        # the real pbrain checkout (worktree) root
 E2E_WORK=""             # per-run tempdir

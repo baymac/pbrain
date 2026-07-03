@@ -58,6 +58,19 @@ SCENARIO="${HERE}/scenarios/plan-my-day/today-replay.json"
 OPEN_REPORT=1
 REPORT_DIR="$REPO_ROOT/.e2e_report"
 
+# CHAIN MODE (PB-165). Default 0 = the original single-scenario plan-my-day replay.
+# 1 = the connected chain: regenerate the user's REAL today-data live, in order —
+# journal -> fitness-journal -> diet-journal -> plan-my-day — each step's persona
+# INSPIRED BY the facts extracted from that day's real files (before they're reset),
+# then plan-my-day is asserted against that regenerated data. Set via --chain or
+# PBRAIN_E2E_CHAIN=1.
+CHAIN="${PBRAIN_E2E_CHAIN:-0}"
+# TARGET_DATE pins the day the chain runs as (facts + regeneration + assertions).
+# Defaults to the system date; PBRAIN_TODAY_OVERRIDE pins it (e.g. a day whose data
+# straddles midnight). The commands honor the same override, so the whole chain is
+# internally consistent on that date.
+TARGET_DATE="${PBRAIN_TODAY_OVERRIDE:-$(date +%Y-%m-%d)}"
+
 # ---- arg parse -------------------------------------------------------------
 CMD="run"
 [[ "${1:-}" =~ ^(run|snapshot)$ ]] && { CMD="$1"; shift; }
@@ -66,9 +79,30 @@ while [[ $# -gt 0 ]]; do
     --no-open)   OPEN_REPORT=0; shift ;;
     --scenario)  SCENARIO="$2"; shift 2 ;;
     --model)     MODEL="$2"; shift 2 ;;
+    --chain)     CHAIN=1; shift ;;
+    --date)      TARGET_DATE="$2"; export PBRAIN_TODAY_OVERRIDE="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+# When a target date is pinned, the commands + this engine must all agree on it.
+if [[ "$TARGET_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  export PBRAIN_TODAY_OVERRIDE="$TARGET_DATE"
+fi
+
+# Guarded recursive delete. NEVER `rm -rf "$var"` directly — an empty var would
+# delete the CWD and a repointed var could target real data. Refuses anything that
+# is not a non-empty, existing directory under a system temp root (where SANDBOX is
+# always mktemp'd). Returns 0 (no-op) when the path is already gone.
+_safe_rmrf() {
+  local d="${1:-}"
+  [[ -n "$d" ]] || { echo "_safe_rmrf: refusing empty path" >&2; return 1; }
+  [[ -d "$d" ]] || return 0
+  case "$d" in
+    "${TMPDIR:-/tmp}"/*|/tmp/*|/private/tmp/*|/var/folders/*) : ;;
+    *) echo "_safe_rmrf: refusing path outside a temp root: $d" >&2; return 1 ;;
+  esac
+  rm -rf "$d"
+}
 
 _real_vault() {
   # Resolve the user's real vault the same way pbrain does.
@@ -81,6 +115,12 @@ _claude_present() { command -v claude >/dev/null 2>&1; }
 
 log() { printf '  %s\n' "$*"; }
 
+# ---------------------------------------------------------------------------
+# Guarded recursive delete. NEVER `rm -rf "$var"` directly on a path that could
+# be empty or mis-set — an empty var deletes the CWD, and a repointed var could
+# target something real. This refuses anything that isn't a non-empty, existing
+# directory living under a system temp root (the only place we ever mktemp).
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 1. SNAPSHOT
 # ---------------------------------------------------------------------------
@@ -242,7 +282,9 @@ PY
 # ---------------------------------------------------------------------------
 # 3. RESET — delete only today's daily-planning file in the copy
 # ---------------------------------------------------------------------------
-TODAY="$(date +%Y-%m-%d)"
+# The engine's notion of "today" MUST match what the commands use: the pinned
+# TARGET_DATE (via PBRAIN_TODAY_OVERRIDE) when set, else the system date.
+TODAY="$TARGET_DATE"
 
 # Remap the scenario's target_date dated files onto the system's current date in
 # the COPY, so the real `date`-driven plan-my-day finds the right fitness session
@@ -287,7 +329,13 @@ d=json.load(open(sys.argv[1]))
 for i,a in enumerate(d.get("checkin_answers",[]),1):
     print(f"{i}. {a}")
 ' "$SCENARIO")"
-  local sname; sname="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("display","plan-my-day today replay"))' "$SCENARIO")"
+  local sname
+  if [[ "${CHAIN:-0}" == 1 ]]; then
+    sname="chain on real $TODAY data — journal → fitness → diet → plan-my-day (persona speaks the real facts, not a scripted scenario)"
+  else
+    sname="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("display","plan-my-day today replay"))' "$SCENARIO")"
+  fi
+  SCENARIO_LABEL="$sname"   # global, consumed by report()
   log "scenario: $sname"
 
   local skill_sys persona_sys convo turn skill_out persona_out
@@ -341,6 +389,14 @@ Rules of engagement for this run:
   </PLAN>
 - Until then, reply with ONLY your next single in-character check-in line."
 
+  # CHAIN MODE (PB-165): answer from the REAL regenerated day's facts, not the
+  # fixed scenario. The persona speaks to today's actual fitness/meals/sleep, and
+  # if the fitness entry had no time, it MAY be asked and should give the real one.
+  if [[ "${CHAIN:-0}" == 1 ]]; then
+    persona_answers="Today's real facts (answer the check-in from these, in your own words; give the fitness time if asked):
+$CHAIN_FACTS"
+  fi
+
   persona_sys="You are the human running /plan-my-day this morning. Answer the
 skill's check-in tersely and in character, using THESE answers in order (one per
 question the skill asks); do not volunteer anything else, and never invent a
@@ -353,7 +409,11 @@ Reply with ONLY your in-character line."
   [[ "$n_answers" =~ ^[0-9]+$ ]] || n_answers=6
 
   convo=""
-  : >"$SANDBOX/transcript.ndjson"
+  # In chain mode the earlier legs (journal/fitness/diet) have already appended
+  # their turns to this transcript — APPEND the plan-my-day leg so the kept
+  # transcript holds the FULL four-leg agent-to-agent conversation. Only reset it
+  # when running the single-leg (non-chain) flow.
+  [[ "${CHAIN:-0}" == 1 ]] || : >"$SANDBOX/transcript.ndjson"
   log "conversation begins (skill model ↔ persona model)"
   local max_turns=12
   for ((turn=1; turn<=max_turns; turn++)); do
@@ -370,7 +430,7 @@ blocks per the policy and OUTPUT the finished plan wrapped in <PLAN>…</PLAN> n
 ${convo:-(none yet — open the check-in)}
 Your next turn:${nudge}" --model "$MODEL" --append-system-prompt "$skill_sys" 2>>"$SANDBOX/live.stderr")"
     [[ -n "$skill_out" ]] || { echo "skill model empty (turn $turn)" >&2; return 2; }
-    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"role":"skill","text":sys.stdin.read()}))' <<<"$skill_out")" >>"$SANDBOX/transcript.ndjson"
+    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"leg":"plan-my-day","role":"skill","text":sys.stdin.read()}))' <<<"$skill_out")" >>"$SANDBOX/transcript.ndjson"
     convo+="
 SKILL: $skill_out"
     # Did the skill emit the finished plan? Extract <PLAN>…</PLAN> and write it.
@@ -384,7 +444,7 @@ SKILL: $skill_out"
 $skill_out
 Your in-character reply:" --model "$MODEL" --append-system-prompt "$persona_sys" 2>>"$SANDBOX/live.stderr")"
     [[ -n "$persona_out" ]] || persona_out="(no reply)"
-    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"role":"persona","text":sys.stdin.read()}))' <<<"$persona_out")" >>"$SANDBOX/transcript.ndjson"
+    printf '%s\n' "$(python3 -c 'import json,sys;print(json.dumps({"leg":"plan-my-day","role":"persona","text":sys.stdin.read()}))' <<<"$persona_out")" >>"$SANDBOX/transcript.ndjson"
     convo+="
 USER: $persona_out"
   done
@@ -444,13 +504,14 @@ report() {
   mkdir -p "$REPORT_DIR"
   local stamp out; stamp="$(date +%Y%m%d-%H%M%S)"; out="$REPORT_DIR/plan-my-day-live-$stamp.html"
   python3 "$HERE/plan-my-day-report.py" \
-    "$SANDBOX/transcript.ndjson" "$VERDICT_JSON" "$PLAN_FILE" "$SCENARIO" "$out"
+    "$SANDBOX/transcript.ndjson" "$VERDICT_JSON" "$PLAN_FILE" "$SCENARIO" "$out" \
+    "${SCENARIO_LABEL:-}"
   log "report: $out"
   [[ "$OPEN_REPORT" -eq 1 ]] && command -v open >/dev/null 2>&1 && open "$out"
   REPORT_PATH="$out"
 }
 
-cleanup() { [[ -n "$SANDBOX" && -d "$SANDBOX" ]] && rm -rf "$SANDBOX"; }
+cleanup() { _safe_rmrf "$SANDBOX"; }
 
 # ---------------------------------------------------------------------------
 main() {
@@ -462,9 +523,19 @@ main() {
   echo "▶ plan-my-day live e2e (real-vault snapshot, agent-to-agent)"
   snapshot
   migrate
-  remap_target_date
-  reset_today
-  if ! replay; then
+  local RUN_FN=replay
+  if [[ "$CHAIN" == 1 ]]; then
+    # CHAIN MODE: regenerate the user's real today-data live, in dependency order
+    # (journal -> fitness -> diet -> plan-my-day), each persona inspired by facts.
+    source "$HERE/plan-my-day-chain.bash"
+    extract_facts
+    reset_outputs
+    RUN_FN=chain_replay
+  else
+    remap_target_date
+    reset_today
+  fi
+  if ! "$RUN_FN"; then
     echo "REPLAY failed — see $SANDBOX/live.stderr" >&2
     # preserve transcript + stderr for debugging, then report what we have
     cp "$SANDBOX/transcript.ndjson" "$REPORT_DIR/last-transcript.ndjson" 2>/dev/null || true

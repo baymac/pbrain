@@ -57,7 +57,7 @@ e2e_run_fitness_live() {
   if ! _claude_present; then
     e2e_seam "claude CLI not on PATH — live model run SKIPPED (not a pass, not a fail)"
     e2e_emit_result "skip" "vault-file" "" "$E2E_OUT_FILE"$'\n---\n(skipped: no claude CLI)'
-    rm -rf "$E2E_WORK"
+    e2e_safe_rmrf "$E2E_WORK"
     return 0   # a skip is not a suite failure
   fi
 
@@ -110,7 +110,7 @@ Your next turn:" --add-dir "$PBRAIN_VAULT" --allowedTools Write Edit)"
     if [[ -z "$skill_out" ]]; then
       e2e_seam "skill model returned empty (turn $turn) — aborting live run as SKIP"
       e2e_emit_result "skip" "vault-file" "" "$E2E_OUT_FILE"$'\n---\n(skipped: empty model reply)'
-      rm -rf "$E2E_WORK"; return 0
+      e2e_safe_rmrf "$E2E_WORK"; return 0
     fi
     e2e_say "fitness(skill)" "$skill_out"
     convo+="
@@ -134,7 +134,7 @@ USER: $persona_out"
   if [[ ! -f "$E2E_OUT_FILE" ]]; then
     e2e_seam "skill model never wrote the entry within $max_turns turns — SKIP (env/model limitation, not a contract failure)"
     e2e_emit_result "skip" "vault-file" "" "(no file written)"
-    rm -rf "$E2E_WORK"; return 0
+    e2e_safe_rmrf "$E2E_WORK"; return 0
   fi
 
   e2e_assert "live: dated fitness file was written by the model" test -f "$E2E_OUT_FILE"
@@ -156,6 +156,6 @@ USER: $persona_out"
   local pass="true"; [[ ${#E2E_FAILURES[@]} -eq 0 ]] || pass="false"
   local artifact; artifact="$E2E_OUT_FILE"$'\n---\n'"$(cat "$E2E_OUT_FILE")"
   e2e_emit_result "$pass" "vault-file" "" "$artifact"
-  rm -rf "$E2E_WORK"
+  e2e_safe_rmrf "$E2E_WORK"
   [[ "$pass" == "true" ]]
 }

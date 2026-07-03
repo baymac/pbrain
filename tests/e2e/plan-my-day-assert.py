@@ -253,6 +253,11 @@ for (s, e, act, tie) in rows:
         continue                         # a work/break row that merely mentions "lunch" is not a meal
     if not MEAL_ONLY_RE.search(act) or NOT_MEAL_RE.search(act):
         continue                         # prep/wrap/travel-for-lunch rows are not the meal itself
+    # A late-wake COMBINED "morning routine + breakfast" row is intentionally 60 min
+    # (routine 30 + breakfast 30 folded into one row, plan-my-day rule). It is not a
+    # plain meal and is exempt from the per-meal duration cap.
+    if re.search(r"routine.*breakfast|breakfast.*routine", act, re.I):
+        continue
     # skip "pre-football meal/fuel" style rows that are really fuel snacks
     d = dur(s, e); cap = meal_cap_for(act)
     if d > cap:
@@ -306,6 +311,11 @@ if meal_times and rows:
     # whose typical_day block note says "skip if wake after HH:MM" is not flagged
     # when today's wake (span_start) is past that time.
     for slot, t in meal_times.items():
+        # The SNACK is a BREAK, not a counted meal (plan-my-day rule 5): it is placed
+        # by judgment as a flex break, not pinned to its diet-profile time, so it is
+        # NOT part of keep_meal_count. Don't flag it as a "missing meal".
+        if slot.strip().lower() == "snack":
+            continue
         try:
             mt = mins(t)
         except Exception:
@@ -348,6 +358,14 @@ for b in blocks:
         continue
     nxt = rows[b["idx"] + 1] if b["idx"] + 1 < len(rows) else None
     abuts_anchor = bool(nxt) and classify(nxt[2], nxt[3]) in ("anchor", "winddown")
+    # A short block that ends the work run right before a fixed anchor is a legit
+    # anchor-trim even when a single BREAK bridges the two (block -> break ->
+    # gym/meal/wind-down). The break is the pre-anchor rest; the block was trimmed
+    # to butt that window, not "shrunk for no reason". See it through one break.
+    if not abuts_anchor and nxt and classify(nxt[2], nxt[3]) == "break":
+        after = rows[b["idx"] + 2] if b["idx"] + 2 < len(rows) else None
+        if after and classify(after[2], after[3]) in ("anchor", "winddown"):
+            abuts_anchor = True
     is_last = (b["idx"] == last_work_idx)
     label = b["action"][:32]
     if b["dur"] > sess:

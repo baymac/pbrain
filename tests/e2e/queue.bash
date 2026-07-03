@@ -41,6 +41,10 @@ PLANE="$REPO_ROOT/lib/plane.py"
 
 RESULTS_DIR="$E2E_DIR/.e2e_results"
 REPORT_DIR="$E2E_DIR/.e2e_report"
+# Guard: only wipe RESULTS_DIR when E2E_DIR resolved and the path is the expected
+# .e2e_results dir under it — never an empty/unexpected target.
+[[ -n "$E2E_DIR" && "$RESULTS_DIR" == "$E2E_DIR/.e2e_results" ]] \
+  || { echo "queue.bash: refusing to clear unexpected RESULTS_DIR: $RESULTS_DIR" >&2; exit 1; }
 rm -rf "$RESULTS_DIR"; mkdir -p "$RESULTS_DIR" "$REPORT_DIR"
 
 # The real engine + the fake HTTP boundary drive the whole lifecycle in one Python
