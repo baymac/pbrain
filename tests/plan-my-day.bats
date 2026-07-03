@@ -1062,6 +1062,26 @@ EOF
   [[ "$output" == *"FITNESS TIME"* ]]
 }
 
+@test "combined activity block STARTS at the When time, not When minus commute" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"TIME IS THE BLOCK'S START"* ]]
+  [[ "$output" == *"NEVER subtract commute_before"* ]]
+  # worked gym example: When 14:30 -> block 14:30-16:30
+  [[ "$output" == *"14:30–16:30"* ]]
+  # the old kickoff-minus-commute wording is gone
+  [[ "$output" != *"kickoff − commute"* ]]
+}
+
+@test "no sub-min break: a leftover gap folds into work or meal" {
+  write_goals_profile
+  write_libraries
+  run PMD plan --continue
+  [[ "$output" == *"NEVER A SUB-MIN BREAK"* ]]
+  [[ "$output" == *"5-minute break before dinner is WRONG"* ]]
+}
+
 # --- PBRAIN_TODAY_OVERRIDE date seam -----------------------------------------
 @test "PBRAIN_TODAY_OVERRIDE pins the date and derives the weekday from it" {
   write_goals_profile

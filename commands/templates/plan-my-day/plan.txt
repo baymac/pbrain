@@ -221,21 +221,30 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
            (e.g. "football", "apple_fitness"), use its buffer values silently —
            do NOT ask the user for commute or buffer time.
            EMIT EXACTLY THIS SEQUENCE around the activity (no extra rows):
-             1) … work blocks right up to the combined block's start …
+             1) … work blocks right up to the combined block's start — which IS
+                the `When` time; the last pre-activity work block ENDS exactly at
+                `When` (e.g. a 90-min block 13:00–14:30 before a 14:30 gym) …
              2) COMBINED ACTIVITY BLOCK = commute_before + SESSION + commute_after
-                (ONE row, NO standalone commute rows).
+                (ONE row, NO standalone commute rows), STARTING at `When`.
                 · SESSION = the fitness session's OWN duration from today's
                   fitness journal (its `duration_min` / stated length, e.g. a 2h
                   match = 120). This is NOT working_style.session_length_min (that
                   is the 90-min WORK block length — do not use it for the match).
                 · commute_before_min / commute_after_min come EXACTLY from
                   activity_buffers — never round or invent them (30 is 30, not 25).
-                E.g. football match duration_min 120 with commute 30/30 → a 3h
-                block 30+120+30 = 180, labeled "Football — commute + match +
-                commute". It STARTS at kickoff − commute_before (21:00 − 30 =
-                20:30) and ENDS at match_end + commute_after (23:00 + 30 = 23:30).
-                Sanity-check the block length = commute_before + duration_min +
-                commute_after before writing it.
+                THE `When` TIME IS THE BLOCK'S START, NOT the session/kickoff.
+                `When` (from the fitness journal) is when the user LEAVES / begins
+                the commute, so the combined block STARTS exactly at `When` and
+                runs FORWARD: start = When; end = When + commute_before + duration
+                + commute_after. NEVER subtract commute_before from `When` — commute
+                extends forward from `When`, never before it.
+                E.g. gym `When` 14:30, session duration_min 60, commute 30/30 →
+                block 30+60+30 = 120 → **14:30–16:30** (starts AT 14:30). Work
+                blocks run right up to 14:30 (a full 90-min block fits 13:00–14:30
+                before it). Football `When` 20:30, match 120, commute 30/30 →
+                30+120+30 = 180 → **20:30–23:30** (starts AT 20:30). Sanity-check the
+                block length = commute_before + duration_min + commute_after, and
+                that it STARTS at `When`, before writing it.
              3) post_home_settle BLOCK (post_home_settle_min, e.g. 30 min: shower
                 / get-ready / prep) — POST-activity only.
              4) the following MEAL — e.g. DINNER. ALWAYS keep it (keep_meal_count);
@@ -375,6 +384,15 @@ Step 1 — Run the check-in as a SHORT CONVERSATION (not an exam, not a form).
             ≤`max` break if one is warranted. The meal/rest itself is the rest —
             a flex break right before a long meal shrinks toward `min` (or drops
             entirely) and the time becomes work, never a double-rest.
+          · NEVER A SUB-MIN BREAK. A break is NEVER shorter than
+            `break_minutes.min` (e.g. 15). If the leftover gap before a long rest
+            (a meal/dinner) is smaller than `min`, do NOT emit a tiny break row —
+            ABSORB those minutes: extend the PRECEDING work block by them (a work
+            block may run a few minutes over its length; that is fine), OR extend
+            the upcoming meal (e.g. dinner 30→45). A leftover span smaller than
+            `min` is NOT a break — fold it into the adjacent work block or meal.
+            A 5-minute break before dinner is WRONG: give the 5 minutes to the
+            block or the meal instead.
           · WORK FILLS THE GAPS ANCHORS LEAVE (hard rule 7). FIRST lay ALL of
             today's anchors onto the timeline — every real meal (breakfast if
             kept, lunch, DINNER, any starter/snack-as-break), the fitness
