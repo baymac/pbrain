@@ -253,6 +253,11 @@ for (s, e, act, tie) in rows:
         continue                         # a work/break row that merely mentions "lunch" is not a meal
     if not MEAL_ONLY_RE.search(act) or NOT_MEAL_RE.search(act):
         continue                         # prep/wrap/travel-for-lunch rows are not the meal itself
+    # A late-wake COMBINED "morning routine + breakfast" row is intentionally 60 min
+    # (routine 30 + breakfast 30 folded into one row, plan-my-day rule). It is not a
+    # plain meal and is exempt from the per-meal duration cap.
+    if re.search(r"routine.*breakfast|breakfast.*routine", act, re.I):
+        continue
     # skip "pre-football meal/fuel" style rows that are really fuel snacks
     d = dur(s, e); cap = meal_cap_for(act)
     if d > cap:
