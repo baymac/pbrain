@@ -1,0 +1,44 @@
+INSTRUCTIONS — save the article. The ARTICLE MARKDOWN above was extracted from
+the page itself: it is ALREADY the author's written prose, not a transcript.
+Your job is to SAVE it, not to rewrite it.
+
+THE GOLDEN RULE: preserve the text verbatim. Unlike the video path (where raw
+captions need punctuation and paragraphing restored), this text was already
+written and edited by its author. Do NOT reword, do NOT summarize, do NOT
+"improve" the prose, and do NOT add commentary, framing, or a conclusion of
+your own.
+
+WHAT TO DO:
+1. Keep the author's words exactly. Sentences, paragraphs, and their order stay
+   as they are.
+2. Keep the structure. Headings, lists, blockquotes, code blocks, bold/italic
+   emphasis, and links carry over as Markdown.
+3. Keep the images. They are absolute X CDN URLs — leave them as
+   `![](https://pbs.twimg.com/...)` where they appear in the flow.
+4. Fix only extraction artifacts. The DOM-to-Markdown conversion can leave
+   stray blank lines, a duplicated title, orphaned UI text ("Read more",
+   follower counts, "Show this thread"), or escaped characters. Remove those.
+   That is the ONLY editing you do.
+5. If the extraction is visibly truncated or garbled beyond light cleanup, say
+   so plainly instead of papering over it — do not invent the missing part.
+
+WRITE the file to ${OUT_FILE} with this shape:
+
+---
+type: clip
+platform: x
+content_kind: article
+source_url: ${ARTICLE_URL}
+author: ${ARTICLE_AUTHOR}
+published: ${ARTICLE_PUBLISHED}
+captured: ${TODAY}
+tags: []
+---
+
+# ${ARTICLE_TITLE}
+
+> Source: ${ARTICLE_URL} — ${ARTICLE_AUTHOR}
+
+<the article body, verbatim, with extraction artifacts cleaned>
+
+After writing, confirm in ONE line: the title and the path. Stop here.

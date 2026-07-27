@@ -10,9 +10,23 @@ set -euo pipefail
 # readable prose (faithful, not summarized; see commands/templates/clipper/write.txt).
 #
 # Subcommands (platforms):
-#   x  <url>   X / Twitter video. Uses your browser cookies by default (X gates
-#              video + caption fetches behind a logged-in session).
+#   x  <url>   X / Twitter — a video OR a longform article, detected from the
+#              URL shape (see "X articles" below). Uses your browser cookies by
+#              default (X gates video, caption and article fetches behind a
+#              logged-in session).
 #   yt <url>   YouTube video.
+#
+# X articles:
+#   /i/articles/... and /<handle>/article/... take the ARTICLE path; everything
+#   else (notably /status/...) stays on the VIDEO path above, unchanged. X
+#   renders articles client-side — a plain cookie-authenticated fetch returns
+#   only the "JavaScript is not available" shell — so the article path drives
+#   headless Chromium via lib/clipper-x-article.py, run through `uv run --with`
+#   so Playwright stays an ephemeral, on-demand dependency (the same posture as
+#   the fluidaudiocli build below). Both paths share ONE cookie source: the jar
+#   is exported to Netscape format and only x.com/twitter.com cookies are handed
+#   to the browser. Articles are saved verbatim (they're already prose); see
+#   commands/templates/clipper/write-article.txt.
 #
 # A bare "save"/"this"/"video" token between the platform and the URL is ignored,
 # so the natural phrasing "clipper x save this video <url>" works.
@@ -34,6 +48,8 @@ set -euo pipefail
 #   PBRAIN_CLIPPER_COOKIES_FILE     — path to a Netscape cookies.txt (wins over
 #                                     the browser cookie jar when set)
 #   PBRAIN_CLIPPER_SUB_LANGS        — yt-dlp --sub-langs (default: en,en-orig,en-US,en-GB)
+#   PLAYWRIGHT_BROWSERS_PATH        — Chromium cache for the article path
+#                                     (default: ~/.cache/pbrain/playwright)
 #
 # No-caption fallback transcriber (FluidAudio / Parakeet TDT v3 — see below):
 #   PBRAIN_CLIPPER_FLUIDAUDIO_BIN       — use a specific fluidaudiocli (skips the build)
@@ -149,6 +165,168 @@ _clipper_fa_build() {
   return 0
 }
 
+# --- X longform articles ----------------------------------------------------
+# X articles are client-rendered: a cookie-authenticated plain HTTP fetch returns
+# the "JavaScript is not available" shell with no article body, so reading one
+# needs a real browser. lib/clipper-x-article.py drives headless Chromium via
+# Playwright, run through `uv run --with` so the dependency is ephemeral and
+# nothing is added to pbrain's own (stdlib-only) surface — the same on-demand
+# posture clipper already takes with fluidaudiocli. Auth reuses the SAME cookie
+# source as the video path: we export the jar to Netscape format via yt-dlp and
+# hand only the x.com/twitter.com cookies to the browser.
+_clipper_x_article() {
+  local url="$1"
+  local scraper="$_SCRIPT_DIR/../lib/clipper-x-article.py"
+
+  if [[ ! -f "$scraper" ]]; then
+    echo "CLIPPER_ARTICLE_FAILED"
+    echo "url: $url"
+    echo "reason: missing_scraper"
+    echo ""
+    echo "INSTRUCTIONS: the article scraper (lib/clipper-x-article.py) is missing from"
+    echo "this pbrain install. Tell the user to update pbrain and stop here."
+    return 0
+  fi
+
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "CLIPPER_NO_UV"
+    echo "url: $url"
+    echo ""
+    echo "INSTRUCTIONS: clipping an X *article* needs 'uv' to run the headless-browser"
+    echo "scraper (X articles are JS-rendered, so there's no way to read one without a"
+    echo "browser). Tell the user to install it — 'brew install uv' or"
+    echo "'curl -LsSf https://astral.sh/uv/install.sh | sh' — then re-run. Video clips"
+    echo "are unaffected. Stop here."
+    return 0
+  fi
+
+  # Export cookies to a Netscape jar the scraper can read. yt-dlp is only needed
+  # for the browser-cookie case; an explicit cookies.txt is used directly.
+  local jar="$WORK/cookies.txt"
+  local have_cookies=0
+  if [[ -n "$COOKIES_FILE" ]]; then
+    cp "$COOKIES_FILE" "$jar" 2>/dev/null && have_cookies=1
+  elif [[ -n "$COOKIES_BROWSER" && "$COOKIES_BROWSER" != "none" ]] \
+       && command -v yt-dlp >/dev/null 2>&1; then
+    # yt-dlp errors on a non-media URL but still writes the jar; that's expected.
+    yt-dlp --cookies-from-browser "$COOKIES_BROWSER" --cookies "$jar" \
+      --skip-download --no-warnings "https://x.com/home" >/dev/null 2>&1 || true
+    [[ -s "$jar" ]] && have_cookies=1
+  fi
+
+  echo "Fetching the article in a headless browser (first run installs Chromium — this can take a minute) …" >&2
+  local out_json="$WORK/article.json"
+  # `--with` builds an ephemeral env; playwright's chromium is cached after the
+  # first install. Failures are reported through the JSON, not the exit code.
+  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/pbrain/playwright}" \
+  uv run --quiet --with playwright --with markdownify \
+    python "$scraper" "$url" "$([[ "$have_cookies" -eq 1 ]] && printf '%s' "$jar" || printf '%s' '-')" \
+    "$out_json" > "$WORK/scrape.log" 2>&1 || true
+
+  # Chromium may not be downloaded yet in this ephemeral env — install once, retry.
+  if [[ ! -s "$out_json" ]] || grep -q "could not launch chromium\|Executable doesn't exist" "$out_json" "$WORK/scrape.log" 2>/dev/null; then
+    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/pbrain/playwright}" \
+    uv run --quiet --with playwright python -m playwright install chromium \
+      >> "$WORK/scrape.log" 2>&1 || true
+    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/pbrain/playwright}" \
+    uv run --quiet --with playwright --with markdownify \
+      python "$scraper" "$url" "$([[ "$have_cookies" -eq 1 ]] && printf '%s' "$jar" || printf '%s' '-')" \
+      "$out_json" >> "$WORK/scrape.log" 2>&1 || true
+  fi
+
+  if [[ ! -s "$out_json" ]]; then
+    echo "CLIPPER_ARTICLE_FAILED"
+    echo "url: $url"
+    echo "cookies: $COOKIE_DESC"
+    echo "reason: scraper_crashed"
+    echo ""
+    echo "--- scraper log (tail) ---"
+    tail -n 20 "$WORK/scrape.log" 2>/dev/null || true
+    echo ""
+    echo "INSTRUCTIONS: the headless-browser scraper failed before it could report a"
+    echo "reason (see the log above — often a missing Chromium download or a uv/network"
+    echo "problem). Relay the gist to the user and stop. Do NOT fabricate the article."
+    return 0
+  fi
+
+  # Branch on the scraper's structured reason.
+  local ok reason detail
+  ok="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("ok") else "0")' "$out_json" 2>/dev/null || echo 0)"
+  if [[ "$ok" != "1" ]]; then
+    reason="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("reason",""))' "$out_json" 2>/dev/null || true)"
+    detail="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("detail",""))' "$out_json" 2>/dev/null || true)"
+    echo "CLIPPER_ARTICLE_FAILED"
+    echo "url: $url"
+    echo "cookies: $COOKIE_DESC"
+    echo "reason: ${reason:-unknown}"
+    echo "detail: ${detail:-}"
+    echo ""
+    case "$reason" in
+      login)
+        echo "INSTRUCTIONS: X redirected to the login page — the article is behind a"
+        echo "logged-in session and the cookie source ($COOKIE_DESC) is missing or stale."
+        echo "Tell the user to log into X in their browser (or point"
+        echo "PBRAIN_CLIPPER_COOKIES_BROWSER / PBRAIN_CLIPPER_COOKIES_FILE at a good"
+        echo "session) and re-run. Stop here." ;;
+      not_article)
+        echo "INSTRUCTIONS: that URL didn't render as a longform article. If it's a video"
+        echo "or ordinary post, the video path handles it — suggest re-running without an"
+        echo "/article/ URL, or confirm the link. Stop here." ;;
+      not_found)
+        echo "INSTRUCTIONS: X says that page doesn't exist — the article URL is wrong or"
+        echo "the article was deleted. Ask the user to double-check the link. Stop here." ;;
+      *)
+        echo "INSTRUCTIONS: the article couldn't be read (detail above). Relay the gist to"
+        echo "the user and stop. Do NOT invent article content." ;;
+    esac
+    return 0
+  fi
+
+  # --- success: resolve destination + emit the article for reframing ---------
+  local title author published words slug
+  title="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("title",""))' "$out_json")"
+  author="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("author",""))' "$out_json")"
+  published="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("published",""))' "$out_json")"
+  words="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("words",0))' "$out_json")"
+  slug="$(python3 -c '
+import json, re, sys
+t = json.load(open(sys.argv[1])).get("title", "") or "x-article"
+s = re.sub(r"\s+", "-", t.strip().lower())
+s = re.sub(r"[^a-z0-9._-]", "", s).strip("._-")
+print((s or "x-article")[:80])
+' "$out_json")"
+
+  local out_dir out_file today
+  out_dir="${PBRAIN_CLIPPER_DIR:-$VAULT_DIR/agent-work/clips}/x"
+  mkdir -p "$out_dir"
+  out_file="$out_dir/$slug.md"
+  today="$(date +%F)"
+
+  echo "CLIPPER_ARTICLE_SAVE"
+  echo "platform: x"
+  echo "content_kind: article"
+  echo "title: ${title:-(untitled)}"
+  echo "author: ${author:-(unknown)}"
+  echo "source_url: $url"
+  echo "published: ${published:-(unknown)}"
+  echo "article_words: $words"
+  echo "cookies: $COOKIE_DESC"
+  echo "captured: $today"
+  echo "output_file: $out_file"
+  echo ""
+  echo "=== ARTICLE MARKDOWN (extracted verbatim from the page) ==="
+  python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1])).get("markdown",""))' "$out_json"
+  echo ""
+  echo "=== END ARTICLE ==="
+  echo ""
+
+  export OUT_FILE="$out_file" ARTICLE_TITLE="$title" ARTICLE_AUTHOR="$author" \
+         ARTICLE_URL="$url" ARTICLE_PUBLISHED="$published" TODAY="$today"
+  envsubst '$OUT_FILE $ARTICLE_TITLE $ARTICLE_AUTHOR $ARTICLE_URL $ARTICLE_PUBLISHED $TODAY' \
+    < "$_SCRIPT_DIR/templates/clipper/write-article.txt"
+  return 0
+}
+
 # --- argument parsing -------------------------------------------------------
 PLATFORM="${1:-}"; shift || true
 case "$PLATFORM" in
@@ -194,9 +372,10 @@ case "$PLATFORM" in
   ""|help|-h|--help)
     cat <<'USAGE'
 CLIPPER_USAGE
-clipper saves an online video as a clean, readable transcript in the vault.
+clipper saves online content as a clean, readable piece in the vault.
 
-  /clipper x <url>            save an X / Twitter video
+  /clipper x <url>            save an X / Twitter video OR longform article
+                              (auto-detected from the URL)
   /clipper yt <url>           save a YouTube video
   /clipper transcriber install   build the local Parakeet v3 transcriber (one-time)
   /clipper transcriber status    show transcriber + model status
@@ -238,17 +417,20 @@ case "$PLATFORM" in
   yt) [[ "$URL_HOST" =~ (^|\.)(youtube\.com|youtu\.be)$ ]] || URL_WARN="That doesn't look like a youtube.com / youtu.be URL." ;;
 esac
 
-# --- yt-dlp preflight -------------------------------------------------------
-if ! command -v yt-dlp >/dev/null 2>&1; then
-  echo "CLIPPER_NO_YTDLP"
-  echo ""
-  echo "INSTRUCTIONS: clipper needs yt-dlp to fetch the video's captions, and it isn't"
-  echo "installed. Tell the user to install it (e.g. 'brew install yt-dlp' or"
-  echo "'pip install -U yt-dlp'), then re-run. Stop here."
-  exit 0
+# Article-URL detection (the routing itself happens after cookie setup below,
+# which both paths share).
+IS_ARTICLE=0
+if [[ "$PLATFORM" == "x" ]]; then
+  URL_PATH="$(printf '%s' "$URL" | sed -E 's#^https?://[^/]+##; s#\?.*$##; s#\#.*$##')"
+  if [[ "$URL_PATH" =~ ^/i/articles/ ]] || [[ "$URL_PATH" =~ ^/[^/]+/article/ ]]; then
+    IS_ARTICLE=1
+  fi
 fi
 
 # --- cookie args ------------------------------------------------------------
+# Shared by BOTH the video path (passed straight to yt-dlp) and the article path
+# (exported to a Netscape jar and handed to Playwright), so there is exactly one
+# session source and one set of env overrides to reason about.
 COOKIE_ARGS=()
 COOKIE_DESC="none"
 COOKIES_FILE="${PBRAIN_CLIPPER_COOKIES_FILE:-}"
@@ -263,6 +445,27 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/clipper.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+
+# --- x: article vs video routing --------------------------------------------
+# `clipper x <url>` handles BOTH longform X articles and X videos. The URL shape
+# decides: /i/articles/... and /<handle>/article/... are always articles. A
+# /status/... link can be either, so it stays on the video path and only falls
+# back to the article scraper when yt-dlp finds no media there. The video path
+# below is unchanged.
+if [[ "$IS_ARTICLE" -eq 1 ]]; then
+  _clipper_x_article "$URL"
+  exit 0
+fi
+
+# --- yt-dlp preflight -------------------------------------------------------
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  echo "CLIPPER_NO_YTDLP"
+  echo ""
+  echo "INSTRUCTIONS: clipper needs yt-dlp to fetch the video's captions, and it isn't"
+  echo "installed. Tell the user to install it (e.g. 'brew install yt-dlp' or"
+  echo "'pip install -U yt-dlp'), then re-run. Stop here."
+  exit 0
+fi
 
 # --- metadata ---------------------------------------------------------------
 META_JSON="$WORK/meta.json"

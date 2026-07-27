@@ -116,3 +116,72 @@ VTT
   run CLIP
   [ "$status" -eq 0 ] && [[ "$output" == *"transcriber install"* ]]
 }
+
+# --- X article branch -------------------------------------------------------
+# `clipper x <url>` routes on URL shape: /i/articles/... and /<handle>/article/...
+# take the headless-browser article path; everything else stays on the video
+# path. The scrape itself needs a live session, so these cover the routing and
+# the pure cookie-translation helper only.
+
+# Article URLs need `uv`; with it absent the article branch must say so (and
+# must NOT fall through to the video path's yt-dlp error).
+@test "article URL routes to the article path and reports a missing uv" {
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" run bash "$REPO_ROOT/commands/clipper.sh" \
+    x "https://x.com/i/articles/1234567890"
+  [ "$status" -eq 0 ] && [[ "$output" == *"CLIPPER_NO_UV"* ]]
+}
+
+@test "handle-style article URL also routes to the article path" {
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" run bash "$REPO_ROOT/commands/clipper.sh" \
+    x "https://x.com/someone/article/999"
+  [ "$status" -eq 0 ] && [[ "$output" == *"CLIPPER_NO_UV"* ]]
+}
+
+# A /status/ link is a video until proven otherwise — it must NOT be treated as
+# an article, or every X video would take the browser path.
+@test "a status URL stays on the video path" {
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" run bash "$REPO_ROOT/commands/clipper.sh" \
+    x "https://x.com/someone/status/999"
+  [ "$status" -eq 0 ] && [[ "$output" != *"CLIPPER_NO_UV"* ]]
+}
+
+# YouTube must never reach the X-article branch, whatever the path looks like.
+@test "a youtube URL containing /article/ is not treated as an X article" {
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" run bash "$REPO_ROOT/commands/clipper.sh" \
+    yt "https://www.youtube.com/article/123"
+  [ "$status" -eq 0 ] && [[ "$output" != *"CLIPPER_NO_UV"* ]]
+}
+
+# Cookie translation is the piece most likely to break silently (a bad jar means
+# an unauthenticated scrape that looks like "not an article"), so assert it
+# directly: only real X domains, and no out-of-range expiry.
+@test "cookie translation keeps only X cookies and drops look-alike domains" {
+  cat > "$TMP/jar.txt" <<'JAR'
+# Netscape HTTP Cookie File
+.x.com	TRUE	/	TRUE	13430917328523184	auth_token	secret
+.twitter.com	TRUE	/	TRUE	1848260722	guest_id	g1
+.netflix.com	TRUE	/	TRUE	1848260722	NetflixId	nope
+.notx.com	TRUE	/	TRUE	1848260722	other	nope
+x.com	FALSE	/	FALSE	0	lang	en
+JAR
+  run python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+c = m._cookies_for_playwright(sys.argv[2])
+by = {x["name"]: x for x in c}
+print("NAMES=" + ",".join(sorted(by)))
+# Chrome-epoch microseconds are out of range → must degrade to a session cookie.
+print("AUTH_HAS_EXPIRES=" + str("expires" in by.get("auth_token", {})).lower())
+# A zero-expiry session cookie must omit the field entirely.
+print("LANG_HAS_EXPIRES=" + str("expires" in by.get("lang", {})).lower())
+# A normal unix expiry is preserved as-is.
+print("GUEST_EXPIRES=" + str(by.get("guest_id", {}).get("expires")))
+' "$REPO_ROOT/lib/clipper-x-article.py" "$TMP/jar.txt"
+  [ "$status" -eq 0 ]
+  # netflix.com / notx.com must not survive a naive suffix match.
+  [[ "$output" == *"NAMES=auth_token,guest_id,lang"* ]]
+  [[ "$output" == *"AUTH_HAS_EXPIRES=false"* ]]
+  [[ "$output" == *"LANG_HAS_EXPIRES=false"* ]]
+  [[ "$output" == *"GUEST_EXPIRES=1848260722.0"* ]]
+}
