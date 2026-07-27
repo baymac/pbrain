@@ -17,8 +17,11 @@ set -euo pipefail
 #   yt <url>   YouTube video.
 #
 # X articles:
-#   /i/articles/... and /<handle>/article/... take the ARTICLE path; everything
-#   else (notably /status/...) stays on the VIDEO path above, unchanged. X
+#   /i/article(s)/... and /<handle>/article/... take the ARTICLE path; everything
+#   else (notably /status/...) stays on the VIDEO path above, unchanged. A
+#   /status/ link can itself BE an article — X redirects it to /i/article/<id>,
+#   which is invisible in the typed URL — so when yt-dlp fails and its error
+#   names an article URL, we recover that and switch to the article path. X
 #   renders articles client-side — a plain cookie-authenticated fetch returns
 #   only the "JavaScript is not available" shell — so the article path drives
 #   headless Chromium via lib/clipper-x-article.py, run through `uv run --with`
@@ -471,6 +474,21 @@ fi
 META_JSON="$WORK/meta.json"
 if ! yt-dlp ${COOKIE_ARGS[@]+"${COOKIE_ARGS[@]}"} --skip-download --dump-single-json --no-warnings \
        "$URL" > "$META_JSON" 2> "$WORK/meta.err"; then
+
+  # An X /status/ link can BE an article: X redirects it to /i/article/<id>,
+  # and yt-dlp then reports that redirected URL as unsupported. The typed URL
+  # gives no hint of this, so the article shape can only be detected here.
+  # Recover the redirect target from the error and take the article path
+  # rather than reporting a video failure for something that isn't a video.
+  if [[ "$PLATFORM" == "x" ]]; then
+    ARTICLE_REDIRECT="$(sed -nE 's#.*(https?://[^[:space:]]*/(i/)?articles?/[0-9]+).*#\1#p' \
+      "$WORK/meta.err" 2>/dev/null | head -n 1)"
+    if [[ -n "$ARTICLE_REDIRECT" ]]; then
+      _clipper_x_article "$ARTICLE_REDIRECT"
+      exit 0
+    fi
+  fi
+
   echo "CLIPPER_FETCH_FAILED"
   echo "platform: $PLATFORM"
   echo "url: $URL"

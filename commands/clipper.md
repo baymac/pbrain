@@ -10,7 +10,7 @@ bash "${PBRAIN_DEV_DIR:-${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces
 
 `clipper` saves a video **or an X longform article** as a readable piece in the vault. The first arg is the **platform** (`x` or `yt`); the rest is the URL. Filler words are ignored, so "clipper x save this video https://x.com/…" passes through as `x https://x.com/…`. When the user says *"clipper save this <url>"* without a platform, infer it from the URL host (`x.com`/`twitter.com` → `x`, `youtube.com`/`youtu.be` → `yt`) and pass that as the first arg.
 
-**`x` handles both videos and articles — you don't choose.** The script routes on URL shape: `/i/articles/…` and `/<handle>/article/…` take the article path; `/status/…` stays on the video path. Just pass the URL through; the token it prints tells you which path ran.
+**`x` handles both videos and articles — you don't choose.** The script routes on URL shape: `/i/article(s)/…` and `/<handle>/article/…` take the article path; `/status/…` starts on the video path. A `/status/` link can itself be an article (X redirects it to `/i/article/<id>`), in which case the script detects that from the failed video fetch and switches to the article path on its own. Just pass the URL through; the token it prints tells you which path ran.
 
 The **script** owns every technical step so you don't have to at runtime: it reads browser cookies (Brave by default — X gates video + captions behind a session), pulls metadata, downloads the subtitle track, cleans the VTT (strips inline timing tags and the rolling-window duplication of auto-captions), and — if there's no caption track — falls back to transcribing the audio locally with **FluidAudio's Parakeet TDT v3** model (the same model Muesli uses). It then prints one of:
 

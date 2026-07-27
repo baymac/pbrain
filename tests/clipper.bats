@@ -152,6 +152,29 @@ VTT
   [ "$status" -eq 0 ] && [[ "$output" != *"CLIPPER_NO_UV"* ]]
 }
 
+# An X /status/ link can BE an article: X redirects it to /i/article/<id> and
+# yt-dlp reports THAT url as unsupported. The typed URL looks like a video, so
+# the recovery has to come from the yt-dlp error. Assert the extraction that
+# drives it, for both the singular and plural article paths.
+@test "an article redirect is recovered from a yt-dlp error" {
+  printf 'ERROR: Unsupported URL: https://x.com/i/article/2081403718071971840\n' > "$TMP/err1.txt"
+  run sed -nE 's#.*(https?://[^[:space:]]*/(i/)?articles?/[0-9]+).*#\1#p' "$TMP/err1.txt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "https://x.com/i/article/2081403718071971840" ]]
+
+  printf 'ERROR: Unsupported URL: https://x.com/i/articles/123\n' > "$TMP/err2.txt"
+  run sed -nE 's#.*(https?://[^[:space:]]*/(i/)?articles?/[0-9]+).*#\1#p' "$TMP/err2.txt"
+  [[ "$output" == "https://x.com/i/articles/123" ]]
+}
+
+# A genuine video failure must NOT be mistaken for an article redirect.
+@test "a plain video error yields no article redirect" {
+  printf 'ERROR: [twitter] 123: No video could be found in this tweet\n' > "$TMP/err3.txt"
+  run sed -nE 's#.*(https?://[^[:space:]]*/(i/)?articles?/[0-9]+).*#\1#p' "$TMP/err3.txt"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # Cookie translation is the piece most likely to break silently (a bad jar means
 # an unauthenticated scrape that looks like "not an article"), so assert it
 # directly: only real X domains, and no out-of-range expiry.

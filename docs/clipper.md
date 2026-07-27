@@ -20,9 +20,11 @@ It's built around **platform subcommands**:
 
 | URL | Path |
 |---|---|
-| `x.com/i/articles/…` | article |
+| `x.com/i/article(s)/…` | article |
 | `x.com/<handle>/article/…` | article |
-| `x.com/<handle>/status/…` | video |
+| `x.com/<handle>/status/…` | video — **unless** it's really an article (see below) |
+
+A `/status/` link can *be* an article: X silently redirects it to `/i/article/<id>`. The typed URL gives no hint of this, so clipper tries the video path first and, when the fetch fails on an article redirect, recovers the real URL and takes the article path automatically. You don't have to know which kind of link you have.
 
 Articles are read with a **headless browser** rather than `yt-dlp`. X renders longform articles client-side, so a plain fetch returns only the "JavaScript is not available" shell — there's no way to read one without a browser. The browser runs through [`uv`](https://docs.astral.sh/uv/) in an ephemeral environment (Playwright + Chromium, cached after the first run), so nothing is added to pbrain's own dependencies. **Video clipping is unaffected and needs no `uv`.**
 
