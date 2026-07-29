@@ -1,24 +1,44 @@
 # /clipper
 
-Save an online video as a clean, readable long-form piece in the vault — a "clip". You point it at a video; the script extracts the captions, and Claude reframes them into flowing prose. **Faithful, not summarized:** it keeps the speaker's words, meaning, and order — just adds punctuation and paragraphs, drops filler and noise (ads, channel plugs, "smash subscribe", off-topic self-intros), and trims immediate repetition. The result reads like a blog post or essay, roughly as long as what was actually said.
+Save online content as a clean, readable long-form piece in the vault — a "clip". Two kinds of source are supported:
 
-It's built around **platform subcommands**, starting with two:
+- **Videos** — the script extracts the captions and Claude reframes them into flowing prose. **Faithful, not summarized:** it keeps the speaker's words, meaning, and order — just adds punctuation and paragraphs, drops filler and noise (ads, channel plugs, "smash subscribe", off-topic self-intros), and trims immediate repetition. The result reads like a blog post or essay, roughly as long as what was actually said.
+- **X longform articles** — the article text is already written prose, so it's saved **verbatim**; only extraction artifacts are cleaned up. Nothing is reworded or summarized.
+
+It's built around **platform subcommands**:
 
 | Subcommand | Source |
 |---|---|
-| `x` | X / Twitter video |
+| `x` | X / Twitter — **video or longform article** (auto-detected) |
 | `yt` | YouTube video |
 
 **Default destination:** `$VAULT_DIR/agent-work/clips/<platform>/<slug>.md`
+
+## Videos vs. articles on X
+
+`/clipper x <url>` handles both and picks the path from the **URL shape**:
+
+| URL | Path |
+|---|---|
+| `x.com/i/article(s)/…` | article |
+| `x.com/<handle>/article/…` | article |
+| `x.com/<handle>/status/…` | video — **unless** it's really an article (see below) |
+
+A `/status/` link can *be* an article: X silently redirects it to `/i/article/<id>`. The typed URL gives no hint of this, so clipper tries the video path first and, when the fetch fails on an article redirect, recovers the real URL and takes the article path automatically. You don't have to know which kind of link you have.
+
+Articles are read with a **headless browser** rather than `yt-dlp`. X renders longform articles client-side, so a plain fetch returns only the "JavaScript is not available" shell — there's no way to read one without a browser. The browser runs through [`uv`](https://docs.astral.sh/uv/) in an ephemeral environment (Playwright + Chromium, cached after the first run), so nothing is added to pbrain's own dependencies. **Video clipping is unaffected and needs no `uv`.**
+
+Both paths share the **same session**: the cookie jar you already use for video is exported and handed to the browser, so there's no separate login to maintain. Only `x.com` / `twitter.com` cookies are forwarded.
 
 ## How it works
 
 The script does all the technical work so nothing has to be figured out at run time:
 
-1. **Cookies.** X gates video and caption fetches behind a logged-in session, so by default the script reads your **Brave** cookies (`--cookies-from-browser brave`). Point it elsewhere with `PBRAIN_CLIPPER_COOKIES_BROWSER` (e.g. `chrome`, `safari`, `brave:Profile 1`, or `none`) or a `cookies.txt` via `PBRAIN_CLIPPER_COOKIES_FILE`.
-2. **Captions.** It downloads the subtitle track with `yt-dlp` and cleans the VTT — strips inline timing tags and the rolling-window duplication that auto-captions produce — into a plain transcript.
-3. **Fallback.** If the video has no caption track, it downloads the audio and transcribes it locally with **FluidAudio's Parakeet TDT v3** CoreML model — the same model the Muesli app uses. It reuses the model already on disk (e.g. cached by Muesli) and only downloads it if it's missing. If the transcriber binary hasn't been built yet, it tells you to run `/clipper transcriber install` once.
-4. **Reframe.** Claude turns the clean transcript into readable prose and writes the file.
+1. **Cookies.** X gates videos, captions, and articles behind a logged-in session, so by default the script reads your **Brave** cookies (`--cookies-from-browser brave`). Point it elsewhere with `PBRAIN_CLIPPER_COOKIES_BROWSER` (e.g. `chrome`, `safari`, `brave:Profile 1`, or `none`) or a `cookies.txt` via `PBRAIN_CLIPPER_COOKIES_FILE`.
+2. **Captions** *(video)*. It downloads the subtitle track with `yt-dlp` and cleans the VTT — strips inline timing tags and the rolling-window duplication that auto-captions produce — into a plain transcript.
+3. **Fallback** *(video)*. If the video has no caption track, it downloads the audio and transcribes it locally with **FluidAudio's Parakeet TDT v3** CoreML model — the same model the Muesli app uses. It reuses the model already on disk (e.g. cached by Muesli) and only downloads it if it's missing. If the transcriber binary hasn't been built yet, it tells you to run `/clipper transcriber install` once.
+4. **Extraction** *(article)*. It loads the page in headless Chromium, scrolls to hydrate lazy content, locates the article body, and converts it to Markdown. Images stay as absolute X CDN links (never inlined), so the clip stays small.
+5. **Write.** Claude reframes the transcript (video) or cleans extraction artifacts (article) and writes the file.
 
 ## The Parakeet v3 transcriber (one-time setup)
 
@@ -35,9 +55,10 @@ For caption-less videos, clipper transcribes locally with Parakeet v3 via [Fluid
 
 ## Requirements
 
-- **`yt-dlp`** — `brew install yt-dlp` or `pip install -U yt-dlp`.
+- **`yt-dlp`** — `brew install yt-dlp` or `pip install -U yt-dlp`. (Videos; also used to export the cookie jar for articles.)
 - A logged-in browser for X (Brave by default), so the cookie jar can authorize the fetch.
 - **For caption-less videos only:** `ffmpeg` + the one-time `/clipper transcriber install` (git + Swift toolchain).
+- **For X articles only:** [`uv`](https://docs.astral.sh/uv/) — `brew install uv`. Chromium downloads once on first use (~90 MB) and is cached under `~/.cache/pbrain/playwright`.
 
 ## Overrides
 
