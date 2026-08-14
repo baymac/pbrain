@@ -335,21 +335,26 @@ EOF
 # flag is emitted in the common case.
 # ---------------------------------------------------------------------------
 
-@test "pbrain_overlay_build copies the shipped chime into the bundle Resources" {
-  # swiftc is the no-op stub, so no binary is produced — but Contents/ is created
-  # and the chime copy still runs against the real repo asset.
+@test "pbrain_overlay_build does NOT ship a chime into the bundle (silent by design)" {
   pbrain_overlay_build
-  [ -f "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3" ] && \
-    cmp -s "$REPO_ROOT/lib/assets/chime.mp3" "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3"
+  [ ! -f "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3" ]
 }
 
-@test "chime defaults on: no chime flag is emitted (overlay uses the bundled clip)" {
+@test "pbrain_overlay_build scrubs a chime left by an earlier pbrain version" {
+  # Simulate an already-installed bundle carrying the old clip, then rebuild.
+  mkdir -p "$PBRAIN_OVERLAY_APP/Contents/Resources"
+  echo "stale audio" > "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3"
+  pbrain_overlay_build
+  [ ! -f "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3" ]
+}
+
+@test "no chime flag is emitted by default (overlay is silent regardless)" {
   _stub_overlay_launch
   pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
   ! grep -qE -- "--no-chime|--chime" "$ARGLOG"
 }
 
-@test "PBRAIN_OVERLAY_CHIME=0 mutes the chime via --no-chime" {
+@test "PBRAIN_OVERLAY_CHIME=0 still emits --no-chime (accepted, now redundant)" {
   _stub_overlay_launch
   PBRAIN_OVERLAY_CHIME=0 pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
   grep -q -- "--no-chime" "$ARGLOG"
@@ -365,4 +370,40 @@ EOF
   _stub_overlay_launch
   PBRAIN_OVERLAY_CHIME=OFF pbrain_overlay_show "Eye break" 0 5 "" 7 "$PBRAIN_DB_FILE"
   grep -q -- "--no-chime" "$ARGLOG"
+}
+
+# --- notification sound gate (PBRAIN_NOTIFY_SOUND) --------------------------
+# pbrain_notify shells out to the bundled notifier binary directly (no `open`),
+# so the stub replaces that Mach-O and records the argv it was handed.
+_stub_notify_bin() {
+  mkdir -p "$PBRAIN_NOTIFY_APP/Contents/MacOS"
+  NOTIFYLOG="$TMP/notify.args"
+  cat > "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify" <<EOF2
+#!/bin/sh
+echo "\$@" > "$NOTIFYLOG"
+exit 0
+EOF2
+  chmod +x "$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify"
+  # pbrain_notify_build would overwrite the stub with a real compile attempt.
+  pbrain_notify_build() { :; }
+}
+
+@test "notify sound defaults on: no --sound flag is emitted" {
+  _stub_notify_bin
+  pbrain_notify "pbrain" "hello"
+  run grep -q -- "--sound" "$NOTIFYLOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "PBRAIN_NOTIFY_SOUND=off is a no-op — already silent, no --sound emitted" {
+  _stub_notify_bin
+  PBRAIN_NOTIFY_SOUND=off pbrain_notify "pbrain" "hello"
+  run grep -q -- "--sound" "$NOTIFYLOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "an explicit sound name is the ONLY way to get audio back (opt-in)" {
+  _stub_notify_bin
+  PBRAIN_NOTIFY_SOUND=Glass pbrain_notify "pbrain" "hello"
+  grep -q -- "--sound Glass" "$NOTIFYLOG"
 }

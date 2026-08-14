@@ -132,8 +132,8 @@ pbrain/
 ├── lib/reminders.sh             ← /remind (Apple Reminders) + /remind-blocking (overlay poller); FIRE/DEFER/MISS state machine + cron→recurrence mapping in its header
 ├── lib/pbrain-reminders.swift   ← EventKit Reminders helper source (built on demand → pbrain-reminders.app)
 ├── lib/pbrain-notify.swift      ← macOS notifier source (overlay's no-swiftc fallback)
-├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking); plays the lifecycle chime at notif-start / blocking-start / blocking-end (--chime / --no-chime)
-├── lib/assets/chime.mp3         ← bundled lifecycle chime; copied into pbrain-overlay.app/Contents/Resources on build (gate: PBRAIN_OVERLAY_CHIME, override: PBRAIN_CHIME_FILE)
+├── lib/pbrain-overlay.swift     ← full-screen blocking-overlay source (/remind-blocking); SILENT — playChime() is a no-op, --chime/--no-chime accepted+ignored
+├── lib/assets/chime.mp3         ← UNUSED (kept only for a future restore); no longer copied into the app bundle — pbrain_overlay_build actively deletes any stale copy
 ├── lib/pbrain-tracker.swift     ← /laptop-tracking daemon source (resident LaunchAgent)
 ├── lib/whats-new.sh             ← per-release "what's new" doc (PB-129): `render` (changelog section → HTML via lib/whats-new-render.py) + `check`/`surface` (surface-once-on-update, sourced from vault.sh; state in $XDG_STATE_HOME/pbrain/whats-new.seen; skipped on dev installs)
 ├── scripts/release.sh           ← reproducible release pipeline (PB-128): SOLE writer of VERSION + .claude-plugin/plugin.json (lockstep), cuts CHANGELOG [Unreleased]→[x.y.z], generates docs/whats-new/<v>.html, tag + gh publish; dry-run by default, idempotent. See docs/release.md

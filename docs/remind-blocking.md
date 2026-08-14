@@ -92,12 +92,27 @@ The overlay sets macOS kiosk options while it's up — it hides the Dock and men
 | `PBRAIN_OVERLAY_APP` | Where the compiled overlay app is cached/built | `~/.config/pbrain/pbrain-overlay.app` |
 | `PBRAIN_OVERLAY_BG` | Default overlay background colour (hex, e.g. `#1e3a5f`) | unset → slate |
 | `PBRAIN_OVERLAY_SNOOZE_MINUTES` | Warning-panel **Snooze** button push-out, in minutes; `0` hides the button | unset → `5` |
-| `PBRAIN_OVERLAY_CHIME` | Lifecycle chime (plays at notif-start / blocking-start / blocking-end); `0`/`off`/`false`/`no` mutes it | unset → on |
-| `PBRAIN_CHIME_FILE` | Override the chime clip with your own audio file (any `afplay`-playable format) | unset → bundled `chime.mp3` |
+| `PBRAIN_OVERLAY_CHIME` | **Obsolete** — accepted and ignored; the overlay is silent unconditionally | n/a |
+| `PBRAIN_CHIME_FILE` | **Obsolete** — accepted and ignored; no chime is played or shipped | n/a |
+| `PBRAIN_NOTIFY_SOUND` | Opt-in notification sound: a macOS system sound name (e.g. `Glass`) re-enables audio | unset → **silent** |
 | `PBRAIN_REMIND_GRACE_SECONDS` | How overdue an occurrence may be and still fire; past it → `missed` | `600` (10 min) |
 | `PBRAIN_SCREEN_LOCKED` | Override the screen-lock probe: `1` = treat as locked (defer overlays), `0` = unlocked | unset → auto-detect via `ioreg` |
 
-**Chime.** A short audio cue fires at three moments of a blocking reminder: the pre-roll notification appearing (**notif start**), the full overlay appearing (**blocking start**), and the overlay clearing (**blocking end**). The clip ships with pbrain (`lib/assets/chime.mp3`) and is copied into the overlay app bundle's `Resources/` on build. A skip/snooze/miss during the *warning* phase never starts a block, so it gets no end cue. Mute with `PBRAIN_OVERLAY_CHIME=0`, or swap the sound with `PBRAIN_CHIME_FILE=/path/to/your.mp3`.
+**Silent by design.** Blocking reminders make **no sound at any step** — not at the pre-roll notification, not when the overlay appears, not when it clears. This is enforced at the source rather than behind a setting: `playChime()` in `lib/pbrain-overlay.swift` is an unconditional no-op, the clip is no longer copied into the app bundle (and any copy left by an earlier pbrain version is deleted on rebuild), and `lib/pbrain-notify.swift` leaves `soundName` unset so notifications deliver silently.
+
+Why not an env var? A gate is opt-in per invocation, so a stale app bundle, a launchd job installed before the gate existed, or any un-gated call path would still play audio. Killing it at the sink means no caller can resurrect it — and no plist entry is needed for the background poller to stay quiet.
+
+`--chime` / `--no-chime` are still *accepted and ignored* so older launchd plists don't break on an unknown argument.
+
+**Getting sound back.** Set `PBRAIN_NOTIFY_SOUND` to a macOS system sound name to re-enable the *notification* sound:
+
+```bash
+PBRAIN_NOTIFY_SOUND=Glass /remind-blocking install
+```
+
+The overlay chime is gone entirely; restoring it means putting the `afplay` body back in `playChime()` and re-adding the bundle copy in `pbrain_overlay_build` (`lib/reminders.sh`). Both spots carry a comment pointing at the other.
+
+**One caveat.** If `swiftc` is unavailable, `pbrain_notify` degrades to AppleScript's `display notification`, which has no sound-suppression option and will use the system alert sound. That path is unreachable on a machine with Xcode command line tools installed.
 
 **Subcommands (the script's API — you normally just type natural language):** `add --text … ( --due … | --cron "<expr>" ) [--duration <seconds>] [--hold <seconds>]`, `test`, `list`, `cancel <handle>` (`S<id>` series / `R<id>` one-shot), `tick`, `install`, `uninstall`.
 

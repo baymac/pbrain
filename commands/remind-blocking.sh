@@ -388,9 +388,19 @@ PYEOF
     # path is XML-escaped (the shared installer escapes Label / ProgramArguments /
     # log path itself). The poller ticks every ~60s and runs at load.
     DBF_X="$(_pbrain_xml_escape "$PBRAIN_DB_FILE")"
+    # Sound needs no plist entry: reminders are silent at the source (see
+    # playChime() in lib/pbrain-overlay.swift and the soundName default in
+    # lib/pbrain-notify.swift), not via an env gate the poller would have to
+    # inherit. PBRAIN_NOTIFY_SOUND is forwarded only when explicitly set, as
+    # an opt-in for someone who wants a sound back.
+    SOUND_ENV=""
+    if [[ -n "${PBRAIN_NOTIFY_SOUND:-}" ]]; then
+      SOUND_ENV+="
+    <key>PBRAIN_NOTIFY_SOUND</key><string>$(_pbrain_xml_escape "$PBRAIN_NOTIFY_SOUND")</string>"
+    fi
     REMIND_EXTRA="  <key>EnvironmentVariables</key>
   <dict>
-    <key>PBRAIN_DB_FILE</key><string>$DBF_X</string>
+    <key>PBRAIN_DB_FILE</key><string>$DBF_X</string>$SOUND_ENV
   </dict>
   <key>StartInterval</key><integer>60</integer>
   <key>RunAtLoad</key><true/>"
