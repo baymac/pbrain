@@ -44,8 +44,8 @@ FIT_STORE="$(pbrain_profile_store "$FITNESS_DIR")"
 DIET_STORE="$(pbrain_profile_store "$DIET_DIR")"
 
 TODAY="$(date +%Y-%m-%d)"
-MONTH_YEAR="$(date +%Y-%m)"
-NEXT_MONTH_YEAR="$(python3 -c "import datetime, calendar; t=datetime.date.today(); nxt=t.replace(day=1)+datetime.timedelta(days=calendar.monthrange(t.year, t.month)[1]); print(nxt.strftime('%Y-%m'))")"
+MONTH_YEAR="${PBRAIN_MONTHLY_REVIEW_MONTH:-$(date +%Y-%m)}"
+NEXT_MONTH_YEAR="$(python3 -c "import datetime, calendar; ym='$MONTH_YEAR'; y,m=int(ym[:4]),int(ym[5:]); t=datetime.date(y,m,1); nxt=t.replace(day=1)+datetime.timedelta(days=calendar.monthrange(t.year, t.month)[1]); print(nxt.strftime('%Y-%m'))")"
 OUT_FILE="$MONTHLY_DIR/$MONTH_YEAR.md"
 
 mkdir -p "$MONTHLY_DIR"

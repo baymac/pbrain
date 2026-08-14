@@ -129,26 +129,19 @@ let background = colorFromHex(argValue("--background"))
 // Gating from the shell happens by translating PBRAIN_OVERLAY_CHIME into these
 // argv flags (env doesn't survive `open -n`, argv does).
 //
-// Playback shells out to /usr/bin/afplay as a DETACHED child — we never wait on
-// it, so the BLOCKING END cue keeps playing after the overlay calls
-// NSApp.terminate (the child reparents to launchd and finishes on its own).
-let chimeMuted = CommandLine.arguments.contains("--no-chime")
-func resolveChimePath() -> String? {
-    if let p = argValue("--chime"), !p.isEmpty { return p }
-    if let u = Bundle.main.url(forResource: "chime", withExtension: "mp3") { return u.path }
-    let env = ProcessInfo.processInfo.environment
-    let cfg = (env["XDG_CONFIG_HOME"].map { $0 + "/pbrain" }
-               ?? NSHomeDirectory() + "/.config/pbrain") + "/chime.mp3"
-    return FileManager.default.fileExists(atPath: cfg) ? cfg : nil
-}
-let chimePath: String? = chimeMuted ? nil : resolveChimePath()
-
+// SILENT BY DESIGN (user decision): blocking reminders make NO sound at any
+// lifecycle moment. playChime() is an unconditional no-op and the clip is no
+// longer copied into the bundle. This is deliberately NOT an env/argv gate —
+// a gate is opt-in per invocation, so a stale bundle, a launchd job installed
+// before the gate existed, or any un-gated call path would still play audio.
+// Killing it at the sink means no caller can resurrect it.
+//
+// --chime / --no-chime are still ACCEPTED and ignored, so old launchd plists
+// and in-flight callers passing them don't break on an unknown-argument path.
+// To bring sound back, restore the afplay body here AND re-add the chime copy
+// in pbrain_overlay_build (lib/reminders.sh).
 func playChime() {
-    guard let path = chimePath, FileManager.default.fileExists(atPath: path) else { return }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-    p.arguments = [path]
-    try? p.run()   // fire-and-forget; never waited on, survives overlay teardown
+    // Intentionally empty — see the note above.
 }
 
 // Authoritative lock-state poll. The lock/unlock distributed notifications are a

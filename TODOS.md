@@ -2,6 +2,13 @@
 
 Features and improvements for pbrain, organized by priority. Each item names where the idea came from so the design intent is traceable.
 
+## Ensol (native macOS Life-OS — ~/dev/ensol)
+
+- [ ] **Create DESIGN.md** — Before week-3 implementation: extract the visual design language from the CEO plan (`~/.gstack/projects/baymac-pbrain/ceo-plans/2026-07-06-life-os-macos-native.md` — "Design Review Decisions" section) into a canonical `~/dev/ensol/DESIGN.md`. Covers: typography scale (SF Pro Display/Text/Mono, sizes, weights), color tokens (surface, text, accent, status colors as Swift `Color` extensions), spacing scale (4pt grid), component rules (card policy, icon policy, motion rules), accessibility baseline. Run `/design-consultation` to generate the doc. *(Surfaced by /plan-design-review Pass 5 — DESIGN.md missing gap.)*
+- [ ] **App icon & brand identity** — Before week-6 TestFlight beta: run `/design-shotgun` to generate app icon variants and Ensol brand mark. Needs: macOS app icon (1024×1024 + all scale variants), NSStatusItem template image (22×22 monochrome). Placeholder during development: system blue, 'E' lettermark. *(Surfaced by /plan-design-review Pass 7 — brand identity unresolved.)*
+
+---
+
 Sources studied:
 - [`AgriciDaniel/claude-obsidian`](https://github.com/AgriciDaniel/claude-obsidian) — Karpathy-LLM-Wiki pattern. Autonomous knowledge engine that ingests sources, extracts entities, and cross-references everything.
 - [`ballred/obsidian-claude-pkm`](https://github.com/ballred/obsidian-claude-pkm) — Goal-cascade PKM starter kit with `/onboard`, `/adopt`, and a hierarchical review cadence (daily → weekly → monthly).

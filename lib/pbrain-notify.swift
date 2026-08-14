@@ -113,10 +113,12 @@ note.identifier    = ident
 note.title         = title
 note.informativeText = message
 
-if let s = soundArg {
-    if !s.isEmpty && s.lowercased() != "none" { note.soundName = s }
-} else {
-    note.soundName = NSUserNotificationDefaultSoundName
+// SILENT BY DEFAULT (user decision): pbrain notifications make no sound unless
+// a sound is named EXPLICITLY via --sound. The previous default here was
+// NSUserNotificationDefaultSoundName, which meant every un-flagged caller
+// chimed. Leaving soundName nil delivers the banner silently.
+if let s = soundArg, !s.isEmpty, s.lowercased() != "none" {
+    note.soundName = s
 }
 
 let delegate = PBrainDelegate()

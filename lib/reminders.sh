@@ -100,15 +100,30 @@ pbrain_notify() {
   local title="${1:-pbrain}" msg="${2:-}"
   pbrain_notify_build
   local bin="$PBRAIN_NOTIFY_APP/Contents/MacOS/pbrain-notify"
+  # Notifications are silent by default (the notifier only sets a sound when
+  # --sound names one). PBRAIN_NOTIFY_SOUND is an OPT-IN escape hatch for
+  # anyone who wants a sound back: set it to a macOS system sound name
+  # (e.g. "Glass"). Unset — the normal case — stays silent.
+  local snd_args=()
+  case "$(printf '%s' "${PBRAIN_NOTIFY_SOUND:-}" | tr '[:upper:]' '[:lower:]')" in
+    ""|0|off|false|no) : ;;
+    *)                 snd_args=(--sound "$PBRAIN_NOTIFY_SOUND") ;;
+  esac
   if [[ -x "$bin" ]]; then
     # PBRAIN_NOTIFY_IDENTITY (if set, even to empty) overrides the borrowed
     # bundle identity; empty disables the swizzle (deliver as com.pbrain.notify).
     if [[ -n "${PBRAIN_NOTIFY_IDENTITY+x}" ]]; then
-      "$bin" --bundle-id "$PBRAIN_NOTIFY_IDENTITY" --title "$title" --message "$msg" >/dev/null 2>&1 && return 0
+      "$bin" --bundle-id "$PBRAIN_NOTIFY_IDENTITY" --title "$title" --message "$msg" "${snd_args[@]+"${snd_args[@]}"}" >/dev/null 2>&1 && return 0
     else
-      "$bin" --title "$title" --message "$msg" >/dev/null 2>&1 && return 0
+      "$bin" --title "$title" --message "$msg" "${snd_args[@]+"${snd_args[@]}"}" >/dev/null 2>&1 && return 0
     fi
   fi
+  # LAST-RESORT fallback, only reachable when swiftc is unavailable so the
+  # bundled notifier could never be built. CAVEAT: AppleScript's `display
+  # notification` has no sound-suppression option — it uses the system default
+  # alert sound and cannot be silenced from here. Every path that CAN be made
+  # silent is; this one is a build-environment degradation, not a normal path.
+  # (Install Xcode command line tools to get the silent compiled notifier.)
   command -v osascript >/dev/null 2>&1 || return 0
   osascript - "$title" "$msg" >/dev/null 2>&1 <<'APPLESCRIPT' || true
 on run argv
@@ -139,18 +154,11 @@ pbrain_overlay_build() {
   lib_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)" || return 0
   pbrain_swift_build "$PBRAIN_OVERLAY_APP" "$lib_dir/pbrain-overlay.swift" "com.pbrain.overlay" \
     --plist-extra '  <key>LSUIElement</key><true/>'
-  # Ship the lifecycle chime INTO the app bundle's Resources so Bundle.main resolves
-  # it from any launchd/GUI session. Idempotent: only (re)copies when the bundled
-  # copy is missing or differs from the shipped source. Best-effort — a missing
-  # asset just leaves the overlay chimeless (it degrades silently).
-  local chime_src="$lib_dir/assets/chime.mp3"
-  local chime_dst="$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3"
-  if [[ -f "$chime_src" && -d "$PBRAIN_OVERLAY_APP/Contents" ]]; then
-    if [[ ! -f "$chime_dst" ]] || ! cmp -s "$chime_src" "$chime_dst"; then
-      mkdir -p "$PBRAIN_OVERLAY_APP/Contents/Resources" 2>/dev/null \
-        && cp -f "$chime_src" "$chime_dst" 2>/dev/null || true
-    fi
-  fi
+  # Blocking reminders are SILENT (see the note above playChime() in
+  # lib/pbrain-overlay.swift). The chime is no longer shipped into the bundle,
+  # and any copy left by an earlier pbrain version is actively removed here so
+  # an already-installed bundle can't keep playing it. Best-effort.
+  rm -f "$PBRAIN_OVERLAY_APP/Contents/Resources/chime.mp3" 2>/dev/null || true
 }
 
 # Show the full-screen blocking overlay. Args reach the app as argv — never
